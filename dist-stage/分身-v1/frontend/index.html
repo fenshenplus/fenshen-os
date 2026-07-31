@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分身 v1 原型 · prototype-v1.0</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    /* Layer1 原语 */
+    --blue-500:#007aff; --blue-600:#0066d6; --blue-50:#e8f0fe;
+    --gray-50:#fbfbfa; --gray-100:#f5f5f7; --gray-200:#e5e5ea; --gray-900:#1c1c1e; --gray-400:#8e8e93;
+    --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --gray-status:#9ca3af;
+    --meta-50:#eef0fe; --meta-700:#534ab7; --meta-900:#26215c;
+    --r-sm:8px; --r-md:12px; --r-lg:14px; --r-pill:18px;
+  }
+  body { font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; font-size:13px; color:var(--gray-900); background:var(--gray-100); line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .app { max-width:1100px; margin:0 auto; background:#fff; min-height:100vh; display:flex; flex-direction:column; }
+
+  /* 顶栏 */
+  .topbar { height:48px; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:0.5px solid var(--gray-200); background:var(--gray-50); }
+  .logo { width:26px; height:26px; border-radius:7px; background:var(--meta-700); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600; font-size:13px; }
+  .brand { font-size:14px; font-weight:500; }
+  .brand small { color:var(--gray-400); font-weight:400; font-size:11px; margin-left:6px; }
+  .topbar .spacer { flex:1; }
+  .ver { font-size:11px; color:var(--gray-400); }
+  .btn { border:0.5px solid var(--gray-200); background:#fff; border-radius:var(--r-sm); padding:6px 12px; font-size:12px; cursor:pointer; color:var(--gray-900); }
+  .btn:hover { background:var(--gray-100); }
+  .btn.primary { background:var(--blue-500); color:#fff; border:none; }
+  .btn.primary:hover { background:var(--blue-600); }
+  .btn.meta { background:var(--meta-700); color:#fff; border:none; }
+  .btn.meta:hover { background:var(--meta-900); }
+  .btn.ghost { border-color:var(--red); color:var(--red); }
+  .btn.sm { padding:4px 10px; font-size:11px; }
+
+  /* 主体布局 */
+  .body { flex:1; display:flex; min-height:0; }
+  .sidenav { width:172px; background:var(--gray-50); border-right:0.5px solid var(--gray-200); padding:12px 10px; display:flex; flex-direction:column; gap:4px; }
+  .navitem { padding:9px 12px; border-radius:var(--r-sm); cursor:pointer; font-size:13px; color:var(--gray-900); display:flex; align-items:center; gap:8px; }
+  .navitem:hover { background:var(--gray-100); }
+  .navitem.active { background:var(--blue-50); color:var(--blue-600); font-weight:500; }
+  .navitem .dotk { width:7px; height:7px; border-radius:50%; background:var(--gray-status); }
+  .navitem.active .dotk { background:var(--blue-500); }
+  .sidenav .foot { margin-top:auto; font-size:10px; color:var(--gray-400); padding:8px 4px; }
+  .navitem.meta { color:var(--meta-700); font-weight:500; }
+  .navitem.meta .dotk { background:var(--meta-700); }
+  .navitem.meta.active { background:var(--meta-50); color:var(--meta-900); }
+
+  .main { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .section { display:none; flex:1; min-height:0; }
+  .section.active { display:flex; flex-direction:column; }
+
+  /* 群聊双栏 */
+  .rooms { width:220px; border-right:0.5px solid var(--gray-200); display:flex; flex-direction:column; }
+  .rooms-head { display:flex; align-items:center; justify-content:space-between; padding:12px; }
+  .rooms-head .t { font-size:14px; font-weight:500; }
+  .room-add { width:22px; height:22px; border-radius:50%; border:none; background:var(--blue-500); color:#fff; cursor:pointer; font-size:14px; }
+  .room-list { flex:1; overflow-y:auto; }
+  .room { padding:10px 12px; display:flex; align-items:center; gap:8px; cursor:pointer; border-left:2px solid transparent; }
+  .room:hover { background:var(--gray-100); }
+  .room.active { background:var(--blue-50); border-left-color:var(--blue-500); }
+  .room .s { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .room .info { flex:1; min-width:0; }
+  .room .nm { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .room .ds { font-size:11px; color:var(--gray-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .room .tm { font-size:10px; color:var(--gray-400); flex-shrink:0; }
+
+  .chat { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .chat-head { padding:11px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:0.5px solid var(--gray-200); }
+  .chat-head .t { font-size:14px; font-weight:500; }
+  .chat-head .sub { font-size:11px; color:var(--green); }
+  .chat-body { flex:1; overflow-y:auto; padding:16px 20px; display:flex; flex-direction:column; gap:8px; }
+  .msg { display:flex; }
+  .msg.left { justify-content:flex-start; } .msg.right { justify-content:flex-end; }
+  .bubble { max-width:74%; padding:8px 12px; border-radius:var(--r-lg); font-size:13px; line-height:1.5; }
+  .bubble.agent { background:var(--gray-200); color:var(--gray-900); border-bottom-left-radius:4px; }
+  .bubble.self { background:var(--blue-500); color:#fff; border-bottom-right-radius:4px; }
+  .bubble.meta { background:var(--meta-50); color:var(--meta-900); border-bottom-left-radius:4px; border:0.5px solid #d9d6f7; }
+  .bubble .sender { font-size:10px; margin-bottom:2px; opacity:.7; font-weight:500; }
+  .bubble .acts { margin-top:6px; display:flex; gap:6px; }
+  .tag { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; margin-bottom:3px; font-weight:500; }
+  .tag.progress { background:rgba(34,197,94,.15); color:#166534; }
+  .tag.done { background:rgba(0,122,255,.12); color:#1e40af; }
+  .tag.block { background:rgba(239,68,68,.12); color:#991b1b; }
+  .sysmsg { text-align:center; margin:4px 0; }
+  .sysmsg span { display:inline-block; background:rgba(0,0,0,.05); color:var(--gray-400); padding:3px 10px; border-radius:8px; font-size:11px; }
+  .chat-input { display:flex; gap:8px; padding:12px 16px; border-top:0.5px solid var(--gray-200); }
+  .chat-input input { flex:1; padding:8px 14px; border-radius:var(--r-pill); border:0.5px solid var(--gray-200); background:var(--gray-100); font-size:13px; outline:none; }
+  .chat-input .send { width:32px; height:32px; border-radius:50%; border:none; background:var(--blue-500); color:#fff; cursor:pointer; flex-shrink:0; }
+
+  /* 卡片网格（角色库/资源库） */
+  .grid-wrap { padding:16px 20px; overflow-y:auto; flex:1; }
+  .grid-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  .grid-head .t { font-size:14px; font-weight:500; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; }
+  .card { background:#fff; border:0.5px solid var(--gray-200); border-radius:var(--r-md); padding:14px; }
+  .card .ch { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .card .av { width:34px; height:34px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; color:#fff; flex-shrink:0; }
+  .card .nm { font-size:13px; font-weight:500; }
+  .card .rl { font-size:11px; color:var(--gray-400); }
+  .card .desc { font-size:12px; color:var(--gray-400); line-height:1.5; }
+  .card .kv { font-size:11px; color:var(--gray-400); margin-top:8px; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:10px; font-weight:500; background:var(--gray-100); color:var(--gray-400); margin:2px 4px 0 0; }
+  .pill.on { background:rgba(34,197,94,.15); color:#166534; }
+  .switch { display:inline-flex; align-items:center; gap:6px; font-size:11px; cursor:pointer; }
+  .switch .tk { width:30px; height:18px; border-radius:10px; background:var(--gray-200); position:relative; transition:.15s; }
+  .switch .tk::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; transition:.15s; }
+  .switch.on .tk { background:var(--green); }
+  .switch.on .tk::after { left:14px; }
+
+  .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:60px 20px; color:var(--gray-400); text-align:center; flex:1; }
+  .empty .ic { width:40px; height:40px; border-radius:50%; background:var(--gray-100); display:flex; align-items:center; justify-content:center; color:var(--gray-status); font-size:18px; margin-bottom:12px; }
+
+  /* 模态 */
+  .mask { position:fixed; inset:0; background:rgba(0,0,0,.32); display:none; align-items:center; justify-content:center; z-index:50; }
+  .mask.show { display:flex; }
+  .modal { width:440px; max-width:92vw; background:#fff; border-radius:var(--r-md); overflow:hidden; }
+  .modal .mh { padding:14px 18px; font-size:14px; font-weight:500; border-bottom:0.5px solid var(--gray-200); display:flex; align-items:center; justify-content:space-between; }
+  .modal .mb { padding:16px 18px; }
+  .modal .mf { padding:12px 18px; display:flex; justify-content:flex-end; gap:8px; border-top:0.5px solid var(--gray-200); }
+  .field { margin-bottom:12px; }
+  .field label { display:block; font-size:11px; color:var(--gray-400); margin-bottom:4px; }
+  .field input, .field textarea, .field select { width:100%; padding:8px 12px; border:0.5px solid var(--gray-200); border-radius:var(--r-sm); font-size:13px; font-family:inherit; outline:none; }
+  .field textarea { resize:vertical; min-height:64px; }
+  .steps { display:flex; gap:6px; margin-bottom:14px; }
+  .steps .st { flex:1; height:4px; border-radius:2px; background:var(--gray-200); }
+  .steps .st.on { background:var(--blue-500); }
+  .rolepick { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 12px; }
+  .rolepick .rp { padding:6px 10px; border:0.5px solid var(--gray-200); border-radius:20px; font-size:12px; cursor:pointer; }
+  .rolepick .rp.sel { background:var(--blue-50); border-color:var(--blue-500); color:var(--blue-600); }
+
+  /* 标注模式 */
+  body.annotating .app { outline:2px dashed var(--amber); outline-offset:-2px; }
+  body.annotating .annot-tip { display:block; }
+  .annot-tip { display:none; position:fixed; top:54px; left:50%; transform:translateX(-50%); background:var(--amber); color:#fff; font-size:11px; padding:4px 12px; border-radius:20px; z-index:60; }
+  .annot-panel { position:fixed; top:0; right:0; width:300px; height:100vh; background:#fff; border-left:0.5px solid var(--gray-200); box-shadow:-4px 0 16px rgba(0,0,0,.06); display:none; flex-direction:column; z-index:55; }
+  .annot-panel.show { display:flex; }
+  .annot-panel .ap-h { padding:12px 14px; font-size:13px; font-weight:500; border-bottom:0.5px solid var(--gray-200); display:flex; justify-content:space-between; align-items:center; }
+  .annot-list { flex:1; overflow-y:auto; padding:10px 14px; }
+  .annot-item { border:0.5px solid var(--gray-200); border-radius:var(--r-sm); padding:8px 10px; margin-bottom:8px; font-size:11px; }
+  .annot-item .n { font-weight:600; color:var(--amber); }
+  .annot-item .loc { color:var(--gray-400); margin:2px 0; }
+  .annot-item .op { display:flex; gap:8px; margin-top:4px; }
+  .marker { position:fixed; width:18px; height:18px; border-radius:50%; background:var(--amber); color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center; z-index:58; transform:translate(-50%,-50%); pointer-events:none; border:2px solid #fff; }
+
+  .about { padding:18px 22px; overflow-y:auto; flex:1; }
+  .about h2 { font-size:14px; font-weight:500; margin:6px 0 10px; }
+  .about h3 { font-size:13px; font-weight:500; margin:16px 0 6px; }
+  .about p, .about li { font-size:12px; color:var(--gray-400); line-height:1.8; }
+  .about code { background:var(--gray-100); padding:1px 5px; border-radius:4px; font-size:11px; }
+  .about ul { padding-left:18px; }
+
+  /* 移动端响应式（v1.0：手机 H5 可用） */
+  .mobile-only { display:none; }
+  @media (max-width:768px){
+    .app { max-width:100%; padding-bottom:50px; }
+    .topbar { padding:0 10px; gap:8px; }
+    .brand small { display:none; }
+    .sidenav { position:fixed; left:0; right:0; bottom:0; top:auto; width:100%; flex-direction:row; border-right:none; border-top:0.5px solid var(--gray-200); padding:4px 2px; gap:0; z-index:45; background:var(--gray-50); }
+    .sidenav .navitem { flex:1; justify-content:center; padding:8px 2px; font-size:11px; gap:4px; }
+    .sidenav .navitem .dotk { display:none; }
+    .sidenav .foot { display:none; }
+    .body { flex-direction:column; }
+    .rooms { width:100%; border-right:none; }
+    .chat { width:100%; }
+    .mobile-only { display:inline-block; }
+    #sec-chat .chat { display:none; }
+    #sec-chat.chat-open .chat { display:flex; }
+    #sec-chat.chat-open .rooms { display:none; }
+    #sec-meta { flex-direction:column; }
+    #sec-meta .chat { width:100%; }
+    #sec-meta .rooms { width:100%; border-right:none; border-top:0.5px solid var(--gray-200); }
+    .grid { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="topbar">
+    <div class="logo">分</div>
+    <div class="brand">分身 <small>coding 版 · 群聊团队</small></div>
+    <div class="spacer"></div>
+    <span class="ver">prototype v1.0</span>
+    <button class="btn" id="btnAnnot">标注模式：关</button>
+    <button class="btn" onclick="showAbout()">原型说明</button>
+  </div>
+
+  <div class="body">
+    <div class="sidenav">
+      <div class="navitem meta active" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
+      <div class="navitem" data-sec="chat"><span class="dotk"></span>项目群聊</div>
+      <div class="navitem" data-sec="roles"><span class="dotk"></span>角色库</div>
+      <div class="navitem" data-sec="resources"><span class="dotk"></span>公共资源库</div>
+      <div class="navitem" data-sec="models"><span class="dotk"></span>模型设置</div>
+      <div class="navitem" data-sec="terminal"><span class="dotk"></span>终端</div>
+      <div class="navitem" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
+      <div class="navitem" data-sec="memory"><span class="dotk"></span>长期记忆</div>
+      <div class="navitem" data-sec="skills"><span class="dotk"></span>技能库</div>
+      <div class="navitem" data-sec="experiences"><span class="dotk"></span>经验库</div>
+      <div class="navitem" data-sec="evolution"><span class="dotk"></span>进化中心</div>
+      <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
+    </div>
+
+    <div class="main">
+      <!-- 项目群聊 -->
+      <div class="section" id="sec-chat">
+        <div class="rooms">
+          <div class="rooms-head"><span class="t">项目 / 团队</span><button class="room-add" onclick="openWizard()">+</button></div>
+          <div class="room-list" id="roomList"></div>
+        </div>
+        <div class="chat">
+          <div class="chat-head">
+            <div><div class="t" id="chatTitle">选择大于努力</div><div class="sub" id="chatSub">运行中</div></div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span id="phaseBadge" style="font-size:10px;background:var(--meta-50);color:var(--meta-700);padding:2px 8px;border-radius:10px;font-weight:500">需求澄清</span>
+              <span id="freezeBadge" style="font-size:10px;background:var(--gray-100);color:var(--gray-400);padding:2px 8px;border-radius:10px">未冻结</span>
+              <select id="phaseSelect" class="btn sm" style="padding:3px 6px" onchange="setPhase(this.value)"></select>
+              <button class="btn sm" onclick="toggleFreeze()" id="freezeBtn">冻结</button>
+              <button class="btn sm" onclick="openChangeOrder()">修改单</button>
+              <button class="btn sm" onclick="openSnapshots()">快照</button>
+            </div>
+            <button class="btn sm mobile-only" onclick="backToRooms()">← 列表</button>
+            <button class="btn ghost sm" onclick="metaStop()">元神中止</button>
+          </div>
+          <div class="chat-body" id="chatBody"></div>
+          <div class="chat-input">
+            <input id="msgInput" placeholder="发消息给团队…（回车发送）" onkeydown="if(event.key==='Enter')sendMsg()">
+            <button class="send" onclick="sendMsg()">↑</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 元神专属窗口 -->
+      <div class="section active" id="sec-meta">
+        <div class="chat">
+          <div class="chat-head">
+            <div><div class="t">元神 · 我的个人分身</div><div class="sub">完全代表你的利益与风格</div></div>
+            <button class="btn sm meta" onclick="showMetaInfo()">这是谁</button>
+          </div>
+          <div class="chat-body" id="metaChat"></div>
+          <div class="chat-input">
+            <input id="metaInput" placeholder="和元神说点什么…（回车发送）" onkeydown="if(event.key==='Enter')sendMeta()">
+            <button class="send" onclick="sendMeta()">↑</button>
+          </div>
+        </div>
+        <div class="rooms" style="width:240px">
+          <div class="rooms-head"><span class="t">我的资料库</span><button class="room-add" onclick="document.getElementById('fileInput').click()" title="上传资料">↑</button></div>
+          <div class="room-list" id="metaFiles"></div>
+        </div>
+      </div>
+
+      <!-- 角色库 -->
+      <div class="section" id="sec-roles">
+        <div class="grid-wrap">
+          <div class="grid-head"><span class="t">Agent 角色库（Schema）</span><button class="btn primary sm" onclick="openRole()">+ 新建角色</button></div>
+          <div class="grid" id="roleGrid"></div>
+        </div>
+      </div>
+
+      <!-- 资源库 -->
+      <div class="section" id="sec-resources">
+        <div class="grid-wrap">
+          <div class="grid-head"><span class="t">公共资源库</span><span class="rl" style="font-size:11px;color:var(--gray-400)">agent 经 Schema 声明，元神审批调用</span></div>
+          <div class="grid" id="resGrid"></div>
+        </div>
+      </div>
+
+      <!-- 模型设置 -->
+      <div class="section" id="sec-models">
+        <div class="grid-wrap">
+          <div class="grid-head"><span class="t">模型设置（元神 + 角色级）</span><span class="rl" style="font-size:11px;color:var(--gray-400)">为元神与每个角色指定大模型与 Key · 可交叉验证与用量统计</span></div>
+          <div class="grid" id="modelGrid"></div>
+          <div class="card" style="margin-top:14px">
+            <div class="grid-head"><span class="t" style="font-size:13px">🔀 交叉验证（多模型协作）</span><span class="rl" style="font-size:11px;color:var(--gray-400)">同一任务交给两个不同模型独立作答，对比结果</span></div>
+            <div class="field" style="margin:8px 0"><textarea id="ccText" rows="2" placeholder="输入要交叉验证的任务/内容…"></textarea></div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select id="ccA" class="btn sm" style="padding:4px 8px"></select>
+              <span style="font-size:12px;color:var(--gray-400)">vs</span>
+              <select id="ccB" class="btn sm" style="padding:4px 8px"></select>
+              <button class="btn sm meta" onclick="runCrossCheck()">交叉验证</button>
+            </div>
+            <div id="ccOut" style="margin-top:10px;font-size:12px;color:var(--gray-400)"></div>
+          </div>
+          <div class="card" style="margin-top:14px">
+            <div class="grid-head"><span class="t" style="font-size:13px">📊 模型用量统计</span><span class="rl" style="font-size:11px;color:var(--gray-400)">各模型调用次数 / 成功率 / 平均耗时（成本优化依据）</span></div>
+            <div id="usageOut" style="margin-top:8px;font-size:12px;color:var(--gray-400)">加载中…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 终端（元神系统级执行器） -->
+      <div class="section" id="sec-terminal">
+        <div class="grid-wrap">
+          <div class="grid-head"><span class="t">终端 · 元神桌面执行器</span><span class="rl" style="font-size:11px;color:var(--gray-400)">以你的最高权限在电脑上运行命令</span></div>
+          <div class="card" style="margin-bottom:12px">
+            <div class="field" style="margin-bottom:8px"><label>命令（元神可代你执行，危险命令需勾选确认）</label>
+              <textarea id="termCmd" placeholder="例如：ls -la ~/Desktop  或  python3 --version"></textarea></div>
+            <label class="switch" id="termConfirm" onclick="document.getElementById('termConfirm').classList.toggle('on')"><span class="tk"></span>我已确认这是危险命令（rm -rf / 等）</label>
+            <div style="margin-top:10px;display:flex;gap:8px">
+              <button class="btn meta" onclick="runTerm()">执行</button>
+              <button class="btn sm" onclick="loadTermLog()">查看执行记录</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="grid-head"><span class="t" style="font-size:13px">执行结果 / 审计日志</span></div>
+            <pre id="termOut" style="white-space:pre-wrap;font-size:12px;color:var(--gray-900);max-height:320px;overflow:auto;background:var(--gray-100);padding:10px;border-radius:8px">—</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- 清理中心 -->
+      <div class="section" id="sec-cleanup">
+        <div style="padding:16px 20px;flex:1;overflow-y:auto">
+          <div class="grid-head"><span class="t">清理中心</span><span class="rl" style="font-size:11px;color:var(--gray-400)">自动清理临时文件、压缩上下文、管理存储</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0">
+            <div class="card">
+              <div class="grid-head"><span class="t" style="font-size:13px">📋 可清理概览</span></div>
+              <div id="cleanupPreview" style="font-size:12px;color:var(--gray-400);line-height:1.8;margin-top:8px">加载中…</div>
+              <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+                <button class="btn sm meta" onclick="doCleanup('temp')">清临时文件</button>
+                <button class="btn sm" onclick="doCleanup('context')">压缩上下文</button>
+                <button class="btn sm" onclick="doCleanup('chat')">清聊天记录</button>
+                <button class="btn sm ghost" onclick="if(confirm('确定清理全部？'))doCleanup('all')">全部清理</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="grid-head"><span class="t" style="font-size:13px">⚙️ 自动清理</span></div>
+              <div style="font-size:12px;color:var(--gray-400);line-height:1.8;margin-top:8px">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                  <input type="checkbox" id="autoCleanToggle" checked onchange="toggleAutoClean()">
+                  <span>每次对话后自动清理临时文件</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:6px">
+                  <input type="checkbox" id="autoCompressToggle" checked onchange="toggleAutoClean()">
+                  <span>消息超过 300 条时自动压缩上下文</span>
+                </label>
+              </div>
+              <div style="margin-top:10px;font-size:11px;color:var(--gray-400)">保护机制：不会删除 <code>backend/</code> <code>frontend/</code> <code>data/</code> 等核心目录</div>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:4px"><span id="cleanupResult"></span></div>
+        </div>
+      </div>
+
+      <!-- 长期记忆 -->
+      <div class="section" id="sec-memory">
+        <div style="padding:16px 20px;flex:1;overflow-y:auto">
+          <div class="grid-head"><span class="t">长期记忆</span><span class="rl" style="font-size:11px;color:var(--gray-400)">持久化存储用户偏好、习惯、决策记录</span></div>
+          <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+            <button class="btn sm meta" onclick="distillMemory()">从对话提炼</button>
+            <button class="btn sm" onclick="showAddMemory()">手动添加</button>
+            <button class="btn sm ghost" onclick="if(confirm('确定清空所有长期记忆？'))doCleanup('memory')">清空记忆</button>
+          </div>
+          <div id="memList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- 添加记忆弹窗 -->
+          <div class="mask" id="memAddMask" style="display:none">
+            <div class="modal" style="max-width:420px">
+              <div class="mh">添加长期记忆 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeAddMem()">✕</span></div>
+              <div class="mb">
+                <div class="field"><label>分类</label><select id="memCat"><option value="preference">偏好</option><option value="habit">习惯</option><option value="decision">决策</option><option value="lesson">教训</option><option value="general">通用</option></select></div>
+                <div class="field"><label>内容</label><textarea id="memContent" rows="3" placeholder="例如：UI 确认前禁止写代码"></textarea></div>
+                <div class="field"><label>来源</label><input id="memSource" placeholder="可选"></div>
+                <button class="btn primary" onclick="saveMemory()">保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 技能库 -->
+      <div class="section" id="sec-skills">
+        <div style="padding:16px 20px;flex:1;overflow-y:auto">
+          <div class="grid-head"><span class="t">技能库</span><span class="rl" style="font-size:11px;color:var(--gray-400)">可复用的标准化工作流，跨项目共享 · 支持版本迭代与回滚</span></div>
+          <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+            <button class="btn sm meta" onclick="distillSkills()">从对话提炼</button>
+            <button class="btn sm" onclick="openSkillEdit()">手动添加</button>
+          </div>
+          <div id="skillList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- 技能编辑弹窗 -->
+          <div class="mask" id="skillMask" style="display:none">
+            <div class="modal" style="max-width:460px">
+              <div class="mh">技能编辑 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeSkillEdit()">✕</span></div>
+              <div class="mb">
+                <div class="field"><label>技能名称</label><input id="skName" placeholder="例如：搭建 FastAPI 项目"></div>
+                <div class="field"><label>分类</label><select id="skCat"><option value="coding">coding</option><option value="deploy">deploy</option><option value="research">research</option><option value="general">general</option></select></div>
+                <div class="field"><label>描述（做什么 / 何时用）</label><textarea id="skDesc" rows="2" placeholder="这个技能解决什么问题"></textarea></div>
+                <div class="field"><label>触发词（逗号分隔）</label><input id="skTrigger" placeholder="fastapi, 项目骨架"></div>
+                <div class="field"><label>步骤模板（每行一步）</label><textarea id="skSteps" rows="5" placeholder="1. 建目录&#10;2. 写 main.py&#10;3. 安装依赖并启动"></textarea></div>
+              </div>
+              <div class="mf">
+                <button class="btn" onclick="closeSkillEdit()">取消</button>
+                <button class="btn primary" onclick="saveSkill()">保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 经验库 -->
+      <div class="section" id="sec-experiences">
+        <div style="padding:16px 20px;flex:1;overflow-y:auto">
+          <div class="grid-head"><span class="t">经验库</span><span class="rl" style="font-size:11px;color:var(--gray-400)">成功/失败案例归档 · 场景/目标/尝试/效果/教训</span></div>
+          <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+            <button class="btn sm meta" onclick="distillExperiences()">从对话提炼</button>
+            <button class="btn sm" onclick="openExpEdit()">手动添加</button>
+            <button class="btn sm" onclick="loadExperiences('success')">只看成功</button>
+            <button class="btn sm" onclick="loadExperiences('failure')">只看失败</button>
+            <button class="btn sm" onclick="loadExperiences('')">全部</button>
+          </div>
+          <div id="expList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- 经验编辑弹窗 -->
+          <div class="mask" id="expMask" style="display:none">
+            <div class="modal" style="max-width:460px">
+              <div class="mh">经验编辑 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeExpEdit()">✕</span></div>
+              <div class="mb">
+                <div class="field"><label>类型</label><select id="expCat"><option value="success">成功</option><option value="failure">失败/踩坑</option></select></div>
+                <div class="field"><label>场景</label><input id="expScenario" placeholder="例如：部署静态站到 nginx"></div>
+                <div class="field"><label>目标</label><input id="expGoal" placeholder="这次要达成什么"></div>
+                <div class="field"><label>尝试过什么</label><textarea id="expAttempts" rows="2" placeholder="做过哪些尝试"></textarea></div>
+                <div class="field"><label>效果</label><input id="expOutcome" placeholder="最终结果如何"></div>
+                <div class="field"><label>教训 / 可复用点</label><textarea id="expLesson" rows="2" placeholder="下次遇到同类问题该怎么做"></textarea></div>
+              </div>
+              <div class="mf">
+                <button class="btn" onclick="closeExpEdit()">取消</button>
+                <button class="btn primary" onclick="saveExp()">保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 进化中心 -->
+      <div class="section" id="sec-evolution">
+        <div style="padding:16px 20px;flex:1;overflow-y:auto">
+          <div class="grid-head"><span class="t">进化中心</span><span class="rl" style="font-size:11px;color:var(--gray-400)">每轮任务结束 → 复盘 → 确认 → 固化入库（自动变聪明）</span></div>
+          <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+            <button class="btn sm meta" onclick="autoReview()">生成复盘</button>
+            <button class="btn sm" onclick="openReviewEdit()">手动复盘</button>
+            <button class="btn sm" onclick="loadReviews('pending')">待确认</button>
+            <button class="btn sm" onclick="loadReviews('')">全部</button>
+          </div>
+          <div id="reviewList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- 复盘弹窗 -->
+          <div class="mask" id="reviewMask" style="display:none">
+            <div class="modal" style="max-width:460px">
+              <div class="mh">手动复盘 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeReviewEdit()">✕</span></div>
+              <div class="mb">
+                <div class="field"><label>做了什么（总结）</label><textarea id="rvSummary" rows="2" placeholder="本轮完成了什么"></textarea></div>
+                <div class="field"><label>哪里高效</label><input id="rvEfficient" placeholder="哪些做法很顺"></div>
+                <div class="field"><label>哪里卡住</label><input id="rvStuck" placeholder="遇到了什么问题"></div>
+                <div class="field"><label>可复用点</label><textarea id="rvReusable" rows="2" placeholder="下次可以固化成什么流程"></textarea></div>
+              </div>
+              <div class="mf">
+                <button class="btn" onclick="closeReviewEdit()">取消</button>
+                <button class="btn primary" onclick="saveReview()">保存复盘</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 原型说明 -->
+      <div class="section" id="sec-about">
+        <div class="about" id="aboutBody"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 成立项目向导 -->
+<div class="mask" id="wizardMask">
+  <div class="modal">
+    <div class="mh">成立项目 = 成立团队 <span style="cursor:pointer;color:var(--gray-400)" onclick="closeWizard()">✕</span></div>
+    <div class="mb">
+      <div class="steps"><div class="st on" id="ws1"></div><div class="st" id="ws2"></div><div class="st" id="ws3"></div></div>
+      <div id="wz1">
+        <div class="field"><label>项目名称</label><input id="wName" placeholder="例如：高考志愿评测平台"></div>
+        <div class="field"><label>一句话目标</label><input id="wGoal" placeholder="这个项目要交付什么"></div>
+      </div>
+      <div id="wz2" style="display:none">
+        <label style="font-size:11px;color:var(--gray-400)">为团队选择角色（元神据此拉起 agent）</label>
+        <div class="rolepick" id="rolePick"></div>
+      </div>
+      <div id="wz3" style="display:none">
+        <p style="font-size:12px;color:var(--gray-400)">元神将按所选角色拉起团队并创建群聊房间。成立后可随时增删角色。</p>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn" onclick="closeWizard()">取消</button>
+      <button class="btn primary" id="wNext" onclick="wizardNext()">下一步</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建角色 -->
+<div class="mask" id="roleMask">
+  <div class="modal">
+    <div class="mh">新建 Agent 角色 <span style="cursor:pointer;color:var(--gray-400)" onclick="closeRole()">✕</span></div>
+    <div class="mb">
+      <div class="field"><label>role_id（唯一标识）</label><input id="rId" placeholder="architect"></div>
+      <div class="field"><label>显示名</label><input id="rName" placeholder="架构师"></div>
+      <div class="field"><label>职责边界（做什么/不做什么）</label><textarea id="rMandate" placeholder="负责技术方案与接口设计，不写业务代码"></textarea></div>
+      <div class="field"><label>技能（逗号分隔）</label><input id="rSkills" placeholder="deep-research, fullstack-dev"></div>
+      <div class="field"><label>质量门禁</label><input id="rGate" placeholder="通过评审 / 测试才交付"></div>
+    </div>
+    <div class="mf">
+      <button class="btn" onclick="closeRole()">取消</button>
+      <button class="btn primary" onclick="saveRole()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 修改单 -->
+<div class="mask" id="coMask">
+  <div class="modal" style="width:440px">
+    <div class="mh">修改单 · 变更已冻结内容 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeChangeOrder()">✕</span></div>
+    <div class="mb">
+      <p style="font-size:11px;color:var(--gray-400);margin-bottom:10px">项目冻结后，修改核心信息（目标/UI/接口）需先提交修改单，经审批通过后才能改动。</p>
+      <div id="coList" style="max-height:180px;overflow:auto;margin-bottom:12px"></div>
+      <div class="field"><label>修改标题</label><input id="coTitle" placeholder="例如：调整项目目标"></div>
+      <div class="field"><label>修改理由与内容</label><textarea id="coDetail" rows="3" placeholder="说明为什么要改、改什么"></textarea></div>
+    </div>
+    <div class="mf">
+      <button class="btn" onclick="closeChangeOrder()">取消</button>
+      <button class="btn primary" onclick="saveChangeOrder()">提交修改单</button>
+    </div>
+  </div>
+</div>
+
+<!-- 版本快照 -->
+<div class="mask" id="snapMask">
+  <div class="modal" style="width:460px">
+    <div class="mh">版本快照 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeSnapshots()">✕</span></div>
+    <div class="mb">
+      <p style="font-size:11px;color:var(--gray-400);margin-bottom:10px">每个阶段定稿时打快照，可随时回滚。进入「编码实现」前必须先有 UI 定稿快照（门禁）。</p>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input id="snapName" class="btn sm" style="flex:1;padding:6px 8px;border:0.5px solid var(--gray-200)" placeholder="快照名，如：UI 定稿 v1.0">
+        <button class="btn sm meta" onclick="makeSnapshot()">打快照</button>
+      </div>
+      <div id="snapList" style="max-height:240px;overflow:auto"></div>
+    </div>
+    <div class="mf"><button class="btn" onclick="closeSnapshots()">关闭</button></div>
+  </div>
+</div>
+
+<!-- 标注录入 -->
+<div class="mask" id="annotMask">
+  <div class="modal" style="width:380px">
+    <div class="mh">录入修改意见 <span style="cursor:pointer;color:var(--gray-400)" onclick="closeAnnot()">✕</span></div>
+    <div class="mb">
+      <div class="field"><label>位置</label><input id="aLoc" readonly></div>
+      <div class="field"><label>修改意见</label><textarea id="aNote" placeholder="这里希望改成…"></textarea></div>
+    </div>
+    <div class="mf">
+      <button class="btn" onclick="closeAnnot()">取消</button>
+      <button class="btn primary" onclick="saveAnnot()">生成修改单</button>
+    </div>
+  </div>
+</div>
+
+<!-- 标注面板 -->
+<div class="annot-panel" id="annotPanel">
+  <div class="ap-h">修改单 <button class="btn sm" onclick="exportAnnot()">导出</button></div>
+  <div class="annot-list" id="annotList"><p style="font-size:11px;color:var(--gray-400)">暂无。开启标注模式后点击页面任意位置即可新建。</p></div>
+</div>
+<div class="annot-tip">标注模式开启：点击页面任意位置标记修改意见</div>
+<input type="file" id="fileInput" style="display:none" onchange="uploadFile(this)">
+
+<script>
+/* ── 状态（全部来自后端 API）── */
+let rooms = [];        // /api/projects
+let curRoom = null;    // 当前选中项目 id
+let roles = [];        // /api/roles
+let resources = [];    // /api/resources
+const META_PID = '__meta__';
+
+const STATUS_LABEL = { green:'运行中', red:'阻塞中', amber:'已暂停' };
+const PHASES = ['requirement','ui','code','test','done'];
+const PHASE_NAMES = { requirement:'需求澄清', ui:'UI/交互定稿', code:'编码实现', test:'测试部署', done:'完成' };
+
+/* ── 渲染：项目群聊 ── */
+async function loadRooms(){ try{ const r=await fetch('/api/projects'); rooms=await r.json(); }catch(e){ console.error(e); rooms=[]; }
+  if(!curRoom && rooms.length) curRoom=rooms[0].id;
+  renderRooms(); if(curRoom) await loadChat(curRoom); }
+function renderRooms(){ const el=document.getElementById('roomList'); el.innerHTML='';
+  rooms.forEach(r=>{ const d=document.createElement('div'); d.className='room'+(r.id===curRoom?' active':''); d.onclick=()=>selectRoom(r.id);
+    const st=r.status||'green';
+    const ph=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
+    const fz=r.frozen?' 🔒':'';
+    d.innerHTML=`<span class="s" style="background:var(--${st})"></span><div class="info"><div class="nm">${r.name}${fz}</div><div class="ds">${ph} · ${r.goal||''}</div></div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
+async function loadChat(pid){ const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
+  const r=rooms.find(x=>x.id===pid); document.getElementById('chatTitle').textContent=r?r.name:''; document.getElementById('chatSub').textContent=r?STATUS_LABEL[r.status]||'':'';
+  refreshPhaseUI(r);
+  let msgs=[]; try{ const res=await fetch('/api/messages/'+pid); msgs=await res.json(); }catch(e){ console.error(e); }
+  renderChat(msgs); }
+function refreshPhaseUI(r){
+  if(!r) return;
+  document.getElementById('phaseBadge').textContent=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
+  const fz=document.getElementById('freezeBadge'); fz.textContent=r.frozen?'🔒 已冻结':'未冻结';
+  fz.style.background=r.frozen?'var(--meta-50)':'var(--gray-100)'; fz.style.color=r.frozen?'var(--meta-700)':'var(--gray-400)';
+  const fb=document.getElementById('freezeBtn'); fb.textContent=r.frozen?'解冻':'冻结';
+  const sel=document.getElementById('phaseSelect'); sel.innerHTML=PHASES.map(p=>`<option value="${p}" ${p===r.phase?'selected':''}>${PHASE_NAMES[p]}</option>`).join('');
+}
+function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerHTML='';
+  if(!msgs.length){ b.innerHTML='<div class="empty"><div class="ic">💬</div><div>还没有消息，发送第一条指令开始工作</div></div>'; b.scrollTop=b.scrollHeight; return; }
+  msgs.forEach(m=>{ const row=document.createElement('div');
+    if(m.kind==='sys'){ row.className='sysmsg'; row.innerHTML=`<span>${m.text}</span>`; }
+    else { row.className='msg '+(m.kind==='self'?'right':'left');
+      const cls=m.kind==='meta'?'meta':m.kind; const tag=m.tag?`<span class="tag ${m.tag}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
+      let acts=''; if(m.kind==='meta') acts=`<div class="acts"><button class="btn sm" onclick="metaCheck()">检查产出</button><button class="btn sm ghost" onclick="metaStop()">中止</button><button class="btn sm" onclick="metaReassign()">重派</button></div>`;
+      row.innerHTML=`<div class="bubble ${cls}"><div class="sender">${m.sender||''}</div>${tag}${m.text}${acts}</div>`; }
+    b.appendChild(row); }); b.scrollTop=b.scrollHeight; }
+function selectRoom(id){ curRoom=id; renderRooms(); loadChat(id);
+  if(window.innerWidth<=768){ document.getElementById('sec-chat').classList.add('chat-open'); } }
+function backToRooms(){ document.getElementById('sec-chat').classList.remove('chat-open'); }
+async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
+async function sendMsg(){ const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value='';
+  await postMsg(curRoom,'你','self',v); await loadChat(curRoom);
+  setTimeout(async()=>{ await postMsg(curRoom,'分身 · 前端','agent','收到，已记录并安排处理。','progress'); await loadChat(curRoom); }, 700); }
+async function metaStop(){ if(!curRoom)return; await postMsg(curRoom,'system','sys','元神已强制中止当前 agent 并锁定产出'); await fetch('/api/projects/'+curRoom,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'amber'})}); await loadChat(curRoom); await loadRooms(); }
+async function metaCheck(){ if(!curRoom)return; await postMsg(curRoom,'分身 · 元神','meta','已检查该 agent 产出，发现 1 处越权调用，已要求修正。'); await loadChat(curRoom); }
+async function metaReassign(){ if(!curRoom)return; await postMsg(curRoom,'分身 · 元神','meta','已重派任务给后端 agent，预计 10 分钟回报。'); await loadChat(curRoom); }
+
+/* ── 渲染：角色库 / 资源库 ── */
+async function renderRoles(){ const g=document.getElementById('roleGrid'); g.innerHTML='加载中…';
+  try{ const res=await fetch('/api/roles'); roles=await res.json(); }catch(e){ console.error(e); roles=[]; }
+  g.innerHTML='';
+  roles.forEach(r=>{ const c=document.createElement('div'); c.className='card';
+    c.innerHTML=`<div class="ch"><div class="av" style="background:#534ab7">${(r.name||r.id||'?')[0]}</div><div><div class="nm">${r.name||r.id}</div><div class="rl">${r.id}</div></div></div>
+      <div class="desc">${r.mandate||'—'}</div><div class="kv">门禁：${r.gate||'—'}</div><div>${(r.skills||'').split(',').filter(s=>s.trim()).map(s=>`<span class="pill">${s.trim()}</span>`).join('')}</div>`; g.appendChild(c); }); }
+async function renderResources(){ const g=document.getElementById('resGrid'); g.innerHTML='加载中…';
+  try{ const res=await fetch('/api/resources'); resources=await res.json(); }catch(e){ console.error(e); resources=[]; }
+  g.innerHTML='';
+  resources.forEach(r=>{ const c=document.createElement('div'); c.className='card';
+    c.innerHTML=`<div class="ch"><div class="av" style="background:var(--gray-status)">${(r.category||'?')[0]}</div><div><div class="nm">${r.name}</div><div class="rl">${r.category||''}</div></div></div>
+      <label class="switch ${r.auth?'on':''}" onclick="toggleRes('${r.id}')"><span class="tk"></span>${r.auth?'已授权':'未授权'}</label>`; g.appendChild(c); }); }
+async function toggleRes(id){ await fetch('/api/resources/'+id+'/auth',{method:'POST'}); renderResources(); }
+
+/* 新建角色 */
+function openRole(){ document.getElementById('rId').value=''; document.getElementById('rName').value=''; document.getElementById('rMandate').value=''; document.getElementById('rSkills').value=''; document.getElementById('rGate').value=''; document.getElementById('roleMask').classList.add('show'); }
+function closeRole(){ document.getElementById('roleMask').classList.remove('show'); }
+async function saveRole(){ const id=document.getElementById('rId').value.trim()||('role'+Date.now()); const name=document.getElementById('rName').value.trim()||'未命名';
+  const payload={id,name,mandate:document.getElementById('rMandate').value.trim()||'待定义',skills:document.getElementById('rSkills').value.trim(),gate:document.getElementById('rGate').value.trim()||'待定义'};
+  await fetch('/api/roles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); closeRole(); renderRoles(); }
+
+/* ── 元神专属窗口 ── */
+async function loadMeta(){ const b=document.getElementById('metaChat'); b.innerHTML='加载中…';
+  let msgs=[]; try{ const res=await fetch('/api/messages/'+META_PID); msgs=await res.json(); }catch(e){ console.error(e); }
+  b.innerHTML='';
+  msgs.forEach(m=>{ const row=document.createElement('div');
+    if(m.kind==='sys'){ row.className='sysmsg'; row.innerHTML=`<span>${m.text}</span>`; }
+    else { row.className='msg '+(m.kind==='self'?'right':'left'); const cls=m.kind==='meta'?'meta':m.kind;
+      row.innerHTML=`<div class="bubble ${cls}"><div class="sender">${m.sender||''}</div>${m.text}</div>`; }
+    b.appendChild(row); }); b.scrollTop=b.scrollHeight;
+  const f=document.getElementById('metaFiles'); f.innerHTML='加载中…';
+  let files=[]; try{ const res=await fetch('/api/meta/files'); files=await res.json(); }catch(e){ console.error(e); }
+  f.innerHTML=''; files.forEach(x=>{ const d=document.createElement('div'); d.className='room';
+    d.innerHTML=`<span class="s" style="background:var(--meta-700)"></span><div class="info"><div class="nm">${x.name}</div><div class="ds">资料库 · 已学习</div></div>`; f.appendChild(d); }); }
+async function sendMeta(){ const v=document.getElementById('metaInput').value.trim(); if(!v)return; document.getElementById('metaInput').value='';
+  await fetch('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v})});
+  await loadMeta(); }
+function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.value='';
+  (async()=>{ await fetch('/api/meta/files',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name})});
+    await postMsg(META_PID,'分身 · 元神','meta',`已接收资料「${f.name}」，正在学习你的风格与偏好…`); await loadMeta(); })(); }
+function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元神 = 你的个人人格分身：代表你的利益与风格，拥有最高管理权限，但不替代你做最终决策。'); await loadMeta(); })(); }
+
+/* ── 成立项目向导 ── */
+let wStep=1;
+function openWizard(){ wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value='';
+  document.getElementById('wz1').style.display=''; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display='none';
+  document.getElementById('ws1').classList.add('on'); document.getElementById('ws2').classList.remove('on'); document.getElementById('ws3').classList.remove('on');
+  document.getElementById('wNext').textContent='下一步'; document.getElementById('wizardMask').classList.add('show');
+  const rp=document.getElementById('rolePick'); rp.innerHTML=''; roles.forEach(r=>{ const s=document.createElement('div'); s.className='rp'; s.textContent=r.name; s.dataset.id=r.id; s.onclick=()=>s.classList.toggle('sel'); rp.appendChild(s); }); }
+function closeWizard(){ document.getElementById('wizardMask').classList.remove('show'); }
+async function wizardNext(){ if(wStep===1){ if(!document.getElementById('wName').value.trim()){alert('请填写项目名称');return;}
+    wStep=2; document.getElementById('wz1').style.display='none'; document.getElementById('wz2').style.display=''; document.getElementById('ws2').classList.add('on'); document.getElementById('wNext').textContent='下一步'; }
+  else if(wStep===2){ wStep=3; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display=''; document.getElementById('ws3').classList.add('on'); document.getElementById('wNext').textContent='成立团队'; }
+  else { const name=document.getElementById('wName').value.trim(); const goal=document.getElementById('wGoal').value.trim();
+    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal})});
+    await postMsg('NEW','分身 · 元神','meta',`项目「${name}」已成立，团队已拉起，开始工作。`);
+    closeWizard(); await loadRooms();
+    // 选中新建项目
+    const created=rooms.find(r=>r.name===name); if(created){ curRoom=created.id; await loadChat(curRoom); }
+    document.querySelector('.navitem[data-sec="chat"]').click(); } }
+
+/* 导航 */
+document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
+  document.querySelectorAll('.navitem').forEach(x=>x.classList.remove('active')); n.classList.add('active');
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.getElementById('sec-'+n.dataset.sec).classList.add('active');
+});
+
+/* 标注模式 */
+let annotating=false, pendX=0, pendY=0;
+document.getElementById('btnAnnot').onclick=()=>{ annotating=!annotating; document.body.classList.toggle('annotating',annotating);
+  document.getElementById('btnAnnot').textContent='标注模式：'+(annotating?'开':'关');
+  document.getElementById('annotPanel').classList.toggle('show',annotating); };
+document.addEventListener('click',e=>{ if(!annotating)return; if(e.target.closest('.mask')||e.target.closest('.annot-panel')||e.target.closest('.topbar'))return; e.preventDefault(); e.stopPropagation();
+  pendX=e.clientX; pendY=e.clientY; const el=e.target.closest('[class]'); const loc=(el?('.'+el.className.toString().split(' ')[0]):'页面')+' @'+Math.round(pendX)+','+Math.round(pendY);
+  document.getElementById('aLoc').value=loc; document.getElementById('annotMask').classList.add('show'); });
+function closeAnnot(){ document.getElementById('annotMask').classList.remove('show'); }
+let annotCount=0;
+function saveAnnot(){ const note=document.getElementById('aNote').value.trim(); if(!note){alert('请填写修改意见');return;} annotCount++;
+  const m=document.createElement('div'); m.className='marker'; m.style.left=pendX+'px'; m.style.top=pendY+'px'; m.textContent=annotCount; document.body.appendChild(m);
+  const list=document.getElementById('annotList'); if(annotCount===1)list.innerHTML='';
+  const d=document.createElement('div'); d.className='annot-item'; d.innerHTML=`<div class="n">#${annotCount}</div><div class="loc">${document.getElementById('aLoc').value}</div><div>${note}</div><div class="op"><button class="btn sm" onclick="this.closest('.annot-item').remove()">关闭</button></div>`; list.prepend(d);
+  document.getElementById('aNote').value=''; closeAnnot(); }
+function exportAnnot(){ let md='# 修改单（分身 v1 实装版）\n\n'; document.querySelectorAll('.annot-item').forEach((it,i)=>{ const n=it.querySelector('.n').textContent; const loc=it.querySelector('.loc').textContent; const tx=it.querySelector('div:nth-child(3)').textContent; md+=`- ${n} | ${loc} | ${tx}\n`; });
+  alert('已导出 '+annotCount+' 条修改单（见控制台）'); console.log(md); }
+
+/* 原型说明 */
+function showAbout(){ document.querySelectorAll('.navitem').forEach(x=>x.classList.remove('active')); document.querySelectorAll('.section').forEach(s=>s.classList.remove('active')); document.getElementById('sec-about').classList.add('active');
+  document.getElementById('aboutBody').innerHTML=`
+    <h2>分身 v1 · 实装版说明</h2>
+    <p>本客户端为阶段1 实装，四机制已接入本地后端（FastAPI + SQLite，端口 8002），数据持久化在桌面本地。</p>
+    <h3>已落地的数据链路</h3>
+    <ul>
+      <li><b>项目群聊</b>：房间列表 / 消息 / 元神「检查·中止·重派」均读写后端 <code>/api/projects</code> · <code>/api/messages</code>，刷新不丢</li>
+      <li><b>成立项目</b>：向导「成立团队」落库 <code>/api/projects</code>，重新拉取房间</li>
+      <li><b>角色库 / 资源库</b>：<code>/api/roles</code> · <code>/api/resources</code>，授权开关落库</li>
+      <li><b>元神 · 我的分身</b>：私聊走 <code>/api/meta/chat</code>（可插拔多模型 + 人格 grounding），资料库走 <code>/api/meta/files</code></li>
+      <li><b>模型设置</b>：为元神与每个角色单独指定供应商（DeepSeek / OpenAI / Claude / Ollama 本地）+ Key，存本地</li>
+      <li><b>终端</b>：元神以你的最高权限在电脑上执行命令（<code>/api/exec</code>），危险命令需确认，全量审计日志</li>
+    </ul>
+    <h3>标注模式</h3>
+    <p>开启后点击任意位置 → 记录组件/坐标 → 弹框录意见 → 生成修改单 → 导出 Markdown。</p>
+    <h3>手机 H5 访问</h3>
+    <p>桌面起服务后，手机同局域网浏览器打开 <code>http://&lt;桌面局域网IP&gt;:8002/</code> 即可使用，已做响应式适配。</p>`; }
+
+/* ── 模型设置 ── */
+async function renderModels(){
+  const g=document.getElementById('modelGrid'); g.innerHTML='加载中…';
+  let cfgs=[]; try{ const r=await fetch('/api/models'); cfgs=await r.json(); }catch(e){ console.error(e); cfgs=[]; }
+  g.innerHTML='';
+  cfgs.forEach(c=>{
+    const card=document.createElement('div'); card.className='card'; card.dataset.id=c.agent_id; card.dataset.name=c.name;
+    const rec = c.recommended ? `<span style="font-size:10px;background:var(--meta-50);color:var(--meta-700);padding:1px 6px;border-radius:8px;margin-left:6px">推荐 ${c.recommended}${c.recommended_model?'/'+c.recommended_model:''}</span>` : '';
+    card.innerHTML=`
+      <div class="ch"><div class="av" style="background:#534ab7">${(c.name||'?')[0]}</div>
+        <div><div class="nm">${c.name}${rec}</div><div class="rl">${c.agent_id}${c.has_key?' · 已配置Key':''}</div></div></div>
+      <div class="field" style="margin:10px 0 6px"><label>供应商</label>
+        <select data-f="provider" onchange="onProviderChange(this)">
+          <option value="deepseek"${c.provider==='deepseek'?' selected':''}>DeepSeek</option>
+          <option value="openai"${c.provider==='openai'?' selected':''}>OpenAI</option>
+          <option value="claude"${c.provider==='claude'?' selected':''}>Claude (Anthropic)</option>
+          <option value="ollama"${c.provider==='ollama'?' selected':''}>Ollama 本地</option>
+        </select></div>
+      <div class="field" style="margin-bottom:6px"><label>模型名</label><input data-f="model_name" value="${c.model_name||''}" placeholder="如 deepseek-chat / gpt-4o-mini"></div>
+      <div class="field" style="margin-bottom:6px"><label>Base URL（可选，留空用默认）</label><input data-f="base_url" value="${c.base_url||''}" placeholder="留空 = 官方默认"></div>
+      <div class="field" style="margin-bottom:8px"><label>API Key${c.provider==='ollama'?'（本地可留空）':''}</label><input data-f="api_key" type="password" value="" placeholder="${c.has_key?'已保存（重填覆盖）':'输入 Key'}"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn primary sm" onclick="saveModel('${c.agent_id}')">保存</button>
+        <button class="btn sm" onclick="testModel('${c.agent_id}')">测试连接</button>
+      </div>
+      <div class="kv" id="mtest-${c.agent_id}" style="margin-top:6px"></div>`;
+    g.appendChild(card);
+  });
+}
+function onProviderChange(sel){ const card=sel.closest('.card'); const k=card.querySelector('[data-f=api_key]'); const lbl=k.previousElementSibling;
+  lbl.textContent = sel.value==='ollama' ? 'API Key（本地可留空）' : 'API Key'; }
+async function saveModel(agent_id){
+  const card=document.querySelector(`.card[data-id="${agent_id}"]`);
+  const payload={ provider:card.querySelector('[data-f=provider]').value,
+    model_name:card.querySelector('[data-f=model_name]').value.trim(),
+    base_url:card.querySelector('[data-f=base_url]').value.trim(),
+    api_key:card.querySelector('[data-f=api_key]').value.trim() };
+  await fetch('/api/models/'+agent_id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const t=document.getElementById('mtest-'+agent_id); if(t)t.textContent='✅ 已保存'; renderModels();
+}
+async function testModel(agent_id){
+  const card=document.querySelector(`.card[data-id="${agent_id}"]`);
+  const payload={ provider:card.querySelector('[data-f=provider]').value,
+    model_name:card.querySelector('[data-f=model_name]').value.trim(),
+    base_url:card.querySelector('[data-f=base_url]').value.trim(),
+    api_key:card.querySelector('[data-f=api_key]').value.trim() };
+  const t=document.getElementById('mtest-'+agent_id); t.textContent='测试中…';
+  try{ const r=await fetch('/api/models/'+agent_id+'/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const j=await r.json(); t.textContent = j.ok ? ('✅ 连通：'+ (j.reply||'')) : ('❌ '+ (j.error||'失败')); }
+  catch(e){ t.textContent='❌ 请求失败'; }
+}
+
+/* ── 多模型协作（Phase 5：交叉验证 + 用量统计）── */
+async function initCrossCheck(){
+  const sa=document.getElementById('ccA'); const sb=document.getElementById('ccB'); if(!sa) return;
+  try{ const r=await fetch('/api/models'); const cfgs=await r.json();
+    sa.innerHTML=cfgs.map(c=>`<option value="${c.agent_id}">${c.name}</option>`).join('');
+    sb.innerHTML=cfgs.map(c=>`<option value="${c.agent_id}">${c.name}</option>`).join('');
+    if(cfgs.length>1) sb.value=cfgs[1].agent_id;
+  }catch(e){}
+}
+async function runCrossCheck(){
+  const text=document.getElementById('ccText').value.trim(); if(!text){ alert('请输入要验证的内容'); return; }
+  const out=document.getElementById('ccOut'); out.innerHTML='验证中…（两个模型独立作答，可能需要几十秒）';
+  try{ const r=await fetch('/api/models/cross-check',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text,agent_a:document.getElementById('ccA').value,agent_b:document.getElementById('ccB').value})});
+    const j=await r.json();
+    if(!j.ok){ out.textContent='❌ '+j.error; return; }
+    const mk=(x)=>`<div class="card" style="padding:10px 12px;margin-top:8px">
+      <div style="font-size:11px;color:var(--gray-400)">${x.agent_id}${x.degraded?' <span style="color:var(--amber)">（降级/离线）</span>':''}</div>
+      <div style="font-size:12px;margin-top:4px;white-space:pre-wrap">${esc(x.result)}</div></div>`;
+    out.innerHTML=`<div style="font-size:11px;color:var(--gray-400)">对比结果：</div>${mk(j.a)}${mk(j.b)}`;
+  }catch(e){ out.textContent='请求失败：'+e; }
+}
+async function loadUsage(){
+  const el=document.getElementById('usageOut'); if(!el) return;
+  try{ const r=await fetch('/api/models/usage'); const j=await r.json();
+    if(!j.stats.length){ el.textContent='暂无调用记录。和元神对话或做交叉验证后，这里会展示各模型的表现。'; return; }
+    el.innerHTML=`<div style="margin-bottom:6px">总调用 ${j.total_calls} 次</div>`+j.stats.map(s=>`
+      <div style="display:flex;justify-content:space-between;padding:6px 10px;border-bottom:0.5px solid var(--gray-200);font-size:12px">
+        <span><b>${esc(s.provider)}</b>${s.model?' / '+esc(s.model):''}</span>
+        <span>${s.total} 次 · 成功率 <b style="color:${s.success_rate>=80?'var(--green)':s.success_rate>0?'var(--amber)':'var(--red)'}">${s.success_rate}%</b></span>
+      </div>`).join('');
+  }catch(e){ el.textContent='加载失败'; }
+}
+
+/* ── 终端：元神系统级执行器 ── */
+async function runTerm(){
+  const cmd=document.getElementById('termCmd').value.trim(); if(!cmd)return;
+  const confirm=document.getElementById('termConfirm').classList.contains('on');
+  const out=document.getElementById('termOut'); out.textContent='执行中…';
+  try{ const r=await fetch('/api/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd,confirm})});
+    const j=await r.json();
+    if(j.need_confirm){ out.textContent='⚠️ '+j.error; document.getElementById('termConfirm').classList.add('on'); return; }
+    out.textContent=`[${j.status} · exit ${j.exit_code}] ${cmd}\n\n${j.output||'(无输出)'}`;
+  }catch(e){ out.textContent='请求失败：'+e; }
+}
+async function loadTermLog(){
+  const out=document.getElementById('termOut'); out.textContent='加载记录…';
+  try{ const r=await fetch('/api/exec/log'); const rows=await r.json();
+    if(!rows.length){ out.textContent='（暂无执行记录）'; return; }
+    out.textContent=rows.map(x=>`[${x.ts.slice(0,19)}] (${x.agent_id}) ${x.status} #${x.exit_code}\n  $ ${x.command}`).join('\n\n');
+  }catch(e){ out.textContent='加载失败'; }
+}
+
+/* ── 工具函数 ── */
+function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+/* ── 阶段门禁 / 冻结 / 修改单 / 快照（Phase 2）── */
+async function setPhase(to){
+  if(!curRoom) return;
+  if(to==='code' && !confirm('⚠️ 门禁：UI/交互确认前禁止写代码。\n\n进入「编码实现」前请确认 UI 已定稿并已打快照。\n继续？')){
+    document.getElementById('phaseSelect').value=rooms.find(r=>r.id===curRoom).phase; return; }
+  try{
+    const r=await fetch('/api/projects/'+curRoom+'/phase',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,confirm:true})});
+    const j=await r.json();
+    if(j.ok){ await loadRooms(); await loadChat(curRoom); }
+    else if(j.need_confirm){
+      if(confirm(j.error+' \n（确认后放行）')){
+        const r2=await fetch('/api/projects/'+curRoom+'/phase',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,confirm:true})});
+        const j2=await r2.json(); if(j2.ok){ await loadRooms(); await loadChat(curRoom); } else alert('❌ '+j2.error);
+      } else { document.getElementById('phaseSelect').value=rooms.find(r=>r.id===curRoom).phase; }
+    }
+    else { alert('❌ '+j.error); document.getElementById('phaseSelect').value=rooms.find(r=>r.id===curRoom).phase; }
+  }catch(e){ alert('请求失败：'+e); }
+}
+async function toggleFreeze(){
+  if(!curRoom) return;
+  const r=rooms.find(x=>x.id===curRoom); const next=r.frozen?0:1;
+  if(next && !confirm('🔒 冻结项目后，修改核心信息需先提交修改单并审批。确定冻结？')) return;
+  try{ await fetch('/api/projects/'+curRoom+'/freeze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({frozen:next===1})});
+    await loadRooms(); await loadChat(curRoom); }catch(e){ alert('请求失败：'+e); }
+}
+/* 修改单 */
+async function openChangeOrder(){
+  document.getElementById('coMask').classList.add('show'); await renderCoList();
+}
+function closeChangeOrder(){ document.getElementById('coMask').classList.remove('show'); }
+async function renderCoList(){
+  const el=document.getElementById('coList'); if(!curRoom) return;
+  try{ const r=await fetch('/api/projects/'+curRoom+'/change-orders'); const rows=await r.json();
+    el.innerHTML=rows.length? rows.map(c=>`<div style="padding:8px 10px;border:0.5px solid var(--gray-200);border-radius:8px;margin-bottom:6px;font-size:12px">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(c.title)}</b><span style="color:${c.status==='approved'?'var(--green)':c.status==='rejected'?'var(--red)':'var(--amber)'}">${c.status==='pending'?'待审批':c.status==='approved'?'已批准':'已拒绝'}</span></div>
+      <div style="color:var(--gray-400);margin-top:2px">${esc(c.detail)}</div>
+      ${c.status==='pending'?`<div style="margin-top:4px"><button class="btn sm" onclick="decideCo(${c.id},'approved')">批准</button> <button class="btn sm ghost" onclick="decideCo(${c.id},'rejected')">拒绝</button></div>`:''}
+    </div>`).join('') : '<div style="font-size:12px;color:var(--gray-400)">暂无修改单</div>';
+  }catch(e){ el.textContent='加载失败'; }
+}
+async function decideCo(id,status){ await fetch('/api/change-orders/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})}); renderCoList(); }
+async function saveChangeOrder(){
+  const title=document.getElementById('coTitle').value.trim(); const detail=document.getElementById('coDetail').value.trim();
+  if(!title||!detail){ alert('请填写标题与理由'); return; }
+  try{ const r=await fetch('/api/projects/'+curRoom+'/change-orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,detail})});
+    const j=await r.json(); if(j.ok){ document.getElementById('coTitle').value=''; document.getElementById('coDetail').value=''; renderCoList(); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+/* 快照 */
+async function openSnapshots(){ document.getElementById('snapMask').classList.add('show'); await renderSnapList(); }
+function closeSnapshots(){ document.getElementById('snapMask').classList.remove('show'); }
+async function renderSnapList(){
+  const el=document.getElementById('snapList'); if(!curRoom) return;
+  try{ const r=await fetch('/api/projects/'+curRoom+'/snapshots'); const rows=await r.json();
+    el.innerHTML=rows.length? rows.map(s=>`<div style="padding:8px 10px;border:0.5px solid var(--gray-200);border-radius:8px;margin-bottom:6px;font-size:12px">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(s.name)}</b><button class="btn sm ghost" onclick="rollbackSnap(${s.id})">回滚</button></div>
+      <div style="color:var(--gray-400);margin-top:2px">${esc(s.desc||'')} · ${(s.created_at||'').slice(0,16).replace('T',' ')} · ${PHASE_NAMES[s.phase]||s.phase}</div>
+    </div>`).join('') : '<div style="font-size:12px;color:var(--gray-400)">暂无快照。阶段切换会自动打快照，也可手动创建。</div>';
+  }catch(e){ el.textContent='加载失败'; }
+}
+async function makeSnapshot(){
+  const name=document.getElementById('snapName').value.trim()||`快照 ${new Date().toLocaleString('zh-CN')}`;
+  try{ const r=await fetch('/api/projects/'+curRoom+'/snapshots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    const j=await r.json(); if(j.ok){ document.getElementById('snapName').value=''; renderSnapList(); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+async function rollbackSnap(id){
+  if(!confirm('⚠️ 回滚会把项目信息恢复到快照时刻（名称/目标/阶段/冻结状态）。确认？')) return;
+  try{ const r=await fetch('/api/snapshots/'+id+'/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
+    const j=await r.json(); if(j.ok){ alert('✅ 已回滚到快照状态'); closeSnapshots(); await loadRooms(); await loadChat(curRoom); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+
+/* ── 清理中心 ── */
+async function loadCleanupPreview(){
+  const el=document.getElementById('cleanupPreview'); if(!el)return;
+  try{ const r=await fetch('/api/cleanup/preview'); const j=await r.json();
+    el.innerHTML=`<div>临时文件：${j.temp_files} 个（${(j.temp_size/1024).toFixed(1)} KB）</div>
+      <div>聊天消息：${j.chat_messages} 条</div>
+      <div>长期记忆：${j.long_term_memories} 条</div>
+      <div>执行日志：${j.exec_logs} 条</div>`;
+  }catch(e){ el.textContent='加载失败'; }
+}
+async function doCleanup(scope){
+  const btn=event.target; const txt=btn.textContent; btn.textContent='清理中…'; btn.disabled=true;
+  try{ const r=await fetch('/api/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope})});
+    const j=await r.json();
+    document.getElementById('cleanupResult').textContent=`✅ 清理完成：删除了 ${j.deleted} 个项目`;
+    loadCleanupPreview(); loadContextBadge();
+  }catch(e){ document.getElementById('cleanupResult').textContent='❌ 清理失败：'+e; }
+  btn.textContent=txt; btn.disabled=false;
+}
+function toggleAutoClean(){
+  // 本地存储偏好（后端自动清理已内置逻辑，此 UI 控制仅做前端提示）
+  const autoClean=document.getElementById('autoCleanToggle').checked;
+  const autoCompress=document.getElementById('autoCompressToggle').checked;
+  localStorage.setItem('fenshen_auto_clean', autoClean ? '1' : '0');
+  localStorage.setItem('fenshen_auto_compress', autoCompress ? '1' : '0');
+}
+
+/* ── 长期记忆 ── */
+async function loadMemory(){
+  const el=document.getElementById('memList'); if(!el)return;
+  try{ const r=await fetch('/api/memory'); const rows=await r.json();
+    if(!rows.length){ el.innerHTML='<div style="color:var(--gray-400)">暂无长期记忆，可从对话提炼或手动添加</div>'; return; }
+    el.innerHTML=rows.map(m=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-bottom:0.5px solid var(--gray-200)">
+      <span style="font-size:10px;background:var(--gray-100);padding:2px 6px;border-radius:4px;color:var(--gray-400);white-space:nowrap;margin-top:2px">${m.category}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:var(--gray-900);word-break:break-all">${esc(m.content)}</div>
+        <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${m.source||''} · ${(m.ts||'').slice(0,10)}</div>
+      </div>
+      <button class="btn sm" style="flex-shrink:0" onclick="deleteMem(${m.id})">删除</button>
+    </div>`).join('');
+  }catch(e){ el.textContent='加载失败'; }
+}
+async function deleteMem(id){
+  try{ await fetch('/api/memory/'+id,{method:'DELETE'}); loadMemory(); }
+  catch(e){ alert('删除失败'); }
+}
+async function distillMemory(){
+  const btn=event.target; const txt=btn.textContent; btn.textContent='提炼中…'; btn.disabled=true;
+  try{ const r=await fetch('/api/memory/distill',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json();
+    alert(`提炼完成：从对话中提取了 ${j.extracted} 条记忆`); loadMemory();
+  }catch(e){ alert('提炼失败：'+e); }
+  btn.textContent=txt; btn.disabled=false;
+}
+function showAddMemory(){ document.getElementById('memAddMask').style.display='flex'; }
+function closeAddMem(){ document.getElementById('memAddMask').style.display='none'; }
+async function saveMemory(){
+  const content=document.getElementById('memContent').value.trim(); if(!content){ alert('请填写内容'); return; }
+  const category=document.getElementById('memCat').value;
+  const source=document.getElementById('memSource').value.trim();
+  try{ await fetch('/api/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category,content,source})});
+    document.getElementById('memContent').value=''; document.getElementById('memSource').value='';
+    closeAddMem(); loadMemory();
+  }catch(e){ alert('保存失败'); }
+}
+
+/* ── 技能库（Phase 3）── */
+let skills = [];
+async function loadSkills(){
+  const el=document.getElementById('skillList'); if(!el)return;
+  try{ const r=await fetch('/api/skills'); skills=await r.json();
+    if(!skills.length){ el.innerHTML='<div style="color:var(--gray-400)">暂无技能。可从对话自动提炼，或手动添加一个可复用流程。</div>'; return; }
+    el.innerHTML=skills.map(s=>{
+      let steps=''; try{ steps=JSON.parse(s.steps||'[]').map((x,i)=>`<div style="padding:2px 0">${i+1}. ${esc(x)}</div>`).join(''); }catch(e){}
+      return `<div class="card" style="margin-bottom:10px">
+        <div class="ch">
+          <div class="av" style="background:var(--meta-700)">${esc((s.name||'技')[0])}</div>
+          <div><div class="nm">${esc(s.name)} <span style="font-size:10px;color:var(--gray-400)">v${s.version}</span></div>
+          <div class="rl">${esc(s.category||'')} ${s.enabled?'':'· <span style="color:var(--gray-400)">草稿(未启用)</span>'}</div></div>
+        </div>
+        <div class="desc">${esc(s.description||'')}</div>
+        ${s.trigger_words?`<div style="margin:4px 0">${(s.trigger_words||'').split(',').filter(Boolean).map(t=>`<span class="pill">${esc(t.trim())}</span>`).join('')}</div>`:''}
+        ${steps?`<div style="background:var(--gray-50);border-radius:8px;padding:8px 12px;margin-top:6px;font-size:12px">${steps}</div>`:''}
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn sm" onclick="toggleSkill(${s.id})">${s.enabled?'停用':'启用'}</button>
+          <button class="btn sm" onclick="openSkillEdit(${s.id})">编辑</button>
+          <button class="btn sm" onclick="openSkillVersions(${s.id})">版本</button>
+          <button class="btn sm ghost" onclick="if(confirm('确定删除技能「${esc(s.name)}」？'))deleteSkill(${s.id})">删除</button>
+        </div>
+      </div>`; }).join('');
+  }catch(e){ el.textContent='加载失败'; }
+}
+async function distillSkills(){
+  const btn=event.target; const txt=btn.textContent; btn.textContent='提炼中…'; btn.disabled=true;
+  try{ const r=await fetch('/api/skills/distill',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json();
+    alert(j.extracted? `✅ 提炼 ${j.extracted} 条技能草稿（已停用，可编辑后启用）：\n${j.skills.join('\n')}` : '未发现新的流程性内容');
+    loadSkills();
+  }catch(e){ alert('提炼失败：'+e); }
+  btn.textContent=txt; btn.disabled=false;
+}
+function openSkillEdit(id){
+  const s = id!==undefined ? skills.find(x=>x.id===id) : null;
+  document.getElementById('skName').value = s? s.name : '';
+  document.getElementById('skCat').value = s? (s.category||'general') : 'coding';
+  document.getElementById('skDesc').value = s? (s.description||'') : '';
+  document.getElementById('skTrigger').value = s? (s.trigger_words||'') : '';
+  let steps=''; if(s){ try{ steps=JSON.parse(s.steps||'[]').map((x,i)=>`${i+1}. ${x}`).join('\n'); }catch(e){} }
+  document.getElementById('skSteps').value = steps;
+  document.getElementById('skillMask').dataset.id = id!==undefined? id : '';
+  document.getElementById('skillMask').style.display='flex';
+}
+function closeSkillEdit(){ document.getElementById('skillMask').style.display='none'; }
+async function saveSkill(){
+  const name=document.getElementById('skName').value.trim(); if(!name){ alert('请填写技能名称'); return; }
+  const category=document.getElementById('skCat').value;
+  const description=document.getElementById('skDesc').value.trim();
+  const trigger_words=document.getElementById('skTrigger').value.trim();
+  const steps=document.getElementById('skSteps').value.split('\n').map(s=>s.replace(/^\d+[\.\、\s]+/,'').trim()).filter(Boolean);
+  const id=document.getElementById('skillMask').dataset.id;
+  try{
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? '/api/skills/'+id : '/api/skills';
+    const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify({name,category,description,trigger_words,steps})});
+    const j=await r.json();
+    if(j.ok){ closeSkillEdit(); loadSkills(); if(id) alert('✅ 已升级为 v'+j.version); }
+    else alert('❌ '+j.error);
+  }catch(e){ alert('保存失败：'+e); }
+}
+async function toggleSkill(id){
+  await fetch('/api/skills/'+id+'/toggle',{method:'POST'}); loadSkills();
+}
+async function deleteSkill(id){
+  await fetch('/api/skills/'+id,{method:'DELETE'}); loadSkills();
+}
+async function openSkillVersions(id){
+  try{ const r=await fetch('/api/skills/'+id+'/versions'); const rows=await r.json();
+    const s=skills.find(x=>x.id===id);
+    if(!rows.length){ alert('暂无历史版本（只有 v1 时无法回滚）'); return; }
+    const pick = prompt(`「${s.name}」当前 v${s.version}，历史版本：\n${rows.map(v=>`  v${v.version} (${v.created_at.slice(0,16).replace('T',' ')})`).join('\n')}\n\n输入要回滚的版本号：`);
+    if(!pick) return;
+    const ver=parseInt(pick);
+    if(!rows.find(v=>v.version===ver)){ alert('版本号不存在'); return; }
+    if(!confirm('⚠️ 确认回滚到 v'+ver+'？当前版本会先存档。')) return;
+    const r2=await fetch(`/api/skills/${id}/rollback/${ver}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
+    const j2=await r2.json();
+    if(j2.ok){ alert('✅ 已回滚到 v'+j2.version); loadSkills(); } else alert('❌ '+j2.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+
+/* ── 经验库（Phase 4）── */
+let experiences = [];
+async function loadExperiences(cat){
+  const el=document.getElementById('expList'); if(!el)return;
+  try{ const r=await fetch('/api/experiences'+(cat?'?category='+cat:'')); experiences=await r.json();
+    if(!experiences.length){ el.innerHTML='<div style="color:var(--gray-400)">暂无经验。可从对话自动提炼，或手动添加一条成功/踩坑案例。</div>'; return; }
+    el.innerHTML=experiences.map(e=>`<div class="card" style="margin-bottom:10px">
+      <div class="ch">
+        <span style="font-size:10px;padding:2px 8px;border-radius:10px;color:#fff;background:${e.category==='success'?'var(--green)':'var(--red)'}">${e.category==='success'?'✅ 成功':'⚠️ 踩坑'}</span>
+        <div style="margin-left:8px"><div class="nm">${esc(e.scenario)}</div><div class="rl">${esc(e.source||'')} · ${(e.ts||'').slice(0,10)}</div></div>
+      </div>
+      ${e.goal?`<div class="desc"><b>目标</b>：${esc(e.goal)}</div>`:''}
+      ${e.attempts?`<div class="desc"><b>尝试</b>：${esc(e.attempts)}</div>`:''}
+      ${e.outcome?`<div class="desc"><b>效果</b>：${esc(e.outcome)}</div>`:''}
+      ${e.lesson?`<div class="desc" style="color:var(--meta-700)"><b>教训</b>：${esc(e.lesson)}</div>`:''}
+      <div style="display:flex;gap:6px;margin-top:10px">
+        <button class="btn sm" onclick="openExpEdit(${e.id})">编辑</button>
+        <button class="btn sm ghost" onclick="if(confirm('删除该经验？'))deleteExp(${e.id})">删除</button>
+      </div>
+    </div>`).join('');
+  }catch(e){ el.textContent='加载失败'; }
+}
+async function distillExperiences(){
+  const btn=event.target; const txt=btn.textContent; btn.textContent='提炼中…'; btn.disabled=true;
+  try{ const r=await fetch('/api/experiences/distill',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json();
+    alert(j.extracted? `✅ 提炼 ${j.extracted} 条经验：\n${j.items.join('\n')}` : '未发现新的成功/失败案例');
+    loadExperiences('');
+  }catch(e){ alert('提炼失败：'+e); }
+  btn.textContent=txt; btn.disabled=false;
+}
+function openExpEdit(id){
+  const e = id!==undefined ? experiences.find(x=>x.id===id) : null;
+  document.getElementById('expCat').value = e? e.category : 'success';
+  document.getElementById('expScenario').value = e? (e.scenario||'') : '';
+  document.getElementById('expGoal').value = e? (e.goal||'') : '';
+  document.getElementById('expAttempts').value = e? (e.attempts||'') : '';
+  document.getElementById('expOutcome').value = e? (e.outcome||'') : '';
+  document.getElementById('expLesson').value = e? (e.lesson||'') : '';
+  document.getElementById('expMask').dataset.id = id!==undefined? id : '';
+  document.getElementById('expMask').style.display='flex';
+}
+function closeExpEdit(){ document.getElementById('expMask').style.display='none'; }
+async function saveExp(){
+  const scenario=document.getElementById('expScenario').value.trim(); if(!scenario){ alert('请填写场景'); return; }
+  const payload={ category:document.getElementById('expCat').value, scenario,
+    goal:document.getElementById('expGoal').value.trim(), attempts:document.getElementById('expAttempts').value.trim(),
+    outcome:document.getElementById('expOutcome').value.trim(), lesson:document.getElementById('expLesson').value.trim() };
+  const id=document.getElementById('expMask').dataset.id;
+  try{ const r=await fetch(id?'/api/experiences/'+id:'/api/experiences',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const j=await r.json(); if(j.ok){ closeExpEdit(); loadExperiences(''); } else alert('❌ '+j.error);
+  }catch(e){ alert('保存失败：'+e); }
+}
+async function deleteExp(id){ await fetch('/api/experiences/'+id,{method:'DELETE'}); loadExperiences(''); }
+
+/* ── 进化中心（Phase 4）── */
+let reviews = [];
+async function loadReviews(status){
+  const el=document.getElementById('reviewList'); if(!el)return;
+  try{ const r=await fetch('/api/reviews'+(status?'?status='+status:'')); reviews=await r.json();
+    if(!reviews.length){ el.innerHTML='<div style="color:var(--gray-400)">暂无复盘。点「生成复盘」自动从最近项目消息生成，或手动记录。</div>'; return; }
+    el.innerHTML=reviews.map(v=>`<div class="card" style="margin-bottom:10px;${v.status==='pending'?'border:1px solid var(--amber)':''}">
+      <div class="ch">
+        <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:${v.status==='pending'?'var(--amber)':v.status==='accepted'?'var(--green)':'var(--gray-200)'};color:#fff">${v.status==='pending'?'待确认':v.status==='accepted'?'✅ 已固化':'已拒绝'}</span>
+        <div style="margin-left:8px"><div class="rl">项目 ${esc(v.project_id||'')} · ${(v.created_at||'').slice(0,16).replace('T',' ')}</div></div>
+      </div>
+      <div class="desc">${esc(v.summary||'')}</div>
+      ${v.efficient?`<div class="desc" style="color:var(--green)"><b>高效</b>：${esc(v.efficient)}</div>`:''}
+      ${v.stuck?`<div class="desc" style="color:var(--red)"><b>卡住</b>：${esc(v.stuck)}</div>`:''}
+      ${v.reusable?`<div class="desc" style="color:var(--meta-700)"><b>可复用</b>：${esc(v.reusable)}</div>`:''}
+      ${v.reject_reason?`<div class="desc" style="color:var(--gray-400)"><b>拒绝原因</b>：${esc(v.reject_reason)}</div>`:''}
+      ${v.status==='pending'?`<div style="display:flex;gap:6px;margin-top:10px">
+        <button class="btn sm meta" onclick="acceptReview(${v.id})">✅ 接受并固化</button>
+        <button class="btn sm ghost" onclick="rejectReview(${v.id})">拒绝</button>
+      </div>`:''}
+    </div>`).join('');
+  }catch(e){ el.textContent='加载失败'; }
+}
+async function autoReview(){
+  const btn=event.target; const txt=btn.textContent; btn.textContent='生成中…'; btn.disabled=true;
+  try{ const r=await fetch('/api/reviews/auto',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json();
+    if(j.ok){ alert('✅ 已从项目「'+j.project_id+'」生成复盘草稿（待确认）'); loadReviews('pending'); }
+    else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+  btn.textContent=txt; btn.disabled=false;
+}
+function openReviewEdit(){ document.getElementById('rvSummary').value=''; document.getElementById('rvEfficient').value=''; document.getElementById('rvStuck').value=''; document.getElementById('rvReusable').value=''; document.getElementById('reviewMask').style.display='flex'; }
+function closeReviewEdit(){ document.getElementById('reviewMask').style.display='none'; }
+async function saveReview(){
+  const summary=document.getElementById('rvSummary').value.trim(); if(!summary){ alert('请填写总结'); return; }
+  const payload={ summary, efficient:document.getElementById('rvEfficient').value.trim(),
+    stuck:document.getElementById('rvStuck').value.trim(), reusable:document.getElementById('rvReusable').value.trim() };
+  try{ const r=await fetch('/api/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const j=await r.json(); if(j.ok){ closeReviewEdit(); loadReviews('pending'); } else alert('❌ '+j.error);
+  }catch(e){ alert('保存失败：'+e); }
+}
+async function acceptReview(id){
+  if(!confirm('✅ 接受后会把「可复用点」固化为技能草稿、「卡住」记入经验库（失败案例）。确认？')) return;
+  try{ const r=await fetch('/api/reviews/'+id+'/accept',{method:'POST'}); const j=await r.json();
+    if(j.ok){ alert('✅ 已固化入库'); loadReviews('pending'); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+async function rejectReview(id){
+  const reason=prompt('记录拒绝原因（可选，用于后续改进）：');
+  if(reason===null) return;
+  try{ const r=await fetch('/api/reviews/'+id+'/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})});
+    const j=await r.json(); if(j.ok){ loadReviews('pending'); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+
+/* ── 上下文状态指示器 ── */
+async function loadContextBadge(){
+  const el=document.getElementById('ctxBadge'); if(!el)return;
+  try{ const r=await fetch('/api/context'); const j=await r.json();
+    el.textContent=`上下文：${j.total_messages} 条消息 · ${j.long_term_memories} 条记忆 · ${j.projects} 个项目`;
+  }catch(e){ /* 静默 */ }
+}
+
+/* init */
+loadRooms(); renderRoles(); renderResources(); loadMeta(); renderModels();
+loadCleanupPreview(); loadMemory(); loadContextBadge(); loadSkills();
+loadExperiences(''); loadReviews('pending'); initCrossCheck(); loadUsage();
+setInterval(loadContextBadge, 30000); // 每30秒刷新上下文状态
+</script>
+</body>
+</html>

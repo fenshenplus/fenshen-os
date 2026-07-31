@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>分身 v1 — 你的 AI 团队群聊助手</title>
+<style>
+  :root{
+    --blue:#007aff; --blue-600:#0066d6; --blue-50:#e8f0fe;
+    --gray-50:#fbfbfa; --gray-100:#f5f5f7; --gray-200:#e5e5ea;
+    --gray-900:#1c1c1e; --gray-400:#8e8e93;
+    --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
+    --meta:#534ab7; --meta-50:#eef0fe; --meta-900:#26215c;
+    --radius:12px; --radius-sm:8px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-font-smoothing:antialiased}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    color:var(--gray-900); background:var(--gray-100); font-size:14px; line-height:1.6; font-weight:400;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:980px;margin:0 auto;padding:0 20px}
+  /* 顶栏 */
+  nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:saturate(180%) blur(8px);border-bottom:.5px solid var(--gray-200)}
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;height:54px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:500}
+  .brand .name{font-size:15px}
+  .nav-links{display:flex;align-items:center;gap:22px}
+  .nav-links a.link{color:var(--gray-400);font-size:13px}
+  .nav-links a.link:hover{color:var(--gray-900)}
+  /* 按钮 */
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:var(--radius-sm);padding:9px 16px;font-size:13px;font-weight:500;cursor:pointer;border:.5px solid var(--gray-200);background:#fff;color:var(--gray-900);transition:.15s}
+  .btn:hover{background:var(--gray-100)}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn.primary:hover{background:var(--blue-600);border-color:var(--blue-600)}
+  .btn.meta{background:var(--meta);border-color:var(--meta);color:#fff}
+  .btn.meta:hover{background:var(--meta-900);border-color:var(--meta-900)}
+  /* Hero */
+  .hero{padding:72px 0 56px;text-align:center}
+  .hero h1{font-size:34px;font-weight:500;letter-spacing:-.5px;line-height:1.25}
+  .hero .sub{margin:18px auto 0;max-width:560px;color:var(--gray-400);font-size:15px}
+  .hero .actions{margin-top:28px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .pill{display:inline-flex;align-items:center;gap:6px;margin-top:22px;padding:5px 12px;border-radius:18px;background:var(--gray-100);border:.5px solid var(--gray-200);font-size:12px;color:var(--gray-400)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--green)}
+  /* 区块 */
+  section{padding:48px 0}
+  .sec-title{font-size:13px;font-weight:500;color:var(--gray-400);letter-spacing:.4px;text-transform:uppercase;margin-bottom:18px}
+  .sec-h{font-size:22px;font-weight:500;margin-bottom:6px}
+  .sec-d{color:var(--gray-400);font-size:14px;margin-bottom:26px}
+  /* 四机制网格 */
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .card{background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:18px}
+  .card .ic{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:500;color:#fff;font-size:16px;margin-bottom:12px}
+  .card h3{font-size:15px;font-weight:500;margin-bottom:6px}
+  .card p{color:var(--gray-400);font-size:13px}
+  .ic.meta{background:var(--meta)} .ic.blue{background:var(--blue)} .ic.green{background:var(--green)} .ic.amber{background:var(--amber)}
+  /* 安装步骤 */
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .step{background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:18px}
+  .step .n{width:24px;height:24px;border-radius:50%;background:var(--blue-50);color:var(--blue);font-size:12px;font-weight:500;display:flex;align-items:center;justify-content:center;margin-bottom:12px}
+  .step h4{font-size:14px;font-weight:500;margin-bottom:6px}
+  .step p{color:var(--gray-400);font-size:13px}
+  .note{margin-top:16px;font-size:12px;color:var(--gray-400)}
+  /* Gatekeeper 提示 */
+  .gatekeeper{margin-top:18px;background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:16px 18px}
+  .gk-title{font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px}
+  .gatekeeper p{font-size:13px;color:var(--gray-400);line-height:1.7;margin:6px 0}
+  .gatekeeper pre{background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--ink);overflow-x:auto;margin:6px 0}
+  /* 技术说明 */
+  .specs{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .spec{background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:16px}
+  .spec .k{font-size:12px;color:var(--gray-400);margin-bottom:4px}
+  .spec .v{font-size:14px;font-weight:500}
+  /* 页脚 */
+  footer{border-top:.5px solid var(--gray-200);background:#fff;padding:28px 0;margin-top:24px}
+  .foot-inner{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;color:var(--gray-400);font-size:12px}
+  @media(max-width:680px){
+    .grid,.steps,.specs{grid-template-columns:1fr}
+    .nav-links a.link{display:none}
+    .hero h1{font-size:27px}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 26 26"><rect width="26" height="26" rx="7" fill="#534ab7"/><text x="13" y="18" font-size="15" font-family="-apple-system,sans-serif" font-weight="500" fill="#fff" text-anchor="middle">分</text></svg>
+      <span class="name">分身</span>
+    </div>
+    <div class="nav-links">
+      <a class="link" href="#features">功能</a>
+      <a class="link" href="#install">安装</a>
+      <a class="link" href="#tech">技术</a>
+      <a class="btn primary" href="./分身-v1-macOS.zip">下载 macOS</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>分身 v1<br/>你的 AI 团队群聊助手</h1>
+    <p class="sub">为每个项目拉起一个 AI 团队：元神管方向，角色分工协作，公共资源统一调度。本地优先，数据不落云。</p>
+    <div class="actions">
+      <a class="btn primary" href="./分身-v1-macOS.zip">下载 macOS 版</a>
+      <a class="btn" href="#features">查看功能</a>
+    </div>
+    <div class="pill"><span class="dot"></span> 本地运行 · 端口 8002 · 数据存本机 SQLite</div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-title">核心机制</div>
+    <div class="sec-h">四机制，一套群聊App</div>
+    <div class="sec-d">把高效 coding 工作流产品化，砍掉 80% 不常用的功能。</div>
+    <div class="grid">
+      <div class="card">
+        <div class="ic meta">元</div>
+        <h3>元神 · 管理者</h3>
+        <p>你的个人人格分身，1:1 私聊 + 资料库，代表你的利益与风格，监督、兜底、可强制中止任意 agent。</p>
+      </div>
+      <div class="card">
+        <div class="ic blue">群</div>
+        <h3>项目群聊</h3>
+        <p>每个项目一个房间，团队按角色分工协作，消息全程留痕，进度透明可查。</p>
+      </div>
+      <div class="card">
+        <div class="ic green">角</div>
+        <h3>角色库</h3>
+        <p>Agent 角色 Schema 定义与复用，成立项目即按设计拉起对应的团队角色。</p>
+      </div>
+      <div class="card">
+        <div class="ic amber">库</div>
+        <h3>公共资源库</h3>
+        <p>服务器、支付等公共资源统一授权管理，开关可控，避免重复配置与越权。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install" style="background:#fff;border-top:.5px solid var(--gray-200);border-bottom:.5px solid var(--gray-200)">
+  <div class="wrap">
+    <div class="sec-title">安装</div>
+    <div class="sec-h">三步装好，浏览器即用</div>
+    <div class="sec-d">引擎运行在你的 Mac 上（需本机权限，可代你执行操作）。手机/其他设备只是远程看板——连上同一网络，用浏览器打开即可与桌面端通信。</div>
+    <div class="steps">
+      <div class="step">
+        <div class="n">1</div>
+        <h4>下载安装包</h4>
+        <p>点上方「下载 macOS 版」，得到 <code>分身-v1-macOS.zip</code>。</p>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <h4>解压并安装</h4>
+        <p>解压后双击 <code>安装.command</code>，自动建运行环境并启动。</p>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <h4>打开即用</h4>
+        <p>浏览器自动打开 <code>http://localhost:8002/</code>，开始使用。</p>
+      </div>
+    </div>
+    <p class="note">说明：首次安装需联网拉取运行依赖（Python 包），之后完全离线可用。停止服务双击 <code>停止.command</code>。</p>
+    <div class="gatekeeper">
+      <div class="gk-title">⚠️ macOS 打开 .command 提示「无法验证」怎么办？</div>
+      <p>这是苹果对网上下载文件的统一安全拦截（Gatekeeper），与本软件无关。二选一即可解除：</p>
+      <p><b>方法 A（推荐，永久生效）</b>：打开「终端」，粘贴运行下面这一行（路径按你实际解压位置改）：</p>
+      <pre>xattr -cr ~/Downloads/分身-v1</pre>
+      <p>回车后再双击 <code>安装.command</code> 即可正常打开。</p>
+      <p><b>方法 B（单次信任）</b>：右键 <code>安装.command</code> → 打开 → 在弹窗中点「打开」。之后 <code>启动.command</code> / <code>停止.command</code> 也用同样方式首次打开一次即可。</p>
+    </div>
+    <p class="note" style="margin-top:8px">架构：<b>桌面端是引擎</b>（跑模型、管项目、可调用系统）；<b>手机端是通信终端</b>，不跑模型、不持权限，仅通过局域网/中继与桌面端对话。换电脑只需把整个文件夹拷贝过去。</p>
+  </div>
+</section>
+
+<section id="tech">
+  <div class="wrap">
+    <div class="sec-title">技术说明</div>
+    <div class="sec-h">干净、轻量、守纪律</div>
+    <div class="sec-d">面向个人与小型团队的本地优先方案。</div>
+    <div class="specs">
+      <div class="spec"><div class="k">技术栈</div><div class="v">FastAPI + SQLite + 原生 H5</div></div>
+      <div class="spec"><div class="k">服务端口</div><div class="v">8002（规避 8000 生产占用）</div></div>
+      <div class="spec"><div class="k">数据存储</div><div class="v">本机 SQLite，不落云</div></div>
+      <div class="spec"><div class="k">元神 LLM</div><div class="v">DeepSeek，密钥失效自动降级</div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <div>分身 v1.0 · 本地优先的 AI 团队群聊助手</div>
+    <div>端口守纪 8002 · © 2026 分身</div>
+  </div>
+</footer>
+
+</body>
+</html>
