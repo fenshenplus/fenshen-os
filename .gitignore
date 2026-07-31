@@ -1,0 +1,18 @@
+# 数据与密钥（本地私有，不提交）
+data/
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 临时与日志
+*.log
+.temp/
+.DS_Store
+
+# 发行包中间产物（site/ 下的 zip 由 dist-stage 打包，保留 site 的 index.html 但排除 zip）
+dist-stage/.venv/
