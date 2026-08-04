@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" type="image/png" href="./favicon.png" />
 <title>分身 v1 — 你的 AI 团队群聊助手</title>
 <style>
   :root{
@@ -26,6 +27,7 @@
   .nav-inner{display:flex;align-items:center;justify-content:space-between;height:54px}
   .brand{display:flex;align-items:center;gap:9px;font-weight:500}
   .brand .name{font-size:15px}
+  .brand img{width:24px;height:24px;border-radius:6px;object-fit:contain}
   .nav-links{display:flex;align-items:center;gap:22px}
   .nav-links a.link{color:var(--gray-400);font-size:13px}
   .nav-links a.link:hover{color:var(--gray-900)}
@@ -38,6 +40,7 @@
   .btn.meta:hover{background:var(--meta-900);border-color:var(--meta-900)}
   /* Hero */
   .hero{padding:72px 0 56px;text-align:center}
+  .hero .logo{width:92px;height:92px;margin:0 auto 22px;object-fit:contain;border-radius:22px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
   .hero h1{font-size:34px;font-weight:500;letter-spacing:-.5px;line-height:1.25}
   .hero .sub{margin:18px auto 0;max-width:560px;color:var(--gray-400);font-size:15px}
   .hero .actions{margin-top:28px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
@@ -75,6 +78,8 @@
   /* 页脚 */
   footer{border-top:.5px solid var(--gray-200);background:#fff;padding:28px 0;margin-top:24px}
   .foot-inner{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;color:var(--gray-400);font-size:12px}
+  .foot-brand{display:flex;align-items:center;gap:7px}
+  .foot-brand img{width:18px;height:18px;object-fit:contain}
   @media(max-width:680px){
     .grid,.steps,.specs{grid-template-columns:1fr}
     .nav-links a.link{display:none}
@@ -87,7 +92,7 @@
 <nav>
   <div class="wrap nav-inner">
     <div class="brand">
-      <svg width="26" height="26" viewBox="0 0 26 26"><rect width="26" height="26" rx="7" fill="#534ab7"/><text x="13" y="18" font-size="15" font-family="-apple-system,sans-serif" font-weight="500" fill="#fff" text-anchor="middle">分</text></svg>
+      <img src="./logo.png" alt="分身 Logo" />
       <span class="name">分身</span>
     </div>
     <div class="nav-links">
@@ -101,6 +106,7 @@
 
 <header class="hero">
   <div class="wrap">
+    <img class="logo" src="./logo.png" alt="分身 Logo" />
     <h1>分身 v1<br/>你的 AI 团队群聊助手</h1>
     <p class="sub">为每个项目拉起一个 AI 团队：元神管方向，角色分工协作，公共资源统一调度。本地优先，数据不落云。</p>
     <div class="actions">
@@ -192,7 +198,7 @@
 
 <footer>
   <div class="wrap foot-inner">
-    <div>分身 v1.0 · 本地优先的 AI 团队群聊助手</div>
+    <div class="foot-brand"><img src="./logo.png" alt="" /> 分身 v1.0 · 本地优先的 AI 团队群聊助手</div>
     <div>端口守纪 8002 · © 2026 分身</div>
   </div>
 </footer>
