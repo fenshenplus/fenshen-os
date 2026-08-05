@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.15.0")
+app = FastAPI(title="分身 v1 后端", version="0.16.0")
 
 
 def get_db():
@@ -391,8 +391,8 @@ def _available_providers(agent_id: str):
         base = cfg.get("base_url") or preset["base"]
         model = cfg.get("model_name") or preset["default_model"]
         cands.append((provider, base, cfg["api_key"], model))
-    # 元神 secret 兜底
-    if agent_id == META_PID and DEEPSEEK_KEY:
+    # DeepSeek secret 兜底（所有角色：配置了独立 key 用独立 key，否则用元神 secret 兜底）
+    if DEEPSEEK_KEY and not cands:
         cands.append(("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-chat"))
     return cands
 
@@ -621,7 +621,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.15.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.16.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
