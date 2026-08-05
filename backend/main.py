@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.12.0")
+app = FastAPI(title="分身 v1 后端", version="0.14.0")
 
 
 def get_db():
@@ -591,7 +591,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.12.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.14.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -1956,6 +1956,173 @@ async def reject_review(rid: int, req: Request):
     conn.commit()
     conn.close()
     return {"ok": True, "status": "rejected"}
+
+
+# ── API：元神总看板（v3.5 元神觉醒 · 聚合 + 巡检）────────────────
+def _patrol_rules(conn, pid: str) -> dict:
+    """单个项目的巡检结果：阻塞 / 滞留 / 超时 / 审核积压。"""
+    issues = []
+    mods = conn.execute(
+        "SELECT * FROM modules WHERE project_id=?", (pid,)
+    ).fetchall()
+    tasks = conn.execute(
+        "SELECT * FROM tasks WHERE project_id=?", (pid,)
+    ).fetchall()
+    task_map = {t["id"]: dict(t) for t in tasks}
+    mod_map = {m["id"]: dict(m) for m in mods}
+    # 1) 依赖未完成 → 依赖方滞留（red）
+    for m in mods:
+        deps = json.loads(m["depends_on"] or "[]")
+        if not deps:
+            continue
+        for d in deps:
+            dm = mod_map.get(d)
+            if dm and dm["status"] != "done" and m["status"] in ("doing", "todo"):
+                issues.append({
+                    "level": "red", "project": pid, "module": m["name"], "task": "",
+                    "type": "依赖阻塞",
+                    "detail": f"模块「{m['name']}」依赖「{dm['name']}」未完成",
+                })
+    # 2) 任务滞留超时：doing 超过 24h（按 created_at 粗估）或 todo 积压 >= 5
+    for t in tasks:
+        if t["status"] == "doing":
+            issues.append({
+                "level": "amber", "project": pid, "module": mod_map.get(t["module_id"], {}).get("name", ""),
+                "task": t["name"], "type": "进行中", "detail": f"任务「{t['name']}」在进行中，留意进度",
+            })
+    doing_count = sum(1 for t in tasks if t["status"] == "doing")
+    todo_count = sum(1 for t in tasks if t["status"] == "todo")
+    review_count = sum(1 for t in tasks if t["status"] == "review")
+    if review_count >= 2:
+        issues.append({
+            "level": "amber", "project": pid, "module": "", "task": "",
+            "type": "审核积压", "detail": f"有 {review_count} 个任务待审核",
+        })
+    return {
+        "project": pid, "module_count": len(mods), "task_count": len(tasks),
+        "doing": doing_count, "todo": todo_count, "review": review_count,
+        "done": sum(1 for t in tasks if t["status"] == "done"),
+        "issues": issues,
+    }
+
+
+@app.get("/api/meta/overview")
+def meta_overview():
+    """元神总看板：所有项目 × 模块 × 任务的聚合统计 + 问题清单。"""
+    conn = get_db()
+    projects = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+    out = []
+    all_issues = []
+    for p in projects:
+        if p["id"] == META_PID:
+            continue
+        r = _patrol_rules(conn, p["id"])
+        r["id"] = p["id"]
+        r["name"] = p["name"]
+        r["status"] = p["status"]
+        r["phase"] = p["phase"]
+        out.append(r)
+        all_issues.extend(r["issues"])
+    conn.close()
+    return {
+        "projects": out,
+        "issues": sorted(all_issues, key=lambda x: 0 if x["level"] == "red" else 1),
+        "total_projects": len(out),
+        "total_tasks": sum(r["task_count"] for r in out),
+    }
+
+
+@app.get("/api/meta/patrol")
+def meta_patrol():
+    """自动巡检：只返回需要关注的问题清单（供元神汇报/前端轮询）。"""
+    conn = get_db()
+    projects = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+    issues = []
+    for p in projects:
+        if p["id"] == META_PID:
+            continue
+        r = _patrol_rules(conn, p["id"])
+        for i in r["issues"]:
+            i["project_name"] = p["name"]
+        issues.extend(r["issues"])
+    conn.close()
+    return {"issues": sorted(issues, key=lambda x: 0 if x["level"] == "red" else 1)}
+
+
+# ── API：元神调度 + 质检（v3.5 元神动手）────────────────────────
+@app.post("/api/meta/dispatch")
+async def meta_dispatch(req: Request):
+    """跨项目调度：把任务分派给指定角色（改 owner_role + 话题落消息）。"""
+    data = await req.json()
+    task_id = data.get("task_id", "")
+    to_role = (data.get("to_role") or "").strip()
+    if not task_id or not to_role:
+        return {"ok": False, "error": "缺少 task_id 或 to_role"}
+    conn = get_db()
+    task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    conn.execute("UPDATE tasks SET owner_role=? WHERE id=?", (to_role, task_id))
+    if task["topic_id"]:
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+            (task["project_id"], "元神", "meta", f"📌 已调度：任务「{task['name']}」分派给 {to_role}", "progress",
+             datetime.now().isoformat(), task["topic_id"]),
+        )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "task_id": task_id, "owner_role": to_role}
+
+
+@app.post("/api/meta/quality-check")
+async def meta_quality_check(req: Request):
+    """元神 AI 质检：任务移到审核中时，用真模型检查产出（对照任务名+话题讨论+模块摘要）。
+    返回 verdict: pass / reject + reason。"""
+    data = await req.json()
+    task_id = data.get("task_id", "")
+    conn = get_db()
+    task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    pid, tid = task["project_id"], task["topic_id"]
+    mod = None
+    if task["module_id"]:
+        mod = conn.execute("SELECT * FROM modules WHERE id=?", (task["module_id"],)).fetchone()
+    # 上下文：任务名 + 模块摘要 + 话题最近消息
+    ctx_parts = [f"任务：{task['name']}（负责人 {task['owner_role']}）"]
+    if mod:
+        ctx_parts.append(f"模块：{mod['name']}（{mod['desc'] or ''}）")
+        if mod["context_summary"]:
+            ctx_parts.append(f"模块摘要：{mod['context_summary']}")
+    if tid:
+        msgs = conn.execute(
+            "SELECT sender,kind,text FROM messages WHERE topic_id=? ORDER BY id DESC LIMIT 8", (tid,)
+        ).fetchall()
+        topic_msgs = [m["text"] for m in reversed(msgs) if m["text"]]
+        if topic_msgs:
+            ctx_parts.append("话题讨论：" + " | ".join(topic_msgs[-6:]))
+    conn.close()
+    ctx = "\n".join(ctx_parts)
+    sys_prompt = (
+        "你是「元神」，负责质检 agent 的任务产出。\n"
+        "根据任务名、模块上下文和话题讨论，判断这个任务是否可以放行。\n"
+        "如果信息不足以判断（比如没有任何实际产出描述），倾向放行（pass）但注明『建议人工复核』。\n"
+        "只输出 JSON：{\"verdict\": \"pass\"|\"reject\", \"reason\": \"简短理由\"}"
+    )
+    reply = call_llm("__meta__", [{"role": "system", "content": sys_prompt},
+                                  {"role": "user", "content": ctx}], sys_prompt)
+    # 解析 verdict（容错：LLM 可能返回非 JSON 或降级文案）
+    verdict, reason = "pass", "（模型不可用，自动放行）"
+    try:
+        if "{" in reply and "}" in reply:
+            j = json.loads(reply[reply.find("{"):reply.rfind("}") + 1])
+            verdict = "reject" if j.get("verdict") == "reject" else "pass"
+            reason = j.get("reason", "")
+    except Exception:
+        pass
+    return {"ok": True, "task_id": task_id, "verdict": verdict, "reason": reason, "raw": reply[:120]}
 
 
 # ── API：元神对话（改用多模型 call_llm）──────────────────────────

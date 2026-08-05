@@ -70,6 +70,7 @@
   .chat-head .t { font-size:14px; font-weight:500; }
   .chat-head .sub { font-size:11px; color:var(--green); }
   .chat-body { flex:1; overflow-y:auto; padding:16px 20px; display:flex; flex-direction:column; gap:8px; }
+  .meta-board { flex:1; overflow-y:auto; }
   .msg { display:flex; }
   .msg.left { justify-content:flex-start; } .msg.right { justify-content:flex-end; }
   .bubble { max-width:74%; padding:8px 12px; border-radius:var(--r-lg); font-size:13px; line-height:1.5; }
@@ -237,10 +238,14 @@
         <div class="chat">
           <div class="chat-head">
             <div><div class="t">元神 · 我的个人分身</div><div class="sub">完全代表你的利益与风格</div></div>
-            <button class="btn sm meta" onclick="showMetaInfo()">这是谁</button>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button class="btn sm meta" id="metaViewToggle" onclick="toggleMetaView()">总看板</button>
+              <button class="btn sm meta" onclick="showMetaInfo()">这是谁</button>
+            </div>
           </div>
           <div class="chat-body" id="metaChat"></div>
-          <div class="chat-input">
+          <div class="meta-board hidden" id="metaBoard"></div>
+          <div class="chat-input" id="metaInputBar">
             <input id="metaInput" placeholder="和元神说点什么…（回车发送）" onkeydown="if(event.key==='Enter')sendMeta()">
             <button class="send" onclick="sendMeta()">↑</button>
           </div>
@@ -669,8 +674,39 @@ async function sendMsg(){ const v=document.getElementById('msgInput').value.trim
   await postMsg(curRoom,'你','self',v); await loadChat(curRoom);
   setTimeout(async()=>{ await postMsg(curRoom,'分身 · 前端','agent','收到，已记录并安排处理。','progress'); await loadChat(curRoom); }, 700); }
 async function metaStop(){ if(!curRoom)return; await postMsg(curRoom,'system','sys','元神已强制中止当前 agent 并锁定产出'); await fetch('/api/projects/'+curRoom,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'amber'})}); await loadChat(curRoom); await loadRooms(); }
-async function metaCheck(){ if(!curRoom)return; await postMsg(curRoom,'分身 · 元神','meta','已检查该 agent 产出，发现 1 处越权调用，已要求修正。'); await loadChat(curRoom); }
-async function metaReassign(){ if(!curRoom)return; await postMsg(curRoom,'分身 · 元神','meta','已重派任务给后端 agent，预计 10 分钟回报。'); await loadChat(curRoom); }
+async function metaCheck(){
+  // v3.5：元神 AI 质检（真模型检查项目最近的进行中/审核任务）
+  if(!curRoom)return;
+  let tasks=[]; try{ const r=await fetch('/api/projects/'+curRoom+'/tasks'); tasks=await r.json(); }catch(e){}
+  const cand=tasks.find(t=>t.status==='review')||tasks.find(t=>t.status==='doing')||tasks[0];
+  if(!cand){ await postMsg(curRoom,'分身 · 元神','meta','目前没有可质检的任务，先去看板建一个吧。'); await loadChat(curRoom); return; }
+  await postMsg(curRoom,'分身 · 元神','meta',`正在质检任务「${cand.name}」…`);
+  await loadChat(curRoom);
+  try{
+    const r=await fetch('/api/meta/quality-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_id:cand.id})});
+    const j=await r.json();
+    const v=j.verdict==='reject'?'❌ 不通过':'✅ 通过';
+    await postMsg(curRoom,'分身 · 元神','meta',`质检「${cand.name}」：${v}\n理由：${j.reason||''}`);
+    if(j.verdict==='reject'){ await fetch(`/api/tasks/${cand.id}/move`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:'doing'})}); }
+  }catch(e){ await postMsg(curRoom,'分身 · 元神','meta','质检失败：'+e); }
+  await loadChat(curRoom);
+}
+async function metaReassign(){
+  // v3.5：元神调度（改任务 owner_role）
+  if(!curRoom)return;
+  let tasks=[]; try{ const r=await fetch('/api/projects/'+curRoom+'/tasks'); tasks=await r.json(); }catch(e){}
+  const cand=tasks.find(t=>t.status==='doing')||tasks[0];
+  if(!cand){ await postMsg(curRoom,'分身 · 元神','meta','目前没有可重派的任务。'); await loadChat(curRoom); return; }
+  const role=prompt(`重派任务「${cand.name}」给哪个角色？（后端/前端/产品/测试）`,'后端');
+  if(!role) return;
+  try{
+    const r=await fetch('/api/meta/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_id:cand.id,to_role:role})});
+    const j=await r.json();
+    if(j.ok) await postMsg(curRoom,'分身 · 元神','meta',`已调度：任务「${cand.name}」分派给 ${role}。`);
+    else await postMsg(curRoom,'分身 · 元神','meta','调度失败：'+j.error);
+  }catch(e){ await postMsg(curRoom,'分身 · 元神','meta','调度失败：'+e); }
+  await loadChat(curRoom);
+}
 
 /* ── 渲染：角色库 / 资源库 ── */
 async function renderRoles(){ const g=document.getElementById('roleGrid'); g.innerHTML='加载中…';
@@ -714,6 +750,65 @@ function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.val
   (async()=>{ await fetch('/api/meta/files',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name})});
     await postMsg(META_PID,'分身 · 元神','meta',`已接收资料「${f.name}」，正在学习你的风格与偏好…`); await loadMeta(); })(); }
 function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元神 = 你的个人人格分身：代表你的利益与风格，拥有最高管理权限，但不替代你做最终决策。'); await loadMeta(); })(); }
+
+/* ── 元神总看板（v3.5 元神睁眼） ── */
+let metaBoardVisible=false;
+function toggleMetaView(){
+  metaBoardVisible=!metaBoardVisible;
+  const b=document.getElementById('metaBoard');
+  const chat=document.getElementById('metaChat');
+  const bar=document.getElementById('metaInputBar');
+  document.getElementById('metaViewToggle').textContent=metaBoardVisible?'← 回对话':'总看板';
+  if(metaBoardVisible){
+    b.classList.remove('hidden'); chat.classList.add('hidden'); bar.classList.add('hidden');
+    loadMetaBoard();
+  } else {
+    b.classList.add('hidden'); chat.classList.remove('hidden'); bar.classList.remove('hidden');
+  }
+}
+async function loadMetaBoard(){
+  const el=document.getElementById('metaBoard');
+  el.innerHTML='加载中…';
+  let d={projects:[],issues:[]};
+  try{ const r=await fetch('/api/meta/overview'); d=await r.json(); }catch(e){ console.error(e); }
+  let html=`<div style="padding:14px 16px;font-size:13px;color:var(--gray-600)">👁 元神总看板 · 所有项目（${d.total_projects} 个 · 共 ${d.total_tasks} 个任务）</div>`;
+  // 问题清单（置顶）
+  if(d.issues.length){
+    html+=`<div style="padding:0 16px 10px"><div style="font-size:11px;color:var(--gray-400);margin-bottom:6px">⚠️ 需要关注</div>`;
+    d.issues.forEach(i=>{
+      const color=i.level==='red'?'var(--red)':'var(--amber)';
+      html+=`<div style="display:flex;gap:8px;align-items:center;padding:7px 10px;border:.5px solid var(--gray-200);border-radius:8px;margin-bottom:6px;background:var(--gray-50)">
+        <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>
+        <div style="flex:1;font-size:12px"><b>${i.project_name||i.project}</b> · ${i.type}<div style="color:var(--gray-400);font-size:11px">${i.detail}</div></div>
+      </div>`;
+    });
+    html+='</div>';
+  } else {
+    html+=`<div style="padding:0 16px 10px;font-size:12px;color:var(--green)">✅ 全部项目正常，无阻塞/滞留</div>`;
+  }
+  // 项目卡片
+  html+='<div style="padding:0 16px 10px;display:flex;flex-direction:column;gap:8px">';
+  d.projects.forEach(p=>{
+    const total=p.task_count||0;
+    const done=p.done||0;
+    const pct=total?Math.round(done/total*100):0;
+    const dot=p.issues&&p.issues.some(i=>i.level==='red')?'var(--red)':(p.issues&&p.issues.length?'var(--amber)':'var(--green)');
+    html+=`<div style="border:.5px solid var(--gray-200);border-radius:10px;padding:10px 12px;cursor:pointer;background:#fff" onclick="selectRoom('${p.id}');switchNav('chat')">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
+        <b style="font-size:12px;flex:1">${p.name}</b>
+        <span style="font-size:10px;color:var(--gray-400)">${p.module_count} 模块 · ${total} 任务 · 完成 ${done}</span>
+      </div>
+      <div style="height:4px;background:var(--gray-100);border-radius:2px;margin-top:7px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:var(--green);border-radius:2px"></div>
+      </div>
+      <div style="font-size:10px;color:var(--gray-400);margin-top:4px">${p.issues&&p.issues.length?p.issues.length+' 个问题':'状态正常'} · 点击进入项目</div>
+    </div>`;
+  });
+  html+='</div>';
+  el.innerHTML=html;
+}
+function switchNav(sec){ document.querySelectorAll('.navitem').forEach(n=>n.classList.remove('active')); document.querySelectorAll('.section').forEach(s=>s.classList.remove('active')); document.getElementById('sec-'+sec).classList.add('active'); }
 
 /* ── 成立项目向导 ── */
 let wStep=1; let modRows=[];
