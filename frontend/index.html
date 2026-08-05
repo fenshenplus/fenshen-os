@@ -806,9 +806,47 @@ async function loadMetaBoard(){
     </div>`;
   });
   html+='</div>';
+  // 自动巡检设置（用户自安排：开关 + 频率 + 级别）
+  html+='<div style="padding:0 16px 16px">'
+    +'<div style="border:.5px solid var(--gray-200);border-radius:10px;padding:10px 12px;background:var(--gray-50)">'
+    +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+    +'<b style="font-size:12px">自动巡检</b>'
+    +'<span style="font-size:10px;color:var(--gray-400)">按你设置的频率，元神自动盯所有看板，发现问题主动在私聊汇报</span>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    +'<label style="display:flex;align-items:center;gap:5px;font-size:12px"><input type="checkbox" id="patrolEnabled" onchange="savePatrol()"> 启用</label>'
+    +'<select id="patrolInterval" onchange="savePatrol()" style="padding:4px 6px;border:.5px solid var(--gray-200);border-radius:6px;font-size:11px;background:#fff">'
+    +'<option value="15">每 15 分钟</option><option value="30">每 30 分钟</option><option value="60">每 1 小时</option>'
+    +'<option value="240">每 4 小时</option><option value="1440">每天</option></select>'
+    +'<select id="patrolLevel" onchange="savePatrol()" style="padding:4px 6px;border:.5px solid var(--gray-200);border-radius:6px;font-size:11px;background:#fff">'
+    +'<option value="red">只报严重(阻塞)</option><option value="all">全部(含滞留提醒)</option></select>'
+    +'<span id="patrolStatus" style="font-size:10px;color:var(--gray-400)"></span>'
+    +'</div></div></div>';
   el.innerHTML=html;
+  // 回填已保存的巡检设置
+  loadPatrolSettings();
 }
-function switchNav(sec){ document.querySelectorAll('.navitem').forEach(n=>n.classList.remove('active')); document.querySelectorAll('.section').forEach(s=>s.classList.remove('active')); document.getElementById('sec-'+sec).classList.add('active'); }
+async function loadPatrolSettings(){
+  try{
+    const r=await fetch('/api/meta/settings'); const s=await r.json();
+    const en=document.getElementById('patrolEnabled'); if(en) en.checked=!!s.patrol_enabled;
+    const iv=document.getElementById('patrolInterval'); if(iv) iv.value=String(s.patrol_interval||60);
+    const lv=document.getElementById('patrolLevel'); if(lv) lv.value=s.patrol_level||'red';
+    const st=document.getElementById('patrolStatus');
+    if(st) st.textContent=s.patrol_enabled?`已启用 · 每 ${s.patrol_interval} 分钟`:'未启用（默认关闭，你可随时打开）';
+  }catch(e){}
+}
+async function savePatrol(){
+  const en=document.getElementById('patrolEnabled').checked;
+  const iv=parseInt(document.getElementById('patrolInterval').value);
+  const lv=document.getElementById('patrolLevel').value;
+  try{
+    const r=await fetch('/api/meta/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patrol_enabled:en,patrol_interval:iv,patrol_level:lv})});
+    const j=await r.json();
+    const st=document.getElementById('patrolStatus');
+    if(st) st.textContent=en?`✅ 已保存 · 每 ${iv} 分钟自动巡检`:'已关闭自动巡检';
+  }catch(e){ alert('保存失败：'+e); }
+}
 
 /* ── 成立项目向导 ── */
 let wStep=1; let modRows=[];

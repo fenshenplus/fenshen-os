@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.14.0")
+app = FastAPI(title="分身 v1 后端", version="0.15.0")
 
 
 def get_db():
@@ -76,6 +76,26 @@ def get_db():
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_setting(key: str, default: str = "") -> str:
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT value FROM meta_settings WHERE key=?", (key,)).fetchone()
+        conn.close()
+        return row["value"] if row else default
+    except Exception:
+        return default
+
+
+def set_setting(key: str, value: str):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO meta_settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=?",
+        (key, value, value),
+    )
+    conn.commit()
+    conn.close()
 
 
 def init_db():
@@ -203,6 +223,10 @@ def init_db():
             status TEXT DEFAULT 'todo',
             created_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS meta_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT DEFAULT ''
+        );
         """
     )
     # ── 兼容迁移：projects 增加 phase / frozen 列（老库升级）──
@@ -275,6 +299,12 @@ def init_db():
 
 
 init_db()
+
+
+# 后台任务：自动巡检（按用户设置，见 /api/meta/settings）
+@app.on_event("startup")
+async def _start_patrol():
+    asyncio.create_task(_patrol_loop())
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -591,7 +621,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.14.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.15.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -2123,6 +2153,77 @@ async def meta_quality_check(req: Request):
     except Exception:
         pass
     return {"ok": True, "task_id": task_id, "verdict": verdict, "reason": reason, "raw": reply[:120]}
+
+
+# ── API：元神设置 + 自动巡检（v3.5 用户自安排巡检）────────────────
+@app.get("/api/meta/settings")
+def meta_settings_get():
+    """读取元神设置（自动巡检开关/频率等）。"""
+    return {
+        "patrol_enabled": get_setting("patrol_enabled", "0") == "1",
+        "patrol_interval": int(get_setting("patrol_interval", "60")),  # 分钟
+        "patrol_level": get_setting("patrol_level", "red"),  # red / all
+    }
+
+
+@app.post("/api/meta/settings")
+async def meta_settings_set(req: Request):
+    data = await req.json()
+    if "patrol_enabled" in data:
+        set_setting("patrol_enabled", "1" if data["patrol_enabled"] else "0")
+    if "patrol_interval" in data:
+        iv = int(data["patrol_interval"])
+        if iv <= 0:
+            return {"ok": False, "error": "巡检间隔必须大于 0 分钟"}
+        set_setting("patrol_interval", str(iv))
+    if "patrol_level" in data:
+        lv = data["patrol_level"]
+        if lv not in ("red", "all"):
+            return {"ok": False, "error": "巡检级别必须是 red 或 all"}
+        set_setting("patrol_level", lv)
+    return {"ok": True, "settings": meta_settings_get()}
+
+
+async def _patrol_loop():
+    """后台自动巡检循环：按用户设置的间隔（默认 60 分钟）巡检所有看板，
+    发现符合级别的问题 → 在元神私聊窗口落一条汇报消息（不打断用户，用户自会看到）。"""
+    while True:
+        try:
+            await asyncio.sleep(60)  # 每 60 秒检查一次（省资源）
+            if get_setting("patrol_enabled", "0") != "1":
+                continue
+            # 距上次巡检时间检查
+            import time
+            last = float(get_setting("patrol_last_ts", "0") or 0)
+            interval_min = int(get_setting("patrol_interval", "60"))
+            if time.time() - last < interval_min * 60:
+                continue
+            set_setting("patrol_last_ts", str(time.time()))
+            # 执行巡检
+            conn = get_db()
+            projects = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+            issues = []
+            for p in projects:
+                if p["id"] == META_PID:
+                    continue
+                r = _patrol_rules(conn, p["id"])
+                for i in r["issues"]:
+                    i["project_name"] = p["name"]
+                issues.extend(r["issues"])
+            level = get_setting("patrol_level", "red")
+            filtered = [i for i in issues if level == "all" or i["level"] == "red"]
+            if filtered:
+                lines = "\n".join(f"· {i['project_name']}｜{i['detail']}" for i in filtered[:8])
+                more = f"\n…共 {len(filtered)} 项" if len(filtered) > 8 else ""
+                conn.execute(
+                    "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                    (META_PID, "分身 · 元神", "meta", f"🔔 自动巡检发现 {len(filtered)} 个问题：\n{lines}{more}", "progress",
+                     datetime.now().isoformat()),
+                )
+                conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 # ── API：元神对话（改用多模型 call_llm）──────────────────────────
