@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.10.0")
+app = FastAPI(title="分身 v1 后端", version="0.11.0")
 
 
 def get_db():
@@ -591,7 +591,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.10.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.11.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -1384,6 +1384,86 @@ def list_topic_messages(tid: str):
     rows = conn.execute("SELECT * FROM messages WHERE topic_id=? ORDER BY id", (tid,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+@app.post("/api/topics/{tid}/chat")
+async def topic_chat(tid: str, req: Request):
+    """话题对话（Phase C：上下文按模块隔离——只注入该模块的上下文窗口，token 针对性投入）。"""
+    data = await req.json()
+    user_text = (data.get("text") or "").strip()
+    if not user_text:
+        return {"ok": False, "error": "消息不能为空"}
+    conn = get_db()
+    topic = conn.execute("SELECT * FROM topics WHERE id=?", (tid,)).fetchone()
+    if not topic:
+        conn.close()
+        return {"ok": False, "error": "话题不存在"}
+    pid = topic["project_id"]
+    # 落库用户消息（带 topic_id，与项目群聊隔离）
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+        (pid, "你", "self", user_text, None, datetime.now().isoformat(), tid),
+    )
+    conn.commit()
+    # ── 构造模块级上下文（Phase C 核心：只注入该模块相关）──
+    mod = None
+    if topic["module_id"]:
+        mod = conn.execute("SELECT * FROM modules WHERE id=?", (topic["module_id"],)).fetchone()
+    # 模块信息 + 依赖模块名
+    mod_desc = ""
+    if mod:
+        deps = json.loads(mod["depends_on"] or "[]")
+        dep_names = []
+        for d in deps:
+            dm = conn.execute("SELECT name FROM modules WHERE id=?", (d,)).fetchone()
+            if dm:
+                dep_names.append(dm["name"])
+        mod_desc = (f"当前工作模块：{mod['name']}。\n模块说明：{mod['desc'] or '（未填写）'}。\n"
+                    f"依赖模块：{'、'.join(dep_names) if dep_names else '无'}。\n"
+                    f"模块上下文摘要：{mod['context_summary'] or '（暂无）'}")
+    # 该模块相关任务（看板卡片，帮助 agent 理解模块进度）
+    mod_tasks = []
+    if mod:
+        rows = conn.execute(
+            "SELECT name,status,owner_role FROM tasks WHERE project_id=? AND module_id=? ORDER BY created_at",
+            (pid, mod["id"]),
+        ).fetchall()
+        mod_tasks = [dict(r) for r in rows]
+    task_desc = ""
+    if mod_tasks:
+        task_desc = "模块相关任务：\n" + "\n".join(
+            f"- {t['name']}（{t['status']} · {t['owner_role']}）" for t in mod_tasks
+        )
+    # 话题内最近消息（只取该话题的，不污染其它模块/群聊）
+    rows = conn.execute(
+        "SELECT sender,kind,text FROM messages WHERE topic_id=? ORDER BY id DESC LIMIT 12", (tid,)
+    ).fetchall()
+    conn.close()
+    # 组装 openai 格式上下文
+    sys_prompt = (
+        "你是分身里的项目协作 agent，在「话题对话组」里与用户讨论该模块的问题。\n"
+        "回答要简短、直接、可执行，中文。\n"
+        f"{mod_desc}\n{task_desc}"
+    )
+    hist = [{"role": "system", "content": sys_prompt}]
+    for r in reversed(rows):
+        if r["kind"] == "sys":
+            continue
+        role = "assistant" if r["kind"] != "self" else "user"
+        hist.append({"role": role, "content": r["text"]})
+    # 角色：话题绑定模块 → 用模块负责人角色调用（走其模型配置）
+    ROLE_ID_MAP = {"后端": "backend", "前端": "frontend", "产品": "architect", "测试": "tester"}
+    agent_id = ROLE_ID_MAP.get(mod["owner_role"]) if mod else "architect"
+    reply = call_llm(agent_id, hist, sys_prompt)
+    # 落库 agent 回复（带 topic_id）
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+        (pid, f"分身 · {mod['name'] if mod else '团队'}", "agent", reply, "progress", datetime.now().isoformat(), tid),
+    )
+    conn.commit()
+    conn.close()
+    return {"reply": reply, "ok": True}
 
 
 # ── API：任务（v3 Phase B 看板卡片，话题提炼而来）───────────────

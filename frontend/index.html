@@ -1129,8 +1129,12 @@ async function sendTopicMsg(){
   const inp=document.getElementById('topicInput');
   const text=inp.value.trim();
   if(!text||!curTopicId) return;
-  await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:curRoom,sender:'你',kind:'self',text,topic_id:curTopicId})});
   inp.value='';
+  // Phase C：话题对话走模块级上下文（只注入该模块的信息+任务+话题消息，token 针对性投入）
+  try{
+    const r=await fetch('/api/topics/'+curTopicId+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+    const j=await r.json(); if(!j.ok && j.error) alert('⚠️ '+j.error);
+  }catch(e){ console.error(e); }
   await loadTopicMsgs();
 }
 function distillDlg(){
