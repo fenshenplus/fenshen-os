@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.9.0")
+app = FastAPI(title="分身 v1 后端", version="0.10.0")
 
 
 def get_db():
@@ -184,6 +184,25 @@ def init_db():
             sort INTEGER DEFAULT 0,
             created_at TEXT, updated_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS topics (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            module_id TEXT DEFAULT '',
+            name TEXT NOT NULL,
+            agents TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'open',
+            created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            module_id TEXT DEFAULT '',
+            topic_id TEXT DEFAULT '',
+            name TEXT NOT NULL,
+            owner_role TEXT DEFAULT '后端',
+            status TEXT DEFAULT 'todo',
+            created_at TEXT
+        );
         """
     )
     # ── 兼容迁移：projects 增加 phase / frozen 列（老库升级）──
@@ -192,6 +211,10 @@ def init_db():
         cur.execute("ALTER TABLE projects ADD COLUMN phase TEXT DEFAULT 'requirement'")
     if "frozen" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN frozen INTEGER DEFAULT 0")
+    # ── 兼容迁移：messages 增加 topic_id 列（话题消息，空 = 项目群聊）──
+    mcols = {r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()}
+    if "topic_id" not in mcols:
+        cur.execute("ALTER TABLE messages ADD COLUMN topic_id TEXT DEFAULT ''")
     # 角色种子数据
     cur.execute("SELECT COUNT(*) FROM roles")
     if cur.fetchone()[0] == 0:
@@ -568,7 +591,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.9.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.10.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -669,9 +692,13 @@ async def toggle_resource(rid: str):
 
 
 @app.get("/api/messages/{pid}")
-def list_messages(pid: str):
+def list_messages(pid: str, topic_id: str = ""):
+    """列出项目消息。topic_id 非空时只列该话题的消息（话题对话组）。"""
     conn = get_db()
-    rows = conn.execute("SELECT * FROM messages WHERE project_id=? ORDER BY id", (pid,)).fetchall()
+    if topic_id:
+        rows = conn.execute("SELECT * FROM messages WHERE project_id=? AND topic_id=? ORDER BY id", (pid, topic_id)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM messages WHERE project_id=? AND (topic_id IS NULL OR topic_id='') ORDER BY id", (pid,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -682,8 +709,9 @@ async def add_message(req: Request):
     pid = data.get("project_id", META_PID)
     conn = get_db()
     conn.execute(
-        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-        (pid, data.get("sender", "你"), data.get("kind", "self"), data.get("text", ""), data.get("tag"), datetime.now().isoformat()),
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+        (pid, data.get("sender", "你"), data.get("kind", "self"), data.get("text", ""), data.get("tag"),
+         datetime.now().isoformat(), data.get("topic_id", "")),
     )
     conn.commit()
     conn.close()
@@ -1284,6 +1312,144 @@ def delete_module(pid: str, mid: str):
         conn.close()
         return {"ok": False, "error": f"模块被 {', '.join(r['name'] for r in ref_by)} 依赖，无法删除"}
     conn.execute("DELETE FROM modules WHERE id=?", (mid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
+@app.get("/api/projects/{pid}/topics")
+def list_topics(pid: str):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM topics WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["agents"] = json.loads(d.get("agents") or "[]")
+        out.append(d)
+    conn.close()
+    return out
+
+
+@app.post("/api/projects/{pid}/topics")
+async def create_topic(pid: str, req: Request):
+    data = await req.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "话题名不能为空"}
+    conn = get_db()
+    proj = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    tid = f"tp{int(datetime.now().timestamp() * 1000)}"
+    conn.execute(
+        "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) VALUES (?,?,?,?,?,?,?)",
+        (tid, pid, data.get("module_id", ""), name, json.dumps(data.get("agents") or [], ensure_ascii=False),
+         data.get("status", "open"), datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": tid}
+
+
+@app.patch("/api/topics/{tid}")
+async def update_topic(tid: str, req: Request):
+    data = await req.json()
+    conn = get_db()
+    row = conn.execute("SELECT * FROM topics WHERE id=?", (tid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "话题不存在"}
+    fields, vals = [], []
+    for k in ("name", "module_id", "status"):
+        if k in data:
+            fields.append(f"{k}=?")
+            vals.append(data[k])
+    if "agents" in data:
+        fields.append("agents=?")
+        vals.append(json.dumps(data["agents"] or [], ensure_ascii=False))
+    if fields:
+        vals.append(tid)
+        conn.execute(f"UPDATE topics SET {', '.join(fields)} WHERE id=?", vals)
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/topics/{tid}/messages")
+def list_topic_messages(tid: str):
+    """话题对话组消息（三层模型：话题 = 绑定模块的讨论组）。"""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM messages WHERE topic_id=? ORDER BY id", (tid,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ── API：任务（v3 Phase B 看板卡片，话题提炼而来）───────────────
+@app.get("/api/projects/{pid}/tasks")
+def list_tasks(pid: str):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/topics/{tid}/tasks")
+async def distill_task(tid: str, req: Request):
+    """话题 → 任务（R2：任务必有来源；提炼后自动进看板待办）。"""
+    data = await req.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "任务名不能为空"}
+    conn = get_db()
+    topic = conn.execute("SELECT * FROM topics WHERE id=?", (tid,)).fetchone()
+    if not topic:
+        conn.close()
+        return {"ok": False, "error": "话题不存在"}
+    tid2 = f"tk{int(datetime.now().timestamp() * 1000)}"
+    conn.execute(
+        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (tid2, topic["project_id"], topic["module_id"], tid, name,
+         data.get("owner_role", "后端"), "todo", datetime.now().isoformat()),
+    )
+    # 同步：话题内落一条系统消息
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+        (topic["project_id"], "系统", "sys", f"✅ 已提炼为任务「{name}」→ 进入看板待办列", "done",
+         datetime.now().isoformat(), tid),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "task_id": tid2}
+
+
+@app.post("/api/tasks/{task_id}/move")
+async def move_task(task_id: str, req: Request):
+    """任务看板列流转（不依赖模块依赖门禁，任务独立流转——R5）。"""
+    data = await req.json()
+    to = data.get("to")
+    if to not in MODULE_STATUS:
+        return {"ok": False, "error": f"目标状态非法：{to}"}
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    conn.execute("UPDATE tasks SET status=? WHERE id=?", (to, task_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "status": to}
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
     conn.commit()
     conn.close()
     return {"ok": True}
