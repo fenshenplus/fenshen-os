@@ -552,8 +552,8 @@
 
 <!-- 模块看板 -->
 <div class="mask" id="boardMask">
-  <div class="modal" style="width:860px;max-width:96vw">
-    <div class="mh">模块看板 <span style="font-size:11px;color:var(--gray-400);font-weight:400">横轴=功能模块 · 纵轴=阶段 · 点模块卡片移动状态</span>
+  <div class="modal" style="width:960px;max-width:96vw">
+    <div class="mh">模块看板 <span style="font-size:11px;color:var(--gray-400);font-weight:400">行=功能模块 · 列=阶段 · 卡片=任务（点模块名进话题对话组）</span>
       <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeBoard()">✕</span></div>
     <div class="mb">
       <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
@@ -562,11 +562,35 @@
           <option>后端</option><option>前端</option><option>产品</option>
         </select>
         <button class="btn sm meta" onclick="createMod()">+ 建模块</button>
+        <button class="btn sm" onclick="openTopicDlgNew()">+ 新建话题</button>
       </div>
-      <div id="boardGrid" style="display:flex;gap:8px;overflow-x:auto;min-height:260px"></div>
+      <div id="boardGrid" style="min-height:280px"></div>
       <div id="boardMsg" style="font-size:11px;color:var(--gray-400);margin-top:8px"></div>
     </div>
     <div class="mf"><button class="btn" onclick="closeBoard()">关闭</button></div>
+  </div>
+</div>
+
+<!-- 话题对话组 -->
+<div class="mask" id="topicMask">
+  <div class="modal" style="width:720px;max-width:94vw;display:flex;flex-direction:column;max-height:86vh">
+    <div class="mh"><span id="topicHead">话题对话组</span>
+      <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeTopic()">✕</span></div>
+    <div class="mb" style="display:flex;gap:12px;flex:1;min-height:0;overflow:hidden">
+      <div style="width:210px;flex-shrink:0;border-right:.5px solid var(--gray-200);overflow-y:auto;padding-right:10px">
+        <div style="font-size:11px;color:var(--gray-400);margin-bottom:6px">该模块的话题（讨论组）</div>
+        <div id="topicList"></div>
+        <button class="btn sm" style="width:100%;margin-top:8px" onclick="openTopicDlgNew()">+ 新建话题</button>
+      </div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+        <div id="topicMsgs" style="flex:1;overflow-y:auto;padding:6px 4px;min-height:260px;max-height:44vh"></div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input id="topicInput" placeholder="跟这个讨论组的 agent 说话…" style="flex:1;padding:8px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px" onkeydown="if(event.key==='Enter')sendTopicMsg()">
+          <button class="btn primary sm" onclick="sendTopicMsg()">发送</button>
+          <button class="btn sm meta" onclick="distillDlg()">提炼为任务</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -963,9 +987,12 @@ async function rollbackSnap(id){
   }catch(e){ alert('请求失败：'+e); }
 }
 
-/* ── 模块看板（v3 Phase A） ── */
+/* ── 模块看板（v3 Phase A + B） ── */
 const MOD_COLS=[['idea','想法池'],['todo','待办'],['doing','进行中'],['review','审核中'],['done','完成']];
 let curMods=[];
+let curTasks=[];
+let curTopics=[];
+let curTopicId='';
 async function openBoard(){
   if(!curRoom){ alert('先选择项目'); return; }
   document.getElementById('boardMask').classList.add('show');
@@ -973,36 +1000,49 @@ async function openBoard(){
 }
 function closeBoard(){ document.getElementById('boardMask').classList.remove('show'); }
 async function loadBoard(){
-  try{ const r=await fetch('/api/projects/'+curRoom+'/modules'); curMods=await r.json(); }catch(e){ console.error(e); curMods=[]; }
+  try{
+    const [r1,r2]=await Promise.all([
+      fetch('/api/projects/'+curRoom+'/modules'),
+      fetch('/api/projects/'+curRoom+'/tasks'),
+    ]);
+    curMods=await r1.json(); curTasks=await r2.json();
+  }catch(e){ console.error(e); curMods=[]; curTasks=[]; }
   renderBoard();
 }
 function renderBoard(){
   const g=document.getElementById('boardGrid');
   if(!curMods.length){ g.innerHTML='<div style="padding:40px;color:var(--gray-400);font-size:13px;width:100%;text-align:center">还没有模块 —— 用上方输入框添加第一个模块，或成立项目时解构</div>'; return; }
-  let html='';
+  const head=MOD_COLS.map(c=>`<div style="flex:1;min-width:120px;text-align:center;font-size:11px;color:var(--gray-400);padding:4px 0">${c[1]}</div>`).join('');
+  let rows='';
   curMods.forEach(m=>{
     const deps=m.depends_on&&m.depends_on.length?m.depends_on.map(d=>{const dm=curMods.find(x=>x.id===d);return dm?dm.name:d;}).join(', '):'无';
-    const stCls={idea:'var(--gray-300)',todo:'var(--gray-400)',doing:'var(--blue)',review:'var(--amber)',done:'var(--green)'}[m.status]||'var(--gray-300)';
-    html+=`<div style="min-width:200px;border:.5px solid var(--gray-200);border-radius:10px;padding:10px;background:var(--gray-50)">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-        <span style="width:8px;height:8px;border-radius:50%;background:${stCls}"></span>
-        <b style="font-size:12px">${m.name}</b>
-        <span style="margin-left:auto;font-size:10px;color:var(--gray-400)">${m.owner_role||''}</span>
+    const mTasks=curTasks.filter(t=>t.module_id===m.id);
+    const cells=MOD_COLS.map(c=>{
+      const tks=mTasks.filter(t=>t.status===c[0]);
+      const inner=tks.map(t=>`<div style="background:#fff;border:.5px solid var(--gray-200);border-radius:8px;padding:6px 8px;margin-bottom:5px;font-size:11px;cursor:pointer" onclick="openTopicByTask('${t.topic_id}','${t.name}')">
+        <div style="font-weight:500">${t.name}</div>
+        <div style="display:flex;align-items:center;gap:4px;margin-top:3px;color:var(--gray-400);font-size:10px">
+          <span>${t.owner_role||''}</span>
+          <select style="margin-left:auto;padding:1px 2px;border:.5px solid var(--gray-200);border-radius:4px;font-size:10px;background:#fff" onclick="event.stopPropagation()" onchange="moveTask('${t.id}',this.value)">
+            ${MOD_COLS.map(x=>`<option value="${x[0]}" ${x[0]===t.status?'selected':''}>${x[1]}</option>`).join('')}
+          </select>
+        </div>
+      </div>`).join('');
+      return `<div style="flex:1;min-width:120px;background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:5px;margin:0 3px">${inner||'<div style="font-size:10px;color:var(--gray-300);text-align:center;padding:8px 0">—</div>'}</div>`;
+    }).join('');
+    rows+=`<div style="display:flex;align-items:stretch;margin-bottom:10px">
+      <div style="width:150px;flex-shrink:0;border:.5px solid var(--gray-200);border-radius:8px;padding:6px 10px;margin-right:6px;background:var(--gray-100);cursor:pointer" onclick="openTopicDlg('${m.id}')">
+        <div style="font-size:12px;font-weight:500">${m.name}</div>
+        <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${m.owner_role||''} · 依赖 ${deps}</div>
+        <div style="font-size:10px;color:var(--meta);margin-top:4px">💬 进话题对话组 →</div>
       </div>
-      <div style="font-size:10px;color:var(--gray-400);margin-bottom:6px">${m.desc||''} · 依赖：${deps}</div>
-      <select style="width:100%;padding:4px 6px;border:0.5px solid var(--gray-200);border-radius:6px;font-size:11px;background:#fff" onchange="moveMod('${m.id}',this.value)">
-        ${MOD_COLS.map(c=>`<option value="${c[0]}" ${c[0]===m.status?'selected':''}>${c[1]}</option>`).join('')}
-      </select>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn sm" onclick="editModDeps('${m.id}')" style="flex:1">依赖</button>
-        <button class="btn sm" style="flex:1;color:var(--red)" onclick="delMod('${m.id}','${m.name}')">删</button>
-      </div>
+      ${cells}
     </div>`;
   });
-  g.innerHTML=html;
+  g.innerHTML=`<div style="display:flex;margin-bottom:8px;padding-left:156px">${head}</div>${rows}`;
   const msg=document.getElementById('boardMsg');
-  const done=curMods.filter(m=>m.status==='done').length;
-  msg.textContent=`共 ${curMods.length} 个模块 · 已完成 ${done} 个 · 依赖未完成的模块移到「进行中」会被拦截`;
+  const done=curTasks.filter(t=>t.status==='done').length;
+  msg.textContent=`共 ${curMods.length} 个模块 · ${curTasks.length} 个任务 · 已完成 ${done} 个 · 点模块名进话题对话组，讨论后「提炼为任务」自动进待办列`;
 }
 async function createMod(){
   const name=document.getElementById('newModName').value.trim();
@@ -1012,8 +1052,8 @@ async function createMod(){
     const j=await r.json(); if(j.ok){ document.getElementById('newModName').value=''; await loadBoard(); } else alert('❌ '+j.error);
   }catch(e){ alert('请求失败：'+e); }
 }
-async function moveMod(mid,to){
-  try{ const r=await fetch(`/api/projects/${curRoom}/modules/${mid}/move`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to})});
+async function moveTask(taskId,to){
+  try{ const r=await fetch(`/api/tasks/${taskId}/move`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to})});
     const j=await r.json(); if(j.ok){ await loadBoard(); } else alert('⚠️ '+j.error);
   }catch(e){ alert('请求失败：'+e); }
 }
@@ -1036,6 +1076,91 @@ async function editModDeps(mid){
   try{ const r=await fetch(`/api/projects/${curRoom}/modules/${mid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({depends_on:ids})});
     const j=await r.json(); if(j.ok){ await loadBoard(); } else alert('❌ '+j.error);
   }catch(e){ alert('请求失败：'+e); }
+}
+
+/* ── 话题对话组（v3 Phase B 三层模型） ── */
+let curTopicModuleId='';
+async function openTopicDlg(modId){
+  if(!curRoom) return;
+  curTopicModuleId=modId||'';
+  document.getElementById('topicMask').classList.add('show');
+  const mod=curMods.find(m=>m.id===curTopicModuleId);
+  document.getElementById('topicHead').textContent=mod?`💬 ${mod.name} · 话题对话组`:'💬 话题对话组';
+  await loadTopicList();
+  // 默认打开第一个话题
+  if(curTopics.length){
+    curTopicId=curTopics[0].id;
+    renderTopicList(); await loadTopicMsgs();
+  } else {
+    curTopicId=''; renderTopicList();
+    document.getElementById('topicMsgs').innerHTML='<div style="color:var(--gray-400);font-size:12px;padding:20px;text-align:center">这个模块还没有话题 —— 点「新建话题」开始讨论</div>';
+  }
+}
+function closeTopic(){ document.getElementById('topicMask').classList.remove('show'); }
+async function loadTopicList(){
+  try{ const r=await fetch('/api/projects/'+curRoom+'/topics'); curTopics=await r.json();
+    curTopics=curTopics.filter(t=>!curTopicModuleId || t.module_id===curTopicModuleId);
+  }catch(e){ curTopics=[]; }
+}
+function renderTopicList(){
+  const el=document.getElementById('topicList');
+  if(!curTopics.length){ el.innerHTML='<div style="font-size:11px;color:var(--gray-400)">暂无话题</div>'; return; }
+  el.innerHTML=curTopics.map(t=>`<div onclick="selectTopic('${t.id}')" style="padding:7px 9px;border-radius:8px;font-size:12px;cursor:pointer;margin-bottom:4px;background:${t.id===curTopicId?'var(--meta-50)':'var(--gray-50)'};border:.5px solid ${t.id===curTopicId?'#cfc9ef':'var(--gray-200)'}">${t.name}
+    <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${t.status==='open'?'进行中':'已归档'}</div></div>`).join('');
+}
+async function selectTopic(tid){
+  curTopicId=tid; renderTopicList(); await loadTopicMsgs();
+}
+async function loadTopicMsgs(){
+  const el=document.getElementById('topicMsgs');
+  if(!curTopicId){ el.innerHTML='<div style="color:var(--gray-400);font-size:12px;padding:20px;text-align:center">选择左侧话题查看讨论</div>'; return; }
+  let msgs=[];
+  try{ const r=await fetch('/api/topics/'+curTopicId+'/messages'); msgs=await r.json(); }catch(e){ console.error(e); }
+  if(!msgs.length){ el.innerHTML='<div style="color:var(--gray-400);font-size:12px;padding:20px;text-align:center">还没有消息，说点什么开始讨论</div>'; return; }
+  el.innerHTML=msgs.map(m=>m.kind==='sys'
+    ?`<div style="text-align:center;font-size:11px;color:var(--gray-400);background:var(--gray-50);border:.5px dashed var(--gray-300);border-radius:8px;padding:6px 10px;margin:6px 0">${m.text}</div>`
+    :`<div style="display:flex;gap:8px;margin:6px 0;${m.kind==='self'?'flex-direction:row-reverse':''}">
+      <div style="width:24px;height:24px;border-radius:50%;background:${m.kind==='self'?'#534ab7':'var(--gray-300)'};color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0">${(m.sender||'?')[0]}</div>
+      <div style="max-width:75%"><div style="background:${m.kind==='self'?'var(--meta-50)':'var(--gray-100)'};border:.5px solid var(--gray-200);border-radius:10px;padding:7px 10px;font-size:12px">${m.text}</div>
+      <div style="font-size:10px;color:var(--gray-400);margin-top:2px;${m.kind==='self'?'text-align:right':''}">${m.sender||''}</div></div></div>`).join('');
+  el.scrollTop=el.scrollHeight;
+}
+async function sendTopicMsg(){
+  const inp=document.getElementById('topicInput');
+  const text=inp.value.trim();
+  if(!text||!curTopicId) return;
+  await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:curRoom,sender:'你',kind:'self',text,topic_id:curTopicId})});
+  inp.value='';
+  await loadTopicMsgs();
+}
+function distillDlg(){
+  if(!curTopicId){ alert('先选择或创建话题'); return; }
+  const name=prompt('提炼为任务：给这个任务起个名字（会进入看板「待办」列）');
+  if(!name) return;
+  distillTask(name);
+}
+async function distillTask(name){
+  try{ const r=await fetch(`/api/topics/${curTopicId}/tasks`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,owner_role:'后端'})});
+    const j=await r.json(); if(j.ok){ await loadTopicMsgs(); await loadBoard(); alert('✅ 已提炼为任务 → 看板待办列'); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+async function openTopicDlgNew(){
+  const modId=curTopicModuleId||(curMods[0]?curMods[0].id:'');
+  if(!modId){ alert('先创建模块'); return; }
+  const name=prompt('新建话题（围绕一个关注点的讨论组）：');
+  if(!name) return;
+  try{ const r=await fetch('/api/projects/'+curRoom+'/topics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,module_id:modId,agents:['后端小明']})});
+    const j=await r.json(); if(j.ok){ curTopicId=j.id; await loadTopicList(); renderTopicList(); await loadTopicMsgs(); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+async function openTopicByTask(tid,taskName){
+  if(tid){ curTopicId=tid; curTopicModuleId='';
+    document.getElementById('topicMask').classList.add('show');
+    document.getElementById('topicHead').textContent='💬 任务「'+taskName+'」的来源话题';
+    await loadTopicList(); renderTopicList(); await loadTopicMsgs();
+  } else {
+    alert('该任务暂无来源话题（直接创建的任务）');
+  }
 }
 
 /* ── 清理中心 ── */
