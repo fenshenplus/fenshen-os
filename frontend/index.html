@@ -670,9 +670,18 @@ function selectRoom(id){ curRoom=id; renderRooms(); loadChat(id);
   if(window.innerWidth<=768){ document.getElementById('sec-chat').classList.add('chat-open'); } }
 function backToRooms(){ document.getElementById('sec-chat').classList.remove('chat-open'); }
 async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
-async function sendMsg(){ const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value='';
+async function sendMsg(){
+  const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value='';
+  // v0.17.0：项目群聊走真 AI（项目级上下文），替换 setTimeout 写死回复
   await postMsg(curRoom,'你','self',v); await loadChat(curRoom);
-  setTimeout(async()=>{ await postMsg(curRoom,'分身 · 前端','agent','收到，已记录并安排处理。','progress'); await loadChat(curRoom); }, 700); }
+  const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='团队思考中…';
+  try{
+    const r=await fetch('/api/projects/'+curRoom+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v})});
+    const j=await r.json(); if(!j.ok && j.error) alert('⚠️ '+j.error);
+  }catch(e){ console.error(e); }
+  await loadChat(curRoom);
+  if(inp) inp.placeholder='发消息给团队…（回车发送）';
+}
 async function metaStop(){ if(!curRoom)return; await postMsg(curRoom,'system','sys','元神已强制中止当前 agent 并锁定产出'); await fetch('/api/projects/'+curRoom,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'amber'})}); await loadChat(curRoom); await loadRooms(); }
 async function metaCheck(){
   // v3.5：元神 AI 质检（真模型检查项目最近的进行中/审核任务）
