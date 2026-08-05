@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.16.0")
+app = FastAPI(title="分身 v1 后端", version="0.17.0")
 
 
 def get_db():
@@ -621,7 +621,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.16.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.17.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -1348,6 +1348,70 @@ def delete_module(pid: str, mid: str):
 
 
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
+@app.post("/api/projects/{pid}/chat")
+async def project_chat(pid: str, req: Request):
+    """项目群聊对话（v0.17.0：消灭 sendMsg 模拟——项目级上下文真 AI 回复）。
+    上下文 = 项目目标 + 模块总览 + 相关任务 + 最近群聊消息。"""
+    data = await req.json()
+    user_text = (data.get("text") or "").strip()
+    if not user_text:
+        return {"ok": False, "error": "消息不能为空"}
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    # 落库用户消息（项目群聊：topic_id 为空）
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+        (pid, "你", "self", user_text, None, datetime.now().isoformat()),
+    )
+    conn.commit()
+    # ── 项目级上下文 ──
+    mods = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort", (pid,)).fetchall()
+    tasks = conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
+    mod_desc = ""
+    if mods:
+        mod_desc = "项目模块总览：\n" + "\n".join(
+            f"- {m['name']}（{m['status']} · 负责人 {m['owner_role']}）" for m in mods
+        )
+    task_desc = ""
+    if tasks:
+        doing = [t for t in tasks if t["status"] == "doing"]
+        todo = [t for t in tasks if t["status"] == "todo"]
+        task_desc = (f"项目任务：进行中 {len(doing)} 个（{('、'.join(t['name'] for t in doing[:3])) if doing else '无'}），"
+                     f"待办 {len(todo)} 个。")
+    # 最近群聊消息（项目级，不含话题消息）
+    rows = conn.execute(
+        "SELECT sender,kind,text FROM messages WHERE project_id=? AND (topic_id IS NULL OR topic_id='') "
+        "ORDER BY id DESC LIMIT 10", (pid,)
+    ).fetchall()
+    conn.close()
+    sys_prompt = (
+        "你是「分身」项目团队的总代表，在项目群聊里与用户对话。\n"
+        f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
+        f"{mod_desc}\n{task_desc}\n"
+        "回答要简短、直接、可执行，中文。若用户指令涉及具体模块/任务，说明你会安排对应角色处理。"
+    )
+    hist = [{"role": "system", "content": sys_prompt}]
+    for r in reversed(rows):
+        if r["kind"] == "sys":
+            continue
+        role = "assistant" if r["kind"] in ("agent", "meta") else "user"
+        hist.append({"role": role, "content": r["text"]})
+    # 用架构师角色（无独立 key 时 DeepSeek secret 兜底，v0.16.0）
+    reply = call_llm("architect", hist, sys_prompt)
+    # 落库 agent 回复（项目群聊）
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+        (pid, "分身 · 团队", "agent", reply, "progress", datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"reply": reply, "ok": True}
+
+
 @app.get("/api/projects/{pid}/topics")
 def list_topics(pid: str):
     conn = get_db()
