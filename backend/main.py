@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.8.0")
+app = FastAPI(title="分身 v1 后端", version="0.9.0")
 
 
 def get_db():
@@ -171,6 +171,18 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT, agent_id TEXT, provider TEXT, model TEXT,
             latency_ms INTEGER DEFAULT 0, status TEXT DEFAULT 'success'
+        );
+        CREATE TABLE IF NOT EXISTS modules (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            desc TEXT DEFAULT '',
+            depends_on TEXT DEFAULT '[]',
+            owner_role TEXT DEFAULT '后端',
+            status TEXT DEFAULT 'idea',
+            context_summary TEXT DEFAULT '',
+            sort INTEGER DEFAULT 0,
+            created_at TEXT, updated_at TEXT
         );
         """
     )
@@ -556,7 +568,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.8.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.9.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -577,9 +589,21 @@ async def create_project(req: Request):
         (pid, data.get("name", ""), data.get("goal", ""), "green", datetime.now().isoformat(),
          data.get("phase", "requirement")),
     )
+    # 解构引导：projects.modules 数组 → 批量创建模块（支持一次成立项目即拆模块）
+    mods = data.get("modules") or []
+    if isinstance(mods, list):
+        for i, m in enumerate(mods):
+            mid = f"{pid}-m{i + 1}"
+            conn.execute(
+                "INSERT OR IGNORE INTO modules (id,project_id,name,desc,depends_on,owner_role,status,sort,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (mid, pid, m.get("name", ""), m.get("desc", ""),
+                 json.dumps(m.get("depends_on") or [], ensure_ascii=False), m.get("owner_role", "后端"),
+                 m.get("status", "idea"), i, datetime.now().isoformat(), datetime.now().isoformat()),
+            )
     conn.commit()
     conn.close()
-    return {"id": pid, "ok": True}
+    return {"id": pid, "ok": True, "modules": len(mods)}
 
 
 @app.patch("/api/projects/{pid}")
@@ -1138,6 +1162,131 @@ async def rollback_snapshot(sid: int, req: Request):
     conn.commit()
     conn.close()
     return {"ok": True, "rolled_back": {"name": proj.get("name"), "phase": proj.get("phase")}}
+
+
+# ── API：模块看板（v3 Phase A 模块解构）────────────────────────
+MODULE_STATUS = ["idea", "todo", "doing", "review", "done"]
+
+
+def _mod_status_rank(status: str) -> int:
+    return MODULE_STATUS.index(status) if status in MODULE_STATUS else 0
+
+
+def _module_dict(row):
+    d = dict(row)
+    d["depends_on"] = json.loads(d.get("depends_on") or "[]")
+    return d
+
+
+@app.get("/api/projects/{pid}/modules")
+def list_modules(pid: str):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort, created_at", (pid,)).fetchall()
+    conn.close()
+    return [_module_dict(r) for r in rows]
+
+
+@app.post("/api/projects/{pid}/modules")
+async def create_module(pid: str, req: Request):
+    data = await req.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "模块名不能为空"}
+    conn = get_db()
+    proj = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    mid = f"{pid}-m{int(datetime.now().timestamp())}"
+    max_sort = conn.execute("SELECT COALESCE(MAX(sort),0) FROM modules WHERE project_id=?", (pid,)).fetchone()[0]
+    # 同秒多次创建避免 id 冲突：用 sort 序号兜底
+    if conn.execute("SELECT 1 FROM modules WHERE id=?", (mid,)).fetchone():
+        mid = f"{pid}-m{max_sort + 1}"
+    conn.execute(
+        "INSERT INTO modules (id,project_id,name,desc,depends_on,owner_role,status,sort,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (mid, pid, name, data.get("desc", ""), json.dumps(data.get("depends_on") or [], ensure_ascii=False),
+         data.get("owner_role", "后端"), data.get("status", "idea"), max_sort + 1,
+         datetime.now().isoformat(), datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": mid}
+
+
+@app.patch("/api/projects/{pid}/modules/{mid}")
+async def update_module(pid: str, mid: str, req: Request):
+    data = await req.json()
+    conn = get_db()
+    row = conn.execute("SELECT * FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "模块不存在"}
+    fields, vals = [], []
+    for k in ("name", "desc", "owner_role", "context_summary"):
+        if k in data:
+            fields.append(f"{k}=?")
+            vals.append(data[k])
+    if "depends_on" in data:
+        fields.append("depends_on=?")
+        vals.append(json.dumps(data["depends_on"] or [], ensure_ascii=False))
+    if "sort" in data:
+        fields.append("sort=?")
+        vals.append(int(data["sort"]))
+    if fields:
+        conn.execute(f"UPDATE modules SET {', '.join(fields)}, updated_at=? WHERE id=?",
+                     vals + [datetime.now().isoformat(), mid])
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/modules/{mid}/move")
+async def move_module(pid: str, mid: str, req: Request):
+    """看板列流转，带依赖检查：进入 doing 前，被依赖模块必须已完成。"""
+    data = await req.json()
+    to = data.get("to")
+    if to not in MODULE_STATUS:
+        return {"ok": False, "error": f"目标状态非法：{to}，允许 {MODULE_STATUS}"}
+    conn = get_db()
+    row = conn.execute("SELECT * FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "模块不存在"}
+    # 依赖检查：状态前进到 doing（含之后）时，依赖项必须 done
+    to_rank = _mod_status_rank(to)
+    deps = json.loads(row["depends_on"] or "[]")
+    if to_rank >= _mod_status_rank("doing") and deps:
+        ph = ",".join("?" * len(deps))
+        dep_rows = conn.execute(f"SELECT id,status FROM modules WHERE project_id=? AND id IN ({ph})", [pid] + deps).fetchall()
+        dep_map = {r["id"]: r["status"] for r in dep_rows}
+        blocked = [d for d in deps if dep_map.get(d) != "done"]
+        if blocked:
+            conn.close()
+            return {"ok": False, "error": f"依赖未完成：{', '.join(blocked)}。需先完成依赖模块才能进入「进行中」"}
+    conn.execute("UPDATE modules SET status=?, updated_at=? WHERE id=?", (to, datetime.now().isoformat(), mid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "status": to}
+
+
+@app.delete("/api/projects/{pid}/modules/{mid}")
+def delete_module(pid: str, mid: str):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "模块不存在"}
+    # 被依赖检查：其他模块 depends_on 含本模块则拒绝
+    refs = conn.execute("SELECT id,name,depends_on FROM modules WHERE project_id=?", (pid,)).fetchall()
+    ref_by = [r for r in refs if mid in (json.loads(r["depends_on"] or "[]"))]
+    if ref_by:
+        conn.close()
+        return {"ok": False, "error": f"模块被 {', '.join(r['name'] for r in ref_by)} 依赖，无法删除"}
+    conn.execute("DELETE FROM modules WHERE id=?", (mid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 
 # ── API：技能库（Phase 3 技能提炼机制）───────────────────────────

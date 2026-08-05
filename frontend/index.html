@@ -219,6 +219,7 @@
               <button class="btn sm" onclick="toggleFreeze()" id="freezeBtn">冻结</button>
               <button class="btn sm" onclick="openChangeOrder()">修改单</button>
               <button class="btn sm" onclick="openSnapshots()">快照</button>
+              <button class="btn sm meta" onclick="openBoard()">模块看板</button>
             </div>
             <button class="btn sm mobile-only" onclick="backToRooms()">← 列表</button>
             <button class="btn ghost sm" onclick="metaStop()">元神中止</button>
@@ -483,7 +484,12 @@
         <div class="rolepick" id="rolePick"></div>
       </div>
       <div id="wz3" style="display:none">
-        <p style="font-size:12px;color:var(--gray-400)">元神将按所选角色拉起团队并创建群聊房间。成立后可随时增删角色。</p>
+        <div class="field"><label>模块解构（推荐：成立项目先把功能拆成模块）</label>
+          <div style="font-size:11px;color:var(--gray-400);margin-bottom:6px">每个模块 = 一个能一句话说明白的功能块（如：登录、支付、题库）。后续看板按模块管理进度与对话。</div>
+          <div id="modEditor"></div>
+          <button class="btn sm" style="margin-top:6px" onclick="addModRow()">+ 添加模块</button>
+        </div>
+        <p style="font-size:12px;color:var(--gray-400);margin-top:8px">元神将按所选角色拉起团队，并按模块建立看板。成立后可随时增删模块。</p>
       </div>
     </div>
     <div class="mf">
@@ -541,6 +547,26 @@
       <div id="snapList" style="max-height:240px;overflow:auto"></div>
     </div>
     <div class="mf"><button class="btn" onclick="closeSnapshots()">关闭</button></div>
+  </div>
+</div>
+
+<!-- 模块看板 -->
+<div class="mask" id="boardMask">
+  <div class="modal" style="width:860px;max-width:96vw">
+    <div class="mh">模块看板 <span style="font-size:11px;color:var(--gray-400);font-weight:400">横轴=功能模块 · 纵轴=阶段 · 点模块卡片移动状态</span>
+      <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeBoard()">✕</span></div>
+    <div class="mb">
+      <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+        <input id="newModName" placeholder="新模块名，如：消息中心" style="flex:1;min-width:160px;padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px">
+        <select id="newModRole" style="padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff">
+          <option>后端</option><option>前端</option><option>产品</option>
+        </select>
+        <button class="btn sm meta" onclick="createMod()">+ 建模块</button>
+      </div>
+      <div id="boardGrid" style="display:flex;gap:8px;overflow-x:auto;min-height:260px"></div>
+      <div id="boardMsg" style="font-size:11px;color:var(--gray-400);margin-top:8px"></div>
+    </div>
+    <div class="mf"><button class="btn" onclick="closeBoard()">关闭</button></div>
   </div>
 </div>
 
@@ -666,19 +692,47 @@ function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.val
 function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元神 = 你的个人人格分身：代表你的利益与风格，拥有最高管理权限，但不替代你做最终决策。'); await loadMeta(); })(); }
 
 /* ── 成立项目向导 ── */
-let wStep=1;
+let wStep=1; let modRows=[];
+function defaultModRows(){
+  return [
+    {name:'登录/注册', owner:'后端'},
+    {name:'支付', owner:'后端'},
+    {name:'内容/题库列表', owner:'前端'},
+  ];
+}
 function openWizard(){ wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value='';
   document.getElementById('wz1').style.display=''; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display='none';
   document.getElementById('ws1').classList.add('on'); document.getElementById('ws2').classList.remove('on'); document.getElementById('ws3').classList.remove('on');
   document.getElementById('wNext').textContent='下一步'; document.getElementById('wizardMask').classList.add('show');
-  const rp=document.getElementById('rolePick'); rp.innerHTML=''; roles.forEach(r=>{ const s=document.createElement('div'); s.className='rp'; s.textContent=r.name; s.dataset.id=r.id; s.onclick=()=>s.classList.toggle('sel'); rp.appendChild(s); }); }
+  const rp=document.getElementById('rolePick'); rp.innerHTML=''; roles.forEach(r=>{ const s=document.createElement('div'); s.className='rp'; s.textContent=r.name; s.dataset.id=r.id; s.onclick=()=>s.classList.toggle('sel'); rp.appendChild(s); });
+  modRows=defaultModRows(); renderModRows(); }
 function closeWizard(){ document.getElementById('wizardMask').classList.remove('show'); }
+function renderModRows(){
+  const el=document.getElementById('modEditor'); el.innerHTML='';
+  modRows.forEach((m,i)=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;gap:6px;margin-bottom:6px;align-items:center';
+    row.innerHTML=`<input id="modName${i}" value="${m.name}" placeholder="模块名" style="flex:2;padding:6px 8px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;min-width:0">
+      <select id="modRole${i}" style="flex:1;padding:6px 6px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff">
+        <option ${m.owner==='后端'?'selected':''}>后端</option><option ${m.owner==='前端'?'selected':''}>前端</option><option ${m.owner==='产品'?'selected':''}>产品</option>
+      </select>
+      <button class="btn sm" style="color:var(--red)" onclick="delModRow(${i})">✕</button>`;
+    el.appendChild(row);
+  });
+}
+function addModRow(){ modRows.push({name:'',owner:'后端'}); renderModRows(); }
+function delModRow(i){ modRows.splice(i,1); renderModRows(); }
+function collectModRows(){
+  return modRows.map((m,i)=>({name:document.getElementById('modName'+i)?.value.trim()||m.name, owner_role:document.getElementById('modRole'+i)?.value||'后端'}))
+    .filter(m=>m.name);
+}
 async function wizardNext(){ if(wStep===1){ if(!document.getElementById('wName').value.trim()){alert('请填写项目名称');return;}
     wStep=2; document.getElementById('wz1').style.display='none'; document.getElementById('wz2').style.display=''; document.getElementById('ws2').classList.add('on'); document.getElementById('wNext').textContent='下一步'; }
-  else if(wStep===2){ wStep=3; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display=''; document.getElementById('ws3').classList.add('on'); document.getElementById('wNext').textContent='成立团队'; }
+  else if(wStep===2){ wStep=3; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display=''; document.getElementById('ws3').classList.add('on'); document.getElementById('wNext').textContent='成立团队'; renderModRows(); }
   else { const name=document.getElementById('wName').value.trim(); const goal=document.getElementById('wGoal').value.trim();
-    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal})});
-    await postMsg('NEW','分身 · 元神','meta',`项目「${name}」已成立，团队已拉起，开始工作。`);
+    const modules=collectModRows();
+    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal,modules})});
+    await postMsg('NEW','分身 · 元神','meta',`项目「${name}」已成立，团队已拉起，已按 ${modules.length} 个模块建立看板，开始工作。`);
     closeWizard(); await loadRooms();
     // 选中新建项目
     const created=rooms.find(r=>r.name===name); if(created){ curRoom=created.id; await loadChat(curRoom); }
@@ -906,6 +960,81 @@ async function rollbackSnap(id){
   if(!confirm('⚠️ 回滚会把项目信息恢复到快照时刻（名称/目标/阶段/冻结状态）。确认？')) return;
   try{ const r=await fetch('/api/snapshots/'+id+'/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
     const j=await r.json(); if(j.ok){ alert('✅ 已回滚到快照状态'); closeSnapshots(); await loadRooms(); await loadChat(curRoom); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+
+/* ── 模块看板（v3 Phase A） ── */
+const MOD_COLS=[['idea','想法池'],['todo','待办'],['doing','进行中'],['review','审核中'],['done','完成']];
+let curMods=[];
+async function openBoard(){
+  if(!curRoom){ alert('先选择项目'); return; }
+  document.getElementById('boardMask').classList.add('show');
+  await loadBoard();
+}
+function closeBoard(){ document.getElementById('boardMask').classList.remove('show'); }
+async function loadBoard(){
+  try{ const r=await fetch('/api/projects/'+curRoom+'/modules'); curMods=await r.json(); }catch(e){ console.error(e); curMods=[]; }
+  renderBoard();
+}
+function renderBoard(){
+  const g=document.getElementById('boardGrid');
+  if(!curMods.length){ g.innerHTML='<div style="padding:40px;color:var(--gray-400);font-size:13px;width:100%;text-align:center">还没有模块 —— 用上方输入框添加第一个模块，或成立项目时解构</div>'; return; }
+  let html='';
+  curMods.forEach(m=>{
+    const deps=m.depends_on&&m.depends_on.length?m.depends_on.map(d=>{const dm=curMods.find(x=>x.id===d);return dm?dm.name:d;}).join(', '):'无';
+    const stCls={idea:'var(--gray-300)',todo:'var(--gray-400)',doing:'var(--blue)',review:'var(--amber)',done:'var(--green)'}[m.status]||'var(--gray-300)';
+    html+=`<div style="min-width:200px;border:.5px solid var(--gray-200);border-radius:10px;padding:10px;background:var(--gray-50)">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        <span style="width:8px;height:8px;border-radius:50%;background:${stCls}"></span>
+        <b style="font-size:12px">${m.name}</b>
+        <span style="margin-left:auto;font-size:10px;color:var(--gray-400)">${m.owner_role||''}</span>
+      </div>
+      <div style="font-size:10px;color:var(--gray-400);margin-bottom:6px">${m.desc||''} · 依赖：${deps}</div>
+      <select style="width:100%;padding:4px 6px;border:0.5px solid var(--gray-200);border-radius:6px;font-size:11px;background:#fff" onchange="moveMod('${m.id}',this.value)">
+        ${MOD_COLS.map(c=>`<option value="${c[0]}" ${c[0]===m.status?'selected':''}>${c[1]}</option>`).join('')}
+      </select>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn sm" onclick="editModDeps('${m.id}')" style="flex:1">依赖</button>
+        <button class="btn sm" style="flex:1;color:var(--red)" onclick="delMod('${m.id}','${m.name}')">删</button>
+      </div>
+    </div>`;
+  });
+  g.innerHTML=html;
+  const msg=document.getElementById('boardMsg');
+  const done=curMods.filter(m=>m.status==='done').length;
+  msg.textContent=`共 ${curMods.length} 个模块 · 已完成 ${done} 个 · 依赖未完成的模块移到「进行中」会被拦截`;
+}
+async function createMod(){
+  const name=document.getElementById('newModName').value.trim();
+  if(!name){ alert('填写模块名'); return; }
+  const role=document.getElementById('newModRole').value;
+  try{ const r=await fetch('/api/projects/'+curRoom+'/modules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,owner_role:role})});
+    const j=await r.json(); if(j.ok){ document.getElementById('newModName').value=''; await loadBoard(); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+async function moveMod(mid,to){
+  try{ const r=await fetch(`/api/projects/${curRoom}/modules/${mid}/move`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to})});
+    const j=await r.json(); if(j.ok){ await loadBoard(); } else alert('⚠️ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+async function delMod(mid,name){
+  if(!confirm(`删除模块「${name}」？`)) return;
+  try{ const r=await fetch(`/api/projects/${curRoom}/modules/${mid}`,{method:'DELETE'});
+    const j=await r.json(); if(j.ok){ await loadBoard(); } else alert('❌ '+j.error);
+  }catch(e){ alert('请求失败：'+e); }
+}
+async function editModDeps(mid){
+  const m=curMods.find(x=>x.id===mid); if(!m) return;
+  const others=curMods.filter(x=>x.id!==mid);
+  if(!others.length){ alert('没有其它模块可选为依赖'); return; }
+  const cur=m.depends_on||[];
+  const lines=others.map(o=>`${o.id} = ${o.name}`).join('\n');
+  const curNames=cur.map(id=>{const d=others.find(x=>x.id===id);return d?`${d.id}(${d.name})`:id;}).join(', ')||'无';
+  const pick=prompt(`设置「${m.name}」的依赖模块（必须先完成的模块）\n\n可选模块：\n${lines}\n\n输入依赖模块 ID，多个用逗号分隔：\n当前依赖：${curNames}`);
+  if(pick===null) return;
+  const ids=(pick||'').split(/[,，\s]+/).filter(Boolean);
+  try{ const r=await fetch(`/api/projects/${curRoom}/modules/${mid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({depends_on:ids})});
+    const j=await r.json(); if(j.ok){ await loadBoard(); } else alert('❌ '+j.error);
   }catch(e){ alert('请求失败：'+e); }
 }
 
