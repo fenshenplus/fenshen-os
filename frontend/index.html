@@ -1054,7 +1054,11 @@ async function createMod(){
 }
 async function moveTask(taskId,to){
   try{ const r=await fetch(`/api/tasks/${taskId}/move`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to})});
-    const j=await r.json(); if(j.ok){ await loadBoard(); } else alert('⚠️ '+j.error);
+    const j=await r.json();
+    if(j.ok){
+      if(j.settled) alert('✅ 任务完成 → 已自动沉淀：经验入库 + 模块摘要更新');
+      await loadBoard();
+    } else alert('⚠️ '+j.error);
   }catch(e){ alert('请求失败：'+e); }
 }
 async function delMod(mid,name){
