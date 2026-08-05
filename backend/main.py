@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.11.0")
+app = FastAPI(title="分身 v1 后端", version="0.12.0")
 
 
 def get_db():
@@ -591,7 +591,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.11.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.12.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -1518,8 +1518,57 @@ async def move_task(task_id: str, req: Request):
         return {"ok": False, "error": "任务不存在"}
     conn.execute("UPDATE tasks SET status=? WHERE id=?", (to, task_id))
     conn.commit()
+    # Phase D：任务完成 → 自动沉淀（经验 + 技能草稿 + 模块摘要更新）
+    settled = False
+    if to == "done":
+        settled = _settle_task_done(conn, dict(row))
     conn.close()
-    return {"ok": True, "status": to}
+    return {"ok": True, "status": to, "settled": settled}
+
+
+def _settle_task_done(conn, task: dict) -> bool:
+    """任务完成闭环：经验入库 + 可复用技能草稿 + 模块 context_summary 摘要沉淀。
+    返回是否产生了沉淀。"""
+    try:
+        now = datetime.now().isoformat()
+        pid = task["project_id"]
+        # 1) 经验入库（success 案例，来源 task）
+        scenario = task["name"][:30].rstrip("，。,.")
+        exists = conn.execute(
+            "SELECT id FROM experiences WHERE scenario=?", (scenario,)
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                "INSERT INTO experiences (category,scenario,goal,attempts,outcome,lesson,project_id,source,ts) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("success", scenario, f"完成任务：{task['name']}", "", "任务完成", "任务已通过看板完成，流程可复用", pid, "task", now),
+            )
+        # 2) 模块 context_summary 更新（上下文释放前的摘要沉淀）
+        if task["module_id"]:
+            mod = conn.execute("SELECT * FROM modules WHERE id=?", (task["module_id"],)).fetchone()
+            if mod:
+                done_tasks = conn.execute(
+                    "SELECT name FROM tasks WHERE project_id=? AND module_id=? AND status='done' ORDER BY created_at",
+                    (pid, task["module_id"]),
+                ).fetchall()
+                done_names = "、".join(r["name"] for r in done_tasks[-5:])
+                summary = (f"已完成任务：{done_names or task['name']}。"
+                           f"模块「{mod['name']}」累计完成 {len(done_tasks)} 项。")
+                conn.execute(
+                    "UPDATE modules SET context_summary=?, updated_at=? WHERE id=?",
+                    (summary, now, task["module_id"]),
+                )
+        # 3) 话题内落系统消息（闭环可见）
+        if task["topic_id"]:
+            conn.execute(
+                "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+                (pid, "系统", "sys", f"✅ 任务「{task['name']}」已完成 → 已沉淀经验与模块摘要", "done", now, task["topic_id"]),
+            )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
 
 
 @app.delete("/api/tasks/{task_id}")
