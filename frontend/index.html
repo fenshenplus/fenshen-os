@@ -316,7 +316,7 @@
         </div>
       </div>
 
-      <!-- 浏览器工具（v0.20.0 元神可代你操作浏览器） -->
+      <!-- 浏览器工具（v0.21.0 元神可代你操作浏览器） -->
       <div class="section" id="sec-browser">
         <div class="grid-wrap">
           <div class="grid-head"><span class="t">浏览器工具 · 元神网页自动化</span><span class="rl" style="font-size:11px;color:var(--gray-400)">playwright + 系统 Chrome（headless），打开/截图/填表/点击/抓取</span></div>
@@ -518,7 +518,15 @@
         <div class="rolepick" id="rolePick"></div>
       </div>
       <div id="wz3" style="display:none">
-        <div class="field"><label>模块解构（推荐：成立项目先把功能拆成模块）</label>
+        <div class="field"><label>项目模板（一键套用常见结构，可再增删编辑）</label>
+          <div style="display:flex;gap:6px;align-items:center">
+            <select id="wTemplate" style="flex:1;padding:7px 8px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff"></select>
+            <button class="btn sm meta" onclick="applyTemplate()">套用</button>
+            <button class="btn sm ghost" onclick="saveCurAsTemplate()">存为模板</button>
+          </div>
+          <div id="wTemplateDesc" style="font-size:11px;color:var(--gray-400);margin-top:4px"></div>
+        </div>
+        <div class="field" style="margin-top:10px"><label>模块解构（推荐：成立项目先把功能拆成模块）</label>
           <div style="font-size:11px;color:var(--gray-400);margin-bottom:6px">每个模块 = 一个能一句话说明白的功能块（如：登录、支付、题库）。后续看板按模块管理进度与对话。</div>
           <div id="modEditor"></div>
           <button class="btn sm" style="margin-top:6px" onclick="addModRow()">+ 添加模块</button>
@@ -701,7 +709,7 @@ function backToRooms(){ document.getElementById('sec-chat').classList.remove('ch
 async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
 async function sendMsg(){
   const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value='';
-  // v0.20.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
+  // v0.21.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
   // 不再前端 postMsg（后端 project_chat 统一落库，避免消息重复）
   const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='元神分析中…';
   if(inp) inp.disabled=true;
@@ -889,7 +897,7 @@ async function savePatrol(){
 }
 
 /* ── 成立项目向导 ── */
-let wStep=1; let modRows=[];
+let wStep=1; let modRows=[]; let wTemplates=[];
 function defaultModRows(){
   return [
     {name:'登录/注册', owner:'后端'},
@@ -897,12 +905,37 @@ function defaultModRows(){
     {name:'内容/题库列表', owner:'前端'},
   ];
 }
+async function loadTemplates(){
+  try{ const r=await fetch('/api/templates'); const rows=await r.json(); wTemplates=rows;
+    const sel=document.getElementById('wTemplate'); sel.innerHTML='';
+    rows.forEach(t=>{ const o=document.createElement('option'); o.value=t.id; o.textContent=(t.is_builtin?'★ ':'')+t.name; sel.appendChild(o); });
+    showTemplateDesc();
+  }catch(e){ wTemplates=[]; }
+}
+function showTemplateDesc(){
+  const sel=document.getElementById('wTemplate'); const d=document.getElementById('wTemplateDesc');
+  const t=wTemplates.find(x=>String(x.id)===String(sel?.value));
+  d.textContent=t?`${t.desc}（${(t.modules||[]).length} 个模块）`:'';
+}
+function applyTemplate(){
+  const sel=document.getElementById('wTemplate'); const t=wTemplates.find(x=>String(x.id)===String(sel?.value));
+  if(!t) return;
+  modRows=(t.modules||[]).map(m=>({name:m.name, owner:(m.owner_role==='前端'?'前端':'后端')}));
+  renderModRows(); showTemplateDesc();
+}
+async function saveCurAsTemplate(){
+  const name=prompt('模板名称：'); if(!name) return;
+  const modules=collectModRows(); if(!modules.length){ alert('当前没有模块，无法存为模板'); return; }
+  try{ const r=await fetch('/api/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,modules})});
+    const j=await r.json(); if(j.ok){ await loadTemplates(); alert('✅ 已保存为模板，可随时套用'); } else alert('❌ '+j.error);
+  }catch(e){ alert('保存失败：'+e); }
+}
 function openWizard(){ wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value='';
   document.getElementById('wz1').style.display=''; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display='none';
   document.getElementById('ws1').classList.add('on'); document.getElementById('ws2').classList.remove('on'); document.getElementById('ws3').classList.remove('on');
   document.getElementById('wNext').textContent='下一步'; document.getElementById('wizardMask').classList.add('show');
   const rp=document.getElementById('rolePick'); rp.innerHTML=''; roles.forEach(r=>{ const s=document.createElement('div'); s.className='rp'; s.textContent=r.name; s.dataset.id=r.id; s.onclick=()=>s.classList.toggle('sel'); rp.appendChild(s); });
-  modRows=defaultModRows(); renderModRows(); }
+  modRows=defaultModRows(); renderModRows(); loadTemplates(); }
 function closeWizard(){ document.getElementById('wizardMask').classList.remove('show'); }
 function renderModRows(){
   const el=document.getElementById('modEditor'); el.innerHTML='';
@@ -925,7 +958,7 @@ function collectModRows(){
 }
 async function wizardNext(){ if(wStep===1){ if(!document.getElementById('wName').value.trim()){alert('请填写项目名称');return;}
     wStep=2; document.getElementById('wz1').style.display='none'; document.getElementById('wz2').style.display=''; document.getElementById('ws2').classList.add('on'); document.getElementById('wNext').textContent='下一步'; }
-  else if(wStep===2){ wStep=3; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display=''; document.getElementById('ws3').classList.add('on'); document.getElementById('wNext').textContent='成立团队'; renderModRows(); }
+  else if(wStep===2){ wStep=3; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display=''; document.getElementById('ws3').classList.add('on'); document.getElementById('wNext').textContent='成立团队'; renderModRows(); if(!wTemplates.length) loadTemplates(); }
   else { const name=document.getElementById('wName').value.trim(); const goal=document.getElementById('wGoal').value.trim();
     const modules=collectModRows();
     await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal,modules})});
@@ -1084,7 +1117,7 @@ async function loadTermLog(){
   }catch(e){ out.textContent='加载失败'; }
 }
 
-/* ── 浏览器工具（v0.20.0）── */
+/* ── 浏览器工具（v0.21.0）── */
 async function bwRun(action){
   const url=document.getElementById('bwUrl').value.trim();
   const sel=document.getElementById('bwSel').value.trim();

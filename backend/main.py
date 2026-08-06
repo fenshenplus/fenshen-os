@@ -49,7 +49,7 @@ META_SYSTEM = """你是「元神」，岳衡（ChooseWiki 选择学习法品牌�
 - 简洁、有主见，给可执行建议；不堆砌、不谄媚。
 - 涉及团队/进度时，以"组织 / 监督 / 兜底"的视角回应。
 
-【可用工具（v0.20.0）】
+【可用工具（v0.21.0）】
 - 你有两个工具可调用：exec_command（代岳衡在电脑上执行命令）与 browser_action（无头浏览器：打开网页/截图/抓取/填表/点击）。
 - 当岳衡要求执行命令、查看网页、截图、抓取网页信息时，**必须调用对应工具获取真实结果后再回答，不要凭空编造**。
 - 工具返回失败时如实说明，必要时给出替代建议。
@@ -73,7 +73,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.20.0")
+app = FastAPI(title="分身 v1 后端", version="0.21.0")
 
 
 def get_db():
@@ -200,6 +200,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT, agent_id TEXT, provider TEXT, model TEXT,
             latency_ms INTEGER DEFAULT 0, status TEXT DEFAULT 'success'
+        );
+        CREATE TABLE IF NOT EXISTS project_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            desc TEXT DEFAULT '',
+            modules TEXT NOT NULL,
+            is_builtin INTEGER DEFAULT 0,
+            ts TEXT
         );
         CREATE TABLE IF NOT EXISTS modules (
             id TEXT PRIMARY KEY,
@@ -630,7 +638,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.20.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.21.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -686,6 +694,82 @@ async def update_project(pid: str, req: Request):
         conn.execute("UPDATE projects SET goal=? WHERE id=?", (data["desc"], pid))
     if "goal" in data:
         conn.execute("UPDATE projects SET goal=? WHERE id=?", (data["goal"], pid))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ── API：项目模板（v0.21.0 多项目模板沉淀）────────────────────────
+BUILTIN_TEMPLATES = [
+    {"name": "标准 Web 应用", "desc": "登录 → 支付 → 内容列表，最常见的 MVP 结构",
+     "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "支付", "owner_role": "后端"}, {"name": "内容/题库列表", "owner_role": "前端"}]},
+    {"name": "电商小程序", "desc": "用户 → 商品 → 购物车 → 订单 → 支付",
+     "modules": [{"name": "用户中心", "owner_role": "后端"}, {"name": "商品管理", "owner_role": "后端"}, {"name": "购物车", "owner_role": "后端"}, {"name": "订单", "owner_role": "后端"}, {"name": "支付", "owner_role": "后端"}, {"name": "商城页面", "owner_role": "前端"}]},
+    {"name": "内容社区", "desc": "登录 → 发帖 → 评论 → 关注 → 内容流",
+     "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "发帖/编辑", "owner_role": "后端"}, {"name": "评论/互动", "owner_role": "后端"}, {"name": "关注/关系", "owner_role": "后端"}, {"name": "内容流页面", "owner_role": "前端"}]},
+    {"name": "AI 工具应用", "desc": "登录 → AI 对话 → 用量计费 → 管理后台",
+     "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "AI 对话/生成", "owner_role": "后端"}, {"name": "用量/计费", "owner_role": "后端"}, {"name": "管理后台", "owner_role": "后端"}, {"name": "对话界面", "owner_role": "前端"}]},
+]
+
+
+def _seed_templates(conn):
+    """首次启动写入内置模板（幂等）。"""
+    n = conn.execute("SELECT COUNT(*) FROM project_templates WHERE is_builtin=1").fetchone()[0]
+    if n == 0:
+        for t in BUILTIN_TEMPLATES:
+            conn.execute(
+                "INSERT INTO project_templates (name,desc,modules,is_builtin,ts) VALUES (?,?,?,1,?)",
+                (t["name"], t["desc"], json.dumps(t["modules"], ensure_ascii=False), datetime.now().isoformat()),
+            )
+
+
+@app.get("/api/templates")
+def list_templates():
+    conn = get_db()
+    _seed_templates(conn)
+    rows = conn.execute("SELECT * FROM project_templates ORDER BY is_builtin DESC, id").fetchall()
+    conn.commit()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["modules"] = json.loads(d["modules"])
+        except Exception:
+            d["modules"] = []
+        out.append(d)
+    return out
+
+
+@app.post("/api/templates")
+async def save_template(req: Request):
+    data = await req.json()
+    name = (data.get("name") or "").strip()
+    modules = data.get("modules") or []
+    if not name or not isinstance(modules, list) or not modules:
+        return {"ok": False, "error": "模板名与模块列表必填"}
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO project_templates (name,desc,modules,is_builtin,ts) VALUES (?,?,?,0,?)",
+        (name, data.get("desc", ""), json.dumps(modules, ensure_ascii=False), datetime.now().isoformat()),
+    )
+    conn.commit()
+    tid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.close()
+    return {"ok": True, "id": tid}
+
+
+@app.delete("/api/templates/{tid}")
+def delete_template(tid: int):
+    conn = get_db()
+    row = conn.execute("SELECT is_builtin FROM project_templates WHERE id=?", (tid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "模板不存在"}
+    if row["is_builtin"]:
+        conn.close()
+        return {"ok": False, "error": "内置模板不可删除"}
+    conn.execute("DELETE FROM project_templates WHERE id=?", (tid,))
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -955,7 +1039,7 @@ def exec_log():
 
 
 
-# ── API：浏览器自动化（v0.20.0，playwright + 系统 Chrome headless）────
+# ── API：浏览器自动化（v0.21.0，playwright + 系统 Chrome headless）────
 # 动作：open(打开+取标题/正文摘要) / screenshot(截图 base64) /
 #       extract(按 selector 抓文本) / fill(填表) / click(点击)
 # 安全：仅 http/https URL；30s 超时；全量审计 browser_log
@@ -1068,7 +1152,7 @@ def browser_log():
 
 
 
-# ── 元神工具调用（v0.20.0：Function Calling——对话直接驱动 exec/浏览器）──
+# ── 元神工具调用（v0.21.0：Function Calling——对话直接驱动 exec/浏览器）──
 META_TOOLS = [
     {
         "type": "function",
@@ -1622,7 +1706,7 @@ def delete_module(pid: str, mid: str):
     return {"ok": True}
 
 
-# ── 角色系统提示词（自主执行链 v0.20.0）──────────────────────────
+# ── 角色系统提示词（自主执行链 v0.21.0）──────────────────────────
 ROLE_SYSTEMS = {
     "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
     "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
@@ -1640,7 +1724,7 @@ ROLE_NAMES = {
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
-    """项目群聊对话（v0.20.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
+    """项目群聊对话（v0.21.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
@@ -2665,7 +2749,7 @@ async def meta_chat(req: Request):
             continue
         role = "assistant" if r["kind"] == "meta" else "user"
         hist.append({"role": role, "content": r["text"]})
-    reply = await _meta_chat_with_tools(hist, META_SYSTEM)  # v0.20.0：元神对话工具调用（exec/浏览器）
+    reply = await _meta_chat_with_tools(hist, META_SYSTEM)  # v0.21.0：元神对话工具调用（exec/浏览器）
     # 落库元神回复
     conn = get_db()
     conn.execute(
