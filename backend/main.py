@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.17.0")
+app = FastAPI(title="分身 v1 后端", version="0.19.0")
 
 
 def get_db():
@@ -129,6 +129,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS exec_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT, agent_id TEXT, command TEXT, status TEXT, exit_code INTEGER, output TEXT, confirmed INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS browser_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT, agent_id TEXT, action TEXT, url TEXT, status TEXT, detail TEXT
         );
         CREATE TABLE IF NOT EXISTS long_term_memory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -621,7 +625,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.17.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.19.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -941,6 +945,119 @@ async def exec_command(req: Request):
 def exec_log():
     conn = get_db()
     rows = conn.execute("SELECT id,ts,agent_id,command,status,exit_code,confirmed FROM exec_log ORDER BY id DESC LIMIT 50").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+
+# ── API：浏览器自动化（v0.19.0，playwright + 系统 Chrome headless）────
+# 动作：open(打开+取标题/正文摘要) / screenshot(截图 base64) /
+#       extract(按 selector 抓文本) / fill(填表) / click(点击)
+# 安全：仅 http/https URL；30s 超时；全量审计 browser_log
+def _browser_run(action: str, url: str, selector: str = "", text: str = "", wait_ms: int = 0):
+    from playwright.sync_api import sync_playwright
+    chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    result = {"ok": False, "error": ""}
+    with sync_playwright() as p:
+        try:
+            b = p.chromium.launch(executable_path=chrome, headless=True,
+                                  args=["--no-sandbox", "--disable-gpu"])
+            pg = b.new_page(viewport={"width": 1280, "height": 900})
+            if url:
+                pg.goto(url, timeout=20000, wait_until="domcontentloaded")
+            if wait_ms:
+                pg.wait_for_timeout(wait_ms)
+            if action == "open":
+                body = pg.evaluate("document.body ? document.body.innerText.slice(0,2000) : ''")
+                result = {"ok": True, "title": pg.title(), "url": pg.url,
+                          "content": body.strip()[:2000]}
+            elif action == "screenshot":
+                if not url:
+                    return {"ok": False, "error": "截图需要 url"}
+                png = pg.screenshot(full_page=False)
+                import base64
+                result = {"ok": True, "title": pg.title(), "url": pg.url,
+                          "image_b64": base64.b64encode(png).decode(), "size": len(png)}
+            elif action == "extract":
+                if not selector:
+                    return {"ok": False, "error": "extract 需要 selector"}
+                try:
+                    els = pg.query_selector_all(selector)
+                    texts = [e.inner_text().strip() for e in els[:20]]
+                    result = {"ok": True, "title": pg.title(), "count": len(texts),
+                              "items": texts}
+                except Exception:
+                    result = {"ok": False, "error": f"未找到 selector: {selector}"}
+            elif action == "fill":
+                if not selector or not text:
+                    return {"ok": False, "error": "fill 需要 selector 和 text"}
+                try:
+                    pg.fill(selector, text, timeout=8000)
+                    result = {"ok": True, "title": pg.title(), "filled": selector}
+                except Exception:
+                    # 元素被 overlay 遮挡时，fallback 到 JS 强制赋值+触发 input 事件
+                    pg.evaluate(
+                        "(o)=>{const el=document.querySelector(o.s); if(!el) throw new Error('not found'); "
+                        "el.value=o.v; el.dispatchEvent(new Event('input',{bubbles:true})); "
+                        "el.dispatchEvent(new Event('change',{bubbles:true}));}",
+                        {"s": selector, "v": text},
+                    )
+                    pg.wait_for_timeout(500)
+                    result = {"ok": True, "title": pg.title(), "filled": selector + "（JS fallback）"}
+            elif action == "click":
+                if not selector:
+                    return {"ok": False, "error": "click 需要 selector"}
+                try:
+                    pg.click(selector, timeout=8000)
+                except Exception:
+                    pg.evaluate(
+                        "(s)=>{const el=document.querySelector(s); if(!el) throw new Error('not found'); el.click();}",
+                        selector,
+                    )
+                pg.wait_for_timeout(1500)
+                body = pg.evaluate("document.body ? document.body.innerText.slice(0,1500) : ''")
+                result = {"ok": True, "title": pg.title(), "url": pg.url,
+                          "content": body.strip()[:1500]}
+            else:
+                result = {"ok": False, "error": f"未知动作 {action}"}
+            b.close()
+        except Exception as e:
+            result = {"ok": False, "error": f"浏览器执行异常: {type(e).__name__}: {str(e)[:300]}"}
+    return result
+
+
+@app.post("/api/browser/action")
+def browser_action(req: Request):  # 普通 def → FastAPI 线程池执行，兼容 playwright sync API
+    import asyncio
+    data = asyncio.run(req.json())
+    action = (data.get("action") or "").strip()
+    url = (data.get("url") or "").strip()
+    selector = (data.get("selector") or "").strip()
+    text = (data.get("text") or "")
+    wait_ms = int(data.get("wait_ms", 0) or 0)
+    agent_id = data.get("agent_id", META_PID)
+    if action not in ("open", "screenshot", "extract", "fill", "click"):
+        return {"ok": False, "error": "动作必须是 open/screenshot/extract/fill/click"}
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        return {"ok": False, "error": "仅允许 http/https 地址"}
+    res = _browser_run(action, url, selector, text, wait_ms)
+    # 审计日志
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO browser_log (ts,agent_id,action,url,status,detail) VALUES (?,?,?,?,?,?)",
+        (datetime.now().isoformat(), agent_id, action, url,
+         "success" if res.get("ok") else "error",
+         (res.get("error") or "")[:500] or f"{res.get('title','')} · {res.get('count','')}项"[:500]),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "result": res, "action": action}
+
+
+@app.get("/api/browser/log")
+def browser_log():
+    conn = get_db()
+    rows = conn.execute("SELECT id,ts,agent_id,action,url,status,detail FROM browser_log ORDER BY id DESC LIMIT 50").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -1347,11 +1464,26 @@ def delete_module(pid: str, mid: str):
     return {"ok": True}
 
 
+# ── 角色系统提示词（自主执行链 v0.19.0）──────────────────────────
+ROLE_SYSTEMS = {
+    "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
+    "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
+    "frontend": "你是前端工程师，负责 H5 客户端与交互实现。根据任务要求，给出具体的代码或方案，包括：组件结构、样式要点、交互逻辑。回答用中文，直接给代码/方案。",
+    "tester": "你是测试工程师，负责质量保障。根据任务要求，给出测试方案和关键用例。回答用中文，直接给用例。",
+}
+ROLE_NAMES = {
+    "architect": "架构师",
+    "backend": "后端",
+    "frontend": "前端",
+    "tester": "测试",
+}
+
+
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
-    """项目群聊对话（v0.17.0：消灭 sendMsg 模拟——项目级上下文真 AI 回复）。
-    上下文 = 项目目标 + 模块总览 + 相关任务 + 最近群聊消息。"""
+    """项目群聊对话（v0.19.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
+    流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
     if not user_text:
@@ -1387,29 +1519,89 @@ async def project_chat(pid: str, req: Request):
         "ORDER BY id DESC LIMIT 10", (pid,)
     ).fetchall()
     conn.close()
-    sys_prompt = (
-        "你是「分身」项目团队的总代表，在项目群聊里与用户对话。\n"
+
+    # ── Step 1: 元神分析 → 调度计划 ──
+    dispatch_sys = (
+        "你是「元神」，在项目群聊中接收用户指令后，需要分析并调度团队执行。\n"
+        "根据用户指令和项目当前状态，判断是否需要调度团队执行：\n"
+        "- 如果是执行类指令（如\"实现XX\"、\"修复XX\"、\"检查XX\"、\"设计XX\"），输出 JSON 调度计划\n"
+        "- 如果是闲聊/提问/汇报，只在 reply 中回答，actions 为空数组\n\n"
         f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
-        f"{mod_desc}\n{task_desc}\n"
-        "回答要简短、直接、可执行，中文。若用户指令涉及具体模块/任务，说明你会安排对应角色处理。"
+        f"{mod_desc}\n{task_desc}\n\n"
+        "输出格式（必须为合法 JSON）：\n"
+        '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
+        '"actions": [{"role": "frontend|backend|architect|tester", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令"}]}\n'
+        "注意：actions 最多 3 个。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。"
     )
-    hist = [{"role": "system", "content": sys_prompt}]
+    hist = [{"role": "system", "content": dispatch_sys}]
     for r in reversed(rows):
         if r["kind"] == "sys":
             continue
         role = "assistant" if r["kind"] in ("agent", "meta") else "user"
         hist.append({"role": role, "content": r["text"]})
-    # 用架构师角色（无独立 key 时 DeepSeek secret 兜底，v0.16.0）
-    reply = call_llm("architect", hist, sys_prompt)
-    # 落库 agent 回复（项目群聊）
+    hist.append({"role": "user", "content": user_text})
+    dispatch_reply = call_llm("__meta__", hist, dispatch_sys)
+
+    # 解析 JSON（容错：LLM 可能返回非 JSON）
+    meta_reply = dispatch_reply
+    actions = []
+    try:
+        if "{" in dispatch_reply and "}" in dispatch_reply:
+            j = json.loads(dispatch_reply[dispatch_reply.find("{"):dispatch_reply.rfind("}") + 1])
+            meta_reply = j.get("reply", dispatch_reply)
+            actions = j.get("actions", [])
+    except Exception:
+        pass  # 非 JSON，当作纯文本回复
+
+    # 落库元神回复
     conn = get_db()
     conn.execute(
         "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-        (pid, "分身 · 团队", "agent", reply, "progress", datetime.now().isoformat()),
+        (pid, "分身 · 元神", "meta", meta_reply, "progress", datetime.now().isoformat()),
     )
     conn.commit()
     conn.close()
-    return {"reply": reply, "ok": True}
+
+    # ── Step 2: 角色执行（逐个调度）──
+    role_results = []
+    for act in actions[:3]:
+        role = act.get("role", "backend")
+        if role not in ROLE_SYSTEMS:
+            role = "backend"
+        task_name = act.get("task_name", "未命名任务")[:20]
+        detail = act.get("detail", "")
+
+        # 建任务卡片（todo 状态，关联第一个模块）
+        task_id = f"tk{int(datetime.now().timestamp() * 1000)}"
+        conn = get_db()
+        mod = mods[0] if mods else None
+        conn.execute(
+            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (task_id, pid, mod["id"] if mod else "", "", task_name, role, "todo", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+        # 调用角色 AI 执行
+        role_sys = ROLE_SYSTEMS[role]
+        role_hist = [
+            {"role": "system", "content": role_sys + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"},
+            {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。"},
+        ]
+        role_reply = call_llm(role, role_hist, role_sys)
+
+        # 落库角色回复
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, f"分身 · {ROLE_NAMES[role]}", "agent", role_reply, "progress", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+        role_results.append({"role": role, "task_name": task_name, "task_id": task_id})
+
+    return {"reply": meta_reply, "actions": role_results, "ok": True}
 
 
 @app.get("/api/projects/{pid}/topics")
