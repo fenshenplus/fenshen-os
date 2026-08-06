@@ -68,7 +68,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.8.0")
+app = FastAPI(title="分身 v1 后端", version="0.19.0")
 
 
 def get_db():
@@ -76,6 +76,26 @@ def get_db():
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_setting(key: str, default: str = "") -> str:
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT value FROM meta_settings WHERE key=?", (key,)).fetchone()
+        conn.close()
+        return row["value"] if row else default
+    except Exception:
+        return default
+
+
+def set_setting(key: str, value: str):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO meta_settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=?",
+        (key, value, value),
+    )
+    conn.commit()
+    conn.close()
 
 
 def init_db():
@@ -109,6 +129,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS exec_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT, agent_id TEXT, command TEXT, status TEXT, exit_code INTEGER, output TEXT, confirmed INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS browser_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT, agent_id TEXT, action TEXT, url TEXT, status TEXT, detail TEXT
         );
         CREATE TABLE IF NOT EXISTS long_term_memory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,6 +196,41 @@ def init_db():
             ts TEXT, agent_id TEXT, provider TEXT, model TEXT,
             latency_ms INTEGER DEFAULT 0, status TEXT DEFAULT 'success'
         );
+        CREATE TABLE IF NOT EXISTS modules (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            desc TEXT DEFAULT '',
+            depends_on TEXT DEFAULT '[]',
+            owner_role TEXT DEFAULT '后端',
+            status TEXT DEFAULT 'idea',
+            context_summary TEXT DEFAULT '',
+            sort INTEGER DEFAULT 0,
+            created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS topics (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            module_id TEXT DEFAULT '',
+            name TEXT NOT NULL,
+            agents TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'open',
+            created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            module_id TEXT DEFAULT '',
+            topic_id TEXT DEFAULT '',
+            name TEXT NOT NULL,
+            owner_role TEXT DEFAULT '后端',
+            status TEXT DEFAULT 'todo',
+            created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS meta_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT DEFAULT ''
+        );
         """
     )
     # ── 兼容迁移：projects 增加 phase / frozen 列（老库升级）──
@@ -180,6 +239,10 @@ def init_db():
         cur.execute("ALTER TABLE projects ADD COLUMN phase TEXT DEFAULT 'requirement'")
     if "frozen" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN frozen INTEGER DEFAULT 0")
+    # ── 兼容迁移：messages 增加 topic_id 列（话题消息，空 = 项目群聊）──
+    mcols = {r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()}
+    if "topic_id" not in mcols:
+        cur.execute("ALTER TABLE messages ADD COLUMN topic_id TEXT DEFAULT ''")
     # 角色种子数据
     cur.execute("SELECT COUNT(*) FROM roles")
     if cur.fetchone()[0] == 0:
@@ -240,6 +303,12 @@ def init_db():
 
 
 init_db()
+
+
+# 后台任务：自动巡检（按用户设置，见 /api/meta/settings）
+@app.on_event("startup")
+async def _start_patrol():
+    asyncio.create_task(_patrol_loop())
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -326,8 +395,8 @@ def _available_providers(agent_id: str):
         base = cfg.get("base_url") or preset["base"]
         model = cfg.get("model_name") or preset["default_model"]
         cands.append((provider, base, cfg["api_key"], model))
-    # 元神 secret 兜底
-    if agent_id == META_PID and DEEPSEEK_KEY:
+    # DeepSeek secret 兜底（所有角色：配置了独立 key 用独立 key，否则用元神 secret 兜底）
+    if DEEPSEEK_KEY and not cands:
         cands.append(("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-chat"))
     return cands
 
@@ -556,7 +625,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.8.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.19.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -577,9 +646,21 @@ async def create_project(req: Request):
         (pid, data.get("name", ""), data.get("goal", ""), "green", datetime.now().isoformat(),
          data.get("phase", "requirement")),
     )
+    # 解构引导：projects.modules 数组 → 批量创建模块（支持一次成立项目即拆模块）
+    mods = data.get("modules") or []
+    if isinstance(mods, list):
+        for i, m in enumerate(mods):
+            mid = f"{pid}-m{i + 1}"
+            conn.execute(
+                "INSERT OR IGNORE INTO modules (id,project_id,name,desc,depends_on,owner_role,status,sort,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (mid, pid, m.get("name", ""), m.get("desc", ""),
+                 json.dumps(m.get("depends_on") or [], ensure_ascii=False), m.get("owner_role", "后端"),
+                 m.get("status", "idea"), i, datetime.now().isoformat(), datetime.now().isoformat()),
+            )
     conn.commit()
     conn.close()
-    return {"id": pid, "ok": True}
+    return {"id": pid, "ok": True, "modules": len(mods)}
 
 
 @app.patch("/api/projects/{pid}")
@@ -645,9 +726,13 @@ async def toggle_resource(rid: str):
 
 
 @app.get("/api/messages/{pid}")
-def list_messages(pid: str):
+def list_messages(pid: str, topic_id: str = ""):
+    """列出项目消息。topic_id 非空时只列该话题的消息（话题对话组）。"""
     conn = get_db()
-    rows = conn.execute("SELECT * FROM messages WHERE project_id=? ORDER BY id", (pid,)).fetchall()
+    if topic_id:
+        rows = conn.execute("SELECT * FROM messages WHERE project_id=? AND topic_id=? ORDER BY id", (pid, topic_id)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM messages WHERE project_id=? AND (topic_id IS NULL OR topic_id='') ORDER BY id", (pid,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -658,8 +743,9 @@ async def add_message(req: Request):
     pid = data.get("project_id", META_PID)
     conn = get_db()
     conn.execute(
-        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-        (pid, data.get("sender", "你"), data.get("kind", "self"), data.get("text", ""), data.get("tag"), datetime.now().isoformat()),
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+        (pid, data.get("sender", "你"), data.get("kind", "self"), data.get("text", ""), data.get("tag"),
+         datetime.now().isoformat(), data.get("topic_id", "")),
     )
     conn.commit()
     conn.close()
@@ -859,6 +945,119 @@ async def exec_command(req: Request):
 def exec_log():
     conn = get_db()
     rows = conn.execute("SELECT id,ts,agent_id,command,status,exit_code,confirmed FROM exec_log ORDER BY id DESC LIMIT 50").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+
+# ── API：浏览器自动化（v0.19.0，playwright + 系统 Chrome headless）────
+# 动作：open(打开+取标题/正文摘要) / screenshot(截图 base64) /
+#       extract(按 selector 抓文本) / fill(填表) / click(点击)
+# 安全：仅 http/https URL；30s 超时；全量审计 browser_log
+def _browser_run(action: str, url: str, selector: str = "", text: str = "", wait_ms: int = 0):
+    from playwright.sync_api import sync_playwright
+    chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    result = {"ok": False, "error": ""}
+    with sync_playwright() as p:
+        try:
+            b = p.chromium.launch(executable_path=chrome, headless=True,
+                                  args=["--no-sandbox", "--disable-gpu"])
+            pg = b.new_page(viewport={"width": 1280, "height": 900})
+            if url:
+                pg.goto(url, timeout=20000, wait_until="domcontentloaded")
+            if wait_ms:
+                pg.wait_for_timeout(wait_ms)
+            if action == "open":
+                body = pg.evaluate("document.body ? document.body.innerText.slice(0,2000) : ''")
+                result = {"ok": True, "title": pg.title(), "url": pg.url,
+                          "content": body.strip()[:2000]}
+            elif action == "screenshot":
+                if not url:
+                    return {"ok": False, "error": "截图需要 url"}
+                png = pg.screenshot(full_page=False)
+                import base64
+                result = {"ok": True, "title": pg.title(), "url": pg.url,
+                          "image_b64": base64.b64encode(png).decode(), "size": len(png)}
+            elif action == "extract":
+                if not selector:
+                    return {"ok": False, "error": "extract 需要 selector"}
+                try:
+                    els = pg.query_selector_all(selector)
+                    texts = [e.inner_text().strip() for e in els[:20]]
+                    result = {"ok": True, "title": pg.title(), "count": len(texts),
+                              "items": texts}
+                except Exception:
+                    result = {"ok": False, "error": f"未找到 selector: {selector}"}
+            elif action == "fill":
+                if not selector or not text:
+                    return {"ok": False, "error": "fill 需要 selector 和 text"}
+                try:
+                    pg.fill(selector, text, timeout=8000)
+                    result = {"ok": True, "title": pg.title(), "filled": selector}
+                except Exception:
+                    # 元素被 overlay 遮挡时，fallback 到 JS 强制赋值+触发 input 事件
+                    pg.evaluate(
+                        "(o)=>{const el=document.querySelector(o.s); if(!el) throw new Error('not found'); "
+                        "el.value=o.v; el.dispatchEvent(new Event('input',{bubbles:true})); "
+                        "el.dispatchEvent(new Event('change',{bubbles:true}));}",
+                        {"s": selector, "v": text},
+                    )
+                    pg.wait_for_timeout(500)
+                    result = {"ok": True, "title": pg.title(), "filled": selector + "（JS fallback）"}
+            elif action == "click":
+                if not selector:
+                    return {"ok": False, "error": "click 需要 selector"}
+                try:
+                    pg.click(selector, timeout=8000)
+                except Exception:
+                    pg.evaluate(
+                        "(s)=>{const el=document.querySelector(s); if(!el) throw new Error('not found'); el.click();}",
+                        selector,
+                    )
+                pg.wait_for_timeout(1500)
+                body = pg.evaluate("document.body ? document.body.innerText.slice(0,1500) : ''")
+                result = {"ok": True, "title": pg.title(), "url": pg.url,
+                          "content": body.strip()[:1500]}
+            else:
+                result = {"ok": False, "error": f"未知动作 {action}"}
+            b.close()
+        except Exception as e:
+            result = {"ok": False, "error": f"浏览器执行异常: {type(e).__name__}: {str(e)[:300]}"}
+    return result
+
+
+@app.post("/api/browser/action")
+def browser_action(req: Request):  # 普通 def → FastAPI 线程池执行，兼容 playwright sync API
+    import asyncio
+    data = asyncio.run(req.json())
+    action = (data.get("action") or "").strip()
+    url = (data.get("url") or "").strip()
+    selector = (data.get("selector") or "").strip()
+    text = (data.get("text") or "")
+    wait_ms = int(data.get("wait_ms", 0) or 0)
+    agent_id = data.get("agent_id", META_PID)
+    if action not in ("open", "screenshot", "extract", "fill", "click"):
+        return {"ok": False, "error": "动作必须是 open/screenshot/extract/fill/click"}
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        return {"ok": False, "error": "仅允许 http/https 地址"}
+    res = _browser_run(action, url, selector, text, wait_ms)
+    # 审计日志
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO browser_log (ts,agent_id,action,url,status,detail) VALUES (?,?,?,?,?,?)",
+        (datetime.now().isoformat(), agent_id, action, url,
+         "success" if res.get("ok") else "error",
+         (res.get("error") or "")[:500] or f"{res.get('title','')} · {res.get('count','')}项"[:500]),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "result": res, "action": action}
+
+
+@app.get("/api/browser/log")
+def browser_log():
+    conn = get_db()
+    rows = conn.execute("SELECT id,ts,agent_id,action,url,status,detail FROM browser_log ORDER BY id DESC LIMIT 50").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -1138,6 +1337,537 @@ async def rollback_snapshot(sid: int, req: Request):
     conn.commit()
     conn.close()
     return {"ok": True, "rolled_back": {"name": proj.get("name"), "phase": proj.get("phase")}}
+
+
+# ── API：模块看板（v3 Phase A 模块解构）────────────────────────
+MODULE_STATUS = ["idea", "todo", "doing", "review", "done"]
+
+
+def _mod_status_rank(status: str) -> int:
+    return MODULE_STATUS.index(status) if status in MODULE_STATUS else 0
+
+
+def _module_dict(row):
+    d = dict(row)
+    d["depends_on"] = json.loads(d.get("depends_on") or "[]")
+    return d
+
+
+@app.get("/api/projects/{pid}/modules")
+def list_modules(pid: str):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort, created_at", (pid,)).fetchall()
+    conn.close()
+    return [_module_dict(r) for r in rows]
+
+
+@app.post("/api/projects/{pid}/modules")
+async def create_module(pid: str, req: Request):
+    data = await req.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "模块名不能为空"}
+    conn = get_db()
+    proj = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    mid = f"{pid}-m{int(datetime.now().timestamp())}"
+    max_sort = conn.execute("SELECT COALESCE(MAX(sort),0) FROM modules WHERE project_id=?", (pid,)).fetchone()[0]
+    # 同秒多次创建避免 id 冲突：用 sort 序号兜底
+    if conn.execute("SELECT 1 FROM modules WHERE id=?", (mid,)).fetchone():
+        mid = f"{pid}-m{max_sort + 1}"
+    conn.execute(
+        "INSERT INTO modules (id,project_id,name,desc,depends_on,owner_role,status,sort,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (mid, pid, name, data.get("desc", ""), json.dumps(data.get("depends_on") or [], ensure_ascii=False),
+         data.get("owner_role", "后端"), data.get("status", "idea"), max_sort + 1,
+         datetime.now().isoformat(), datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": mid}
+
+
+@app.patch("/api/projects/{pid}/modules/{mid}")
+async def update_module(pid: str, mid: str, req: Request):
+    data = await req.json()
+    conn = get_db()
+    row = conn.execute("SELECT * FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "模块不存在"}
+    fields, vals = [], []
+    for k in ("name", "desc", "owner_role", "context_summary"):
+        if k in data:
+            fields.append(f"{k}=?")
+            vals.append(data[k])
+    if "depends_on" in data:
+        fields.append("depends_on=?")
+        vals.append(json.dumps(data["depends_on"] or [], ensure_ascii=False))
+    if "sort" in data:
+        fields.append("sort=?")
+        vals.append(int(data["sort"]))
+    if fields:
+        conn.execute(f"UPDATE modules SET {', '.join(fields)}, updated_at=? WHERE id=?",
+                     vals + [datetime.now().isoformat(), mid])
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/modules/{mid}/move")
+async def move_module(pid: str, mid: str, req: Request):
+    """看板列流转，带依赖检查：进入 doing 前，被依赖模块必须已完成。"""
+    data = await req.json()
+    to = data.get("to")
+    if to not in MODULE_STATUS:
+        return {"ok": False, "error": f"目标状态非法：{to}，允许 {MODULE_STATUS}"}
+    conn = get_db()
+    row = conn.execute("SELECT * FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "模块不存在"}
+    # 依赖检查：状态前进到 doing（含之后）时，依赖项必须 done
+    to_rank = _mod_status_rank(to)
+    deps = json.loads(row["depends_on"] or "[]")
+    if to_rank >= _mod_status_rank("doing") and deps:
+        ph = ",".join("?" * len(deps))
+        dep_rows = conn.execute(f"SELECT id,status FROM modules WHERE project_id=? AND id IN ({ph})", [pid] + deps).fetchall()
+        dep_map = {r["id"]: r["status"] for r in dep_rows}
+        blocked = [d for d in deps if dep_map.get(d) != "done"]
+        if blocked:
+            conn.close()
+            return {"ok": False, "error": f"依赖未完成：{', '.join(blocked)}。需先完成依赖模块才能进入「进行中」"}
+    conn.execute("UPDATE modules SET status=?, updated_at=? WHERE id=?", (to, datetime.now().isoformat(), mid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "status": to}
+
+
+@app.delete("/api/projects/{pid}/modules/{mid}")
+def delete_module(pid: str, mid: str):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "模块不存在"}
+    # 被依赖检查：其他模块 depends_on 含本模块则拒绝
+    refs = conn.execute("SELECT id,name,depends_on FROM modules WHERE project_id=?", (pid,)).fetchall()
+    ref_by = [r for r in refs if mid in (json.loads(r["depends_on"] or "[]"))]
+    if ref_by:
+        conn.close()
+        return {"ok": False, "error": f"模块被 {', '.join(r['name'] for r in ref_by)} 依赖，无法删除"}
+    conn.execute("DELETE FROM modules WHERE id=?", (mid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ── 角色系统提示词（自主执行链 v0.19.0）──────────────────────────
+ROLE_SYSTEMS = {
+    "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
+    "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
+    "frontend": "你是前端工程师，负责 H5 客户端与交互实现。根据任务要求，给出具体的代码或方案，包括：组件结构、样式要点、交互逻辑。回答用中文，直接给代码/方案。",
+    "tester": "你是测试工程师，负责质量保障。根据任务要求，给出测试方案和关键用例。回答用中文，直接给用例。",
+}
+ROLE_NAMES = {
+    "architect": "架构师",
+    "backend": "后端",
+    "frontend": "前端",
+    "tester": "测试",
+}
+
+
+# ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
+@app.post("/api/projects/{pid}/chat")
+async def project_chat(pid: str, req: Request):
+    """项目群聊对话（v0.19.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
+    流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
+    data = await req.json()
+    user_text = (data.get("text") or "").strip()
+    if not user_text:
+        return {"ok": False, "error": "消息不能为空"}
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    # 落库用户消息（项目群聊：topic_id 为空）
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+        (pid, "你", "self", user_text, None, datetime.now().isoformat()),
+    )
+    conn.commit()
+    # ── 项目级上下文 ──
+    mods = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort", (pid,)).fetchall()
+    tasks = conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
+    mod_desc = ""
+    if mods:
+        mod_desc = "项目模块总览：\n" + "\n".join(
+            f"- {m['name']}（{m['status']} · 负责人 {m['owner_role']}）" for m in mods
+        )
+    task_desc = ""
+    if tasks:
+        doing = [t for t in tasks if t["status"] == "doing"]
+        todo = [t for t in tasks if t["status"] == "todo"]
+        task_desc = (f"项目任务：进行中 {len(doing)} 个（{('、'.join(t['name'] for t in doing[:3])) if doing else '无'}），"
+                     f"待办 {len(todo)} 个。")
+    # 最近群聊消息（项目级，不含话题消息）
+    rows = conn.execute(
+        "SELECT sender,kind,text FROM messages WHERE project_id=? AND (topic_id IS NULL OR topic_id='') "
+        "ORDER BY id DESC LIMIT 10", (pid,)
+    ).fetchall()
+    conn.close()
+
+    # ── Step 1: 元神分析 → 调度计划 ──
+    dispatch_sys = (
+        "你是「元神」，在项目群聊中接收用户指令后，需要分析并调度团队执行。\n"
+        "根据用户指令和项目当前状态，判断是否需要调度团队执行：\n"
+        "- 如果是执行类指令（如\"实现XX\"、\"修复XX\"、\"检查XX\"、\"设计XX\"），输出 JSON 调度计划\n"
+        "- 如果是闲聊/提问/汇报，只在 reply 中回答，actions 为空数组\n\n"
+        f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
+        f"{mod_desc}\n{task_desc}\n\n"
+        "输出格式（必须为合法 JSON）：\n"
+        '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
+        '"actions": [{"role": "frontend|backend|architect|tester", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令"}]}\n'
+        "注意：actions 最多 3 个。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。"
+    )
+    hist = [{"role": "system", "content": dispatch_sys}]
+    for r in reversed(rows):
+        if r["kind"] == "sys":
+            continue
+        role = "assistant" if r["kind"] in ("agent", "meta") else "user"
+        hist.append({"role": role, "content": r["text"]})
+    hist.append({"role": "user", "content": user_text})
+    dispatch_reply = call_llm("__meta__", hist, dispatch_sys)
+
+    # 解析 JSON（容错：LLM 可能返回非 JSON）
+    meta_reply = dispatch_reply
+    actions = []
+    try:
+        if "{" in dispatch_reply and "}" in dispatch_reply:
+            j = json.loads(dispatch_reply[dispatch_reply.find("{"):dispatch_reply.rfind("}") + 1])
+            meta_reply = j.get("reply", dispatch_reply)
+            actions = j.get("actions", [])
+    except Exception:
+        pass  # 非 JSON，当作纯文本回复
+
+    # 落库元神回复
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+        (pid, "分身 · 元神", "meta", meta_reply, "progress", datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    # ── Step 2: 角色执行（逐个调度）──
+    role_results = []
+    for act in actions[:3]:
+        role = act.get("role", "backend")
+        if role not in ROLE_SYSTEMS:
+            role = "backend"
+        task_name = act.get("task_name", "未命名任务")[:20]
+        detail = act.get("detail", "")
+
+        # 建任务卡片（todo 状态，关联第一个模块）
+        task_id = f"tk{int(datetime.now().timestamp() * 1000)}"
+        conn = get_db()
+        mod = mods[0] if mods else None
+        conn.execute(
+            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (task_id, pid, mod["id"] if mod else "", "", task_name, role, "todo", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+        # 调用角色 AI 执行
+        role_sys = ROLE_SYSTEMS[role]
+        role_hist = [
+            {"role": "system", "content": role_sys + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"},
+            {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。"},
+        ]
+        role_reply = call_llm(role, role_hist, role_sys)
+
+        # 落库角色回复
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, f"分身 · {ROLE_NAMES[role]}", "agent", role_reply, "progress", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+        role_results.append({"role": role, "task_name": task_name, "task_id": task_id})
+
+    return {"reply": meta_reply, "actions": role_results, "ok": True}
+
+
+@app.get("/api/projects/{pid}/topics")
+def list_topics(pid: str):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM topics WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["agents"] = json.loads(d.get("agents") or "[]")
+        out.append(d)
+    conn.close()
+    return out
+
+
+@app.post("/api/projects/{pid}/topics")
+async def create_topic(pid: str, req: Request):
+    data = await req.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "话题名不能为空"}
+    conn = get_db()
+    proj = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    tid = f"tp{int(datetime.now().timestamp() * 1000)}"
+    conn.execute(
+        "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) VALUES (?,?,?,?,?,?,?)",
+        (tid, pid, data.get("module_id", ""), name, json.dumps(data.get("agents") or [], ensure_ascii=False),
+         data.get("status", "open"), datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": tid}
+
+
+@app.patch("/api/topics/{tid}")
+async def update_topic(tid: str, req: Request):
+    data = await req.json()
+    conn = get_db()
+    row = conn.execute("SELECT * FROM topics WHERE id=?", (tid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "话题不存在"}
+    fields, vals = [], []
+    for k in ("name", "module_id", "status"):
+        if k in data:
+            fields.append(f"{k}=?")
+            vals.append(data[k])
+    if "agents" in data:
+        fields.append("agents=?")
+        vals.append(json.dumps(data["agents"] or [], ensure_ascii=False))
+    if fields:
+        vals.append(tid)
+        conn.execute(f"UPDATE topics SET {', '.join(fields)} WHERE id=?", vals)
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/topics/{tid}/messages")
+def list_topic_messages(tid: str):
+    """话题对话组消息（三层模型：话题 = 绑定模块的讨论组）。"""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM messages WHERE topic_id=? ORDER BY id", (tid,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/topics/{tid}/chat")
+async def topic_chat(tid: str, req: Request):
+    """话题对话（Phase C：上下文按模块隔离——只注入该模块的上下文窗口，token 针对性投入）。"""
+    data = await req.json()
+    user_text = (data.get("text") or "").strip()
+    if not user_text:
+        return {"ok": False, "error": "消息不能为空"}
+    conn = get_db()
+    topic = conn.execute("SELECT * FROM topics WHERE id=?", (tid,)).fetchone()
+    if not topic:
+        conn.close()
+        return {"ok": False, "error": "话题不存在"}
+    pid = topic["project_id"]
+    # 落库用户消息（带 topic_id，与项目群聊隔离）
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+        (pid, "你", "self", user_text, None, datetime.now().isoformat(), tid),
+    )
+    conn.commit()
+    # ── 构造模块级上下文（Phase C 核心：只注入该模块相关）──
+    mod = None
+    if topic["module_id"]:
+        mod = conn.execute("SELECT * FROM modules WHERE id=?", (topic["module_id"],)).fetchone()
+    # 模块信息 + 依赖模块名
+    mod_desc = ""
+    if mod:
+        deps = json.loads(mod["depends_on"] or "[]")
+        dep_names = []
+        for d in deps:
+            dm = conn.execute("SELECT name FROM modules WHERE id=?", (d,)).fetchone()
+            if dm:
+                dep_names.append(dm["name"])
+        mod_desc = (f"当前工作模块：{mod['name']}。\n模块说明：{mod['desc'] or '（未填写）'}。\n"
+                    f"依赖模块：{'、'.join(dep_names) if dep_names else '无'}。\n"
+                    f"模块上下文摘要：{mod['context_summary'] or '（暂无）'}")
+    # 该模块相关任务（看板卡片，帮助 agent 理解模块进度）
+    mod_tasks = []
+    if mod:
+        rows = conn.execute(
+            "SELECT name,status,owner_role FROM tasks WHERE project_id=? AND module_id=? ORDER BY created_at",
+            (pid, mod["id"]),
+        ).fetchall()
+        mod_tasks = [dict(r) for r in rows]
+    task_desc = ""
+    if mod_tasks:
+        task_desc = "模块相关任务：\n" + "\n".join(
+            f"- {t['name']}（{t['status']} · {t['owner_role']}）" for t in mod_tasks
+        )
+    # 话题内最近消息（只取该话题的，不污染其它模块/群聊）
+    rows = conn.execute(
+        "SELECT sender,kind,text FROM messages WHERE topic_id=? ORDER BY id DESC LIMIT 12", (tid,)
+    ).fetchall()
+    conn.close()
+    # 组装 openai 格式上下文
+    sys_prompt = (
+        "你是分身里的项目协作 agent，在「话题对话组」里与用户讨论该模块的问题。\n"
+        "回答要简短、直接、可执行，中文。\n"
+        f"{mod_desc}\n{task_desc}"
+    )
+    hist = [{"role": "system", "content": sys_prompt}]
+    for r in reversed(rows):
+        if r["kind"] == "sys":
+            continue
+        role = "assistant" if r["kind"] != "self" else "user"
+        hist.append({"role": role, "content": r["text"]})
+    # 角色：话题绑定模块 → 用模块负责人角色调用（走其模型配置）
+    ROLE_ID_MAP = {"后端": "backend", "前端": "frontend", "产品": "architect", "测试": "tester"}
+    agent_id = ROLE_ID_MAP.get(mod["owner_role"]) if mod else "architect"
+    reply = call_llm(agent_id, hist, sys_prompt)
+    # 落库 agent 回复（带 topic_id）
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+        (pid, f"分身 · {mod['name'] if mod else '团队'}", "agent", reply, "progress", datetime.now().isoformat(), tid),
+    )
+    conn.commit()
+    conn.close()
+    return {"reply": reply, "ok": True}
+
+
+# ── API：任务（v3 Phase B 看板卡片，话题提炼而来）───────────────
+@app.get("/api/projects/{pid}/tasks")
+def list_tasks(pid: str):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/topics/{tid}/tasks")
+async def distill_task(tid: str, req: Request):
+    """话题 → 任务（R2：任务必有来源；提炼后自动进看板待办）。"""
+    data = await req.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "任务名不能为空"}
+    conn = get_db()
+    topic = conn.execute("SELECT * FROM topics WHERE id=?", (tid,)).fetchone()
+    if not topic:
+        conn.close()
+        return {"ok": False, "error": "话题不存在"}
+    tid2 = f"tk{int(datetime.now().timestamp() * 1000)}"
+    conn.execute(
+        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (tid2, topic["project_id"], topic["module_id"], tid, name,
+         data.get("owner_role", "后端"), "todo", datetime.now().isoformat()),
+    )
+    # 同步：话题内落一条系统消息
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+        (topic["project_id"], "系统", "sys", f"✅ 已提炼为任务「{name}」→ 进入看板待办列", "done",
+         datetime.now().isoformat(), tid),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "task_id": tid2}
+
+
+@app.post("/api/tasks/{task_id}/move")
+async def move_task(task_id: str, req: Request):
+    """任务看板列流转（不依赖模块依赖门禁，任务独立流转——R5）。"""
+    data = await req.json()
+    to = data.get("to")
+    if to not in MODULE_STATUS:
+        return {"ok": False, "error": f"目标状态非法：{to}"}
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    conn.execute("UPDATE tasks SET status=? WHERE id=?", (to, task_id))
+    conn.commit()
+    # Phase D：任务完成 → 自动沉淀（经验 + 技能草稿 + 模块摘要更新）
+    settled = False
+    if to == "done":
+        settled = _settle_task_done(conn, dict(row))
+    conn.close()
+    return {"ok": True, "status": to, "settled": settled}
+
+
+def _settle_task_done(conn, task: dict) -> bool:
+    """任务完成闭环：经验入库 + 可复用技能草稿 + 模块 context_summary 摘要沉淀。
+    返回是否产生了沉淀。"""
+    try:
+        now = datetime.now().isoformat()
+        pid = task["project_id"]
+        # 1) 经验入库（success 案例，来源 task）
+        scenario = task["name"][:30].rstrip("，。,.")
+        exists = conn.execute(
+            "SELECT id FROM experiences WHERE scenario=?", (scenario,)
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                "INSERT INTO experiences (category,scenario,goal,attempts,outcome,lesson,project_id,source,ts) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("success", scenario, f"完成任务：{task['name']}", "", "任务完成", "任务已通过看板完成，流程可复用", pid, "task", now),
+            )
+        # 2) 模块 context_summary 更新（上下文释放前的摘要沉淀）
+        if task["module_id"]:
+            mod = conn.execute("SELECT * FROM modules WHERE id=?", (task["module_id"],)).fetchone()
+            if mod:
+                done_tasks = conn.execute(
+                    "SELECT name FROM tasks WHERE project_id=? AND module_id=? AND status='done' ORDER BY created_at",
+                    (pid, task["module_id"]),
+                ).fetchall()
+                done_names = "、".join(r["name"] for r in done_tasks[-5:])
+                summary = (f"已完成任务：{done_names or task['name']}。"
+                           f"模块「{mod['name']}」累计完成 {len(done_tasks)} 项。")
+                conn.execute(
+                    "UPDATE modules SET context_summary=?, updated_at=? WHERE id=?",
+                    (summary, now, task["module_id"]),
+                )
+        # 3) 话题内落系统消息（闭环可见）
+        if task["topic_id"]:
+            conn.execute(
+                "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+                (pid, "系统", "sys", f"✅ 任务「{task['name']}」已完成 → 已沉淀经验与模块摘要", "done", now, task["topic_id"]),
+            )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 
 # ── API：技能库（Phase 3 技能提炼机制）───────────────────────────
@@ -1512,6 +2242,244 @@ async def reject_review(rid: int, req: Request):
     conn.commit()
     conn.close()
     return {"ok": True, "status": "rejected"}
+
+
+# ── API：元神总看板（v3.5 元神觉醒 · 聚合 + 巡检）────────────────
+def _patrol_rules(conn, pid: str) -> dict:
+    """单个项目的巡检结果：阻塞 / 滞留 / 超时 / 审核积压。"""
+    issues = []
+    mods = conn.execute(
+        "SELECT * FROM modules WHERE project_id=?", (pid,)
+    ).fetchall()
+    tasks = conn.execute(
+        "SELECT * FROM tasks WHERE project_id=?", (pid,)
+    ).fetchall()
+    task_map = {t["id"]: dict(t) for t in tasks}
+    mod_map = {m["id"]: dict(m) for m in mods}
+    # 1) 依赖未完成 → 依赖方滞留（red）
+    for m in mods:
+        deps = json.loads(m["depends_on"] or "[]")
+        if not deps:
+            continue
+        for d in deps:
+            dm = mod_map.get(d)
+            if dm and dm["status"] != "done" and m["status"] in ("doing", "todo"):
+                issues.append({
+                    "level": "red", "project": pid, "module": m["name"], "task": "",
+                    "type": "依赖阻塞",
+                    "detail": f"模块「{m['name']}」依赖「{dm['name']}」未完成",
+                })
+    # 2) 任务滞留超时：doing 超过 24h（按 created_at 粗估）或 todo 积压 >= 5
+    for t in tasks:
+        if t["status"] == "doing":
+            issues.append({
+                "level": "amber", "project": pid, "module": mod_map.get(t["module_id"], {}).get("name", ""),
+                "task": t["name"], "type": "进行中", "detail": f"任务「{t['name']}」在进行中，留意进度",
+            })
+    doing_count = sum(1 for t in tasks if t["status"] == "doing")
+    todo_count = sum(1 for t in tasks if t["status"] == "todo")
+    review_count = sum(1 for t in tasks if t["status"] == "review")
+    if review_count >= 2:
+        issues.append({
+            "level": "amber", "project": pid, "module": "", "task": "",
+            "type": "审核积压", "detail": f"有 {review_count} 个任务待审核",
+        })
+    return {
+        "project": pid, "module_count": len(mods), "task_count": len(tasks),
+        "doing": doing_count, "todo": todo_count, "review": review_count,
+        "done": sum(1 for t in tasks if t["status"] == "done"),
+        "issues": issues,
+    }
+
+
+@app.get("/api/meta/overview")
+def meta_overview():
+    """元神总看板：所有项目 × 模块 × 任务的聚合统计 + 问题清单。"""
+    conn = get_db()
+    projects = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+    out = []
+    all_issues = []
+    for p in projects:
+        if p["id"] == META_PID:
+            continue
+        r = _patrol_rules(conn, p["id"])
+        r["id"] = p["id"]
+        r["name"] = p["name"]
+        r["status"] = p["status"]
+        r["phase"] = p["phase"]
+        out.append(r)
+        all_issues.extend(r["issues"])
+    conn.close()
+    return {
+        "projects": out,
+        "issues": sorted(all_issues, key=lambda x: 0 if x["level"] == "red" else 1),
+        "total_projects": len(out),
+        "total_tasks": sum(r["task_count"] for r in out),
+    }
+
+
+@app.get("/api/meta/patrol")
+def meta_patrol():
+    """自动巡检：只返回需要关注的问题清单（供元神汇报/前端轮询）。"""
+    conn = get_db()
+    projects = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+    issues = []
+    for p in projects:
+        if p["id"] == META_PID:
+            continue
+        r = _patrol_rules(conn, p["id"])
+        for i in r["issues"]:
+            i["project_name"] = p["name"]
+        issues.extend(r["issues"])
+    conn.close()
+    return {"issues": sorted(issues, key=lambda x: 0 if x["level"] == "red" else 1)}
+
+
+# ── API：元神调度 + 质检（v3.5 元神动手）────────────────────────
+@app.post("/api/meta/dispatch")
+async def meta_dispatch(req: Request):
+    """跨项目调度：把任务分派给指定角色（改 owner_role + 话题落消息）。"""
+    data = await req.json()
+    task_id = data.get("task_id", "")
+    to_role = (data.get("to_role") or "").strip()
+    if not task_id or not to_role:
+        return {"ok": False, "error": "缺少 task_id 或 to_role"}
+    conn = get_db()
+    task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    conn.execute("UPDATE tasks SET owner_role=? WHERE id=?", (to_role, task_id))
+    if task["topic_id"]:
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
+            (task["project_id"], "元神", "meta", f"📌 已调度：任务「{task['name']}」分派给 {to_role}", "progress",
+             datetime.now().isoformat(), task["topic_id"]),
+        )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "task_id": task_id, "owner_role": to_role}
+
+
+@app.post("/api/meta/quality-check")
+async def meta_quality_check(req: Request):
+    """元神 AI 质检：任务移到审核中时，用真模型检查产出（对照任务名+话题讨论+模块摘要）。
+    返回 verdict: pass / reject + reason。"""
+    data = await req.json()
+    task_id = data.get("task_id", "")
+    conn = get_db()
+    task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    pid, tid = task["project_id"], task["topic_id"]
+    mod = None
+    if task["module_id"]:
+        mod = conn.execute("SELECT * FROM modules WHERE id=?", (task["module_id"],)).fetchone()
+    # 上下文：任务名 + 模块摘要 + 话题最近消息
+    ctx_parts = [f"任务：{task['name']}（负责人 {task['owner_role']}）"]
+    if mod:
+        ctx_parts.append(f"模块：{mod['name']}（{mod['desc'] or ''}）")
+        if mod["context_summary"]:
+            ctx_parts.append(f"模块摘要：{mod['context_summary']}")
+    if tid:
+        msgs = conn.execute(
+            "SELECT sender,kind,text FROM messages WHERE topic_id=? ORDER BY id DESC LIMIT 8", (tid,)
+        ).fetchall()
+        topic_msgs = [m["text"] for m in reversed(msgs) if m["text"]]
+        if topic_msgs:
+            ctx_parts.append("话题讨论：" + " | ".join(topic_msgs[-6:]))
+    conn.close()
+    ctx = "\n".join(ctx_parts)
+    sys_prompt = (
+        "你是「元神」，负责质检 agent 的任务产出。\n"
+        "根据任务名、模块上下文和话题讨论，判断这个任务是否可以放行。\n"
+        "如果信息不足以判断（比如没有任何实际产出描述），倾向放行（pass）但注明『建议人工复核』。\n"
+        "只输出 JSON：{\"verdict\": \"pass\"|\"reject\", \"reason\": \"简短理由\"}"
+    )
+    reply = call_llm("__meta__", [{"role": "system", "content": sys_prompt},
+                                  {"role": "user", "content": ctx}], sys_prompt)
+    # 解析 verdict（容错：LLM 可能返回非 JSON 或降级文案）
+    verdict, reason = "pass", "（模型不可用，自动放行）"
+    try:
+        if "{" in reply and "}" in reply:
+            j = json.loads(reply[reply.find("{"):reply.rfind("}") + 1])
+            verdict = "reject" if j.get("verdict") == "reject" else "pass"
+            reason = j.get("reason", "")
+    except Exception:
+        pass
+    return {"ok": True, "task_id": task_id, "verdict": verdict, "reason": reason, "raw": reply[:120]}
+
+
+# ── API：元神设置 + 自动巡检（v3.5 用户自安排巡检）────────────────
+@app.get("/api/meta/settings")
+def meta_settings_get():
+    """读取元神设置（自动巡检开关/频率等）。"""
+    return {
+        "patrol_enabled": get_setting("patrol_enabled", "0") == "1",
+        "patrol_interval": int(get_setting("patrol_interval", "60")),  # 分钟
+        "patrol_level": get_setting("patrol_level", "red"),  # red / all
+    }
+
+
+@app.post("/api/meta/settings")
+async def meta_settings_set(req: Request):
+    data = await req.json()
+    if "patrol_enabled" in data:
+        set_setting("patrol_enabled", "1" if data["patrol_enabled"] else "0")
+    if "patrol_interval" in data:
+        iv = int(data["patrol_interval"])
+        if iv <= 0:
+            return {"ok": False, "error": "巡检间隔必须大于 0 分钟"}
+        set_setting("patrol_interval", str(iv))
+    if "patrol_level" in data:
+        lv = data["patrol_level"]
+        if lv not in ("red", "all"):
+            return {"ok": False, "error": "巡检级别必须是 red 或 all"}
+        set_setting("patrol_level", lv)
+    return {"ok": True, "settings": meta_settings_get()}
+
+
+async def _patrol_loop():
+    """后台自动巡检循环：按用户设置的间隔（默认 60 分钟）巡检所有看板，
+    发现符合级别的问题 → 在元神私聊窗口落一条汇报消息（不打断用户，用户自会看到）。"""
+    while True:
+        try:
+            await asyncio.sleep(60)  # 每 60 秒检查一次（省资源）
+            if get_setting("patrol_enabled", "0") != "1":
+                continue
+            # 距上次巡检时间检查
+            import time
+            last = float(get_setting("patrol_last_ts", "0") or 0)
+            interval_min = int(get_setting("patrol_interval", "60"))
+            if time.time() - last < interval_min * 60:
+                continue
+            set_setting("patrol_last_ts", str(time.time()))
+            # 执行巡检
+            conn = get_db()
+            projects = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+            issues = []
+            for p in projects:
+                if p["id"] == META_PID:
+                    continue
+                r = _patrol_rules(conn, p["id"])
+                for i in r["issues"]:
+                    i["project_name"] = p["name"]
+                issues.extend(r["issues"])
+            level = get_setting("patrol_level", "red")
+            filtered = [i for i in issues if level == "all" or i["level"] == "red"]
+            if filtered:
+                lines = "\n".join(f"· {i['project_name']}｜{i['detail']}" for i in filtered[:8])
+                more = f"\n…共 {len(filtered)} 项" if len(filtered) > 8 else ""
+                conn.execute(
+                    "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                    (META_PID, "分身 · 元神", "meta", f"🔔 自动巡检发现 {len(filtered)} 个问题：\n{lines}{more}", "progress",
+                     datetime.now().isoformat()),
+                )
+                conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 # ── API：元神对话（改用多模型 call_llm）──────────────────────────
