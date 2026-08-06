@@ -48,6 +48,11 @@ META_SYSTEM = """你是「元神」，岳衡（ChooseWiki 选择学习法品牌�
 【回答要求】
 - 简洁、有主见，给可执行建议；不堆砌、不谄媚。
 - 涉及团队/进度时，以"组织 / 监督 / 兜底"的视角回应。
+
+【可用工具（v0.20.0）】
+- 你有两个工具可调用：exec_command（代岳衡在电脑上执行命令）与 browser_action（无头浏览器：打开网页/截图/抓取/填表/点击）。
+- 当岳衡要求执行命令、查看网页、截图、抓取网页信息时，**必须调用对应工具获取真实结果后再回答，不要凭空编造**。
+- 工具返回失败时如实说明，必要时给出替代建议。
 """
 
 # 支持的模型供应商预设（base_url 可空，由代码补默认）
@@ -68,7 +73,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.19.0")
+app = FastAPI(title="分身 v1 后端", version="0.20.0")
 
 
 def get_db():
@@ -625,7 +630,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.19.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.20.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -950,7 +955,7 @@ def exec_log():
 
 
 
-# ── API：浏览器自动化（v0.19.0，playwright + 系统 Chrome headless）────
+# ── API：浏览器自动化（v0.20.0，playwright + 系统 Chrome headless）────
 # 动作：open(打开+取标题/正文摘要) / screenshot(截图 base64) /
 #       extract(按 selector 抓文本) / fill(填表) / click(点击)
 # 安全：仅 http/https URL；30s 超时；全量审计 browser_log
@@ -1060,6 +1065,159 @@ def browser_log():
     rows = conn.execute("SELECT id,ts,agent_id,action,url,status,detail FROM browser_log ORDER BY id DESC LIMIT 50").fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+
+# ── 元神工具调用（v0.20.0：Function Calling——对话直接驱动 exec/浏览器）──
+META_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "exec_command",
+            "description": "在用户电脑上以用户权限执行 shell 命令（查看文件、运行脚本、查询系统状态、安装工具等）。危险命令（rm -rf、mkfs、shutdown、dd 等）会被自动拦截，需用户在终端面板手动确认。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "要执行的 shell 命令，例如 ls -la ~/Desktop"}
+                },
+                "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_action",
+            "description": "操作无头浏览器（系统 Chrome）：open(打开网页并读取正文)、screenshot(截图)、extract(按CSS选择器抓取文本)、fill(向输入框填入文本)、click(点击元素)。当用户要求查网页、看网页内容、截图、抓取网页数据时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["open", "screenshot", "extract", "fill", "click"]},
+                    "url": {"type": "string", "description": "http/https 网址"},
+                    "selector": {"type": "string", "description": "CSS 选择器（extract/fill/click 用）"},
+                    "text": {"type": "string", "description": "填入输入框的文本（fill 用）"}
+                },
+                "required": ["action"]
+            }
+        }
+    }
+]
+
+
+def _call_provider_tools(provider: str, base: str, key: str, model: str, history: list, system_prompt: str, tools: list):
+    """openai 兼容通道返回完整 message（含 tool_calls）；claude/ollama 退化为普通调用。"""
+    if provider in ("claude", "ollama"):
+        text = _call_single_provider(provider, base, key, model, history, system_prompt)
+        return {"role": "assistant", "content": text}
+    payload = {"model": model, "messages": history, "temperature": 0.7, "max_tokens": 800}
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    resp = requests.post(
+        base + PROVIDER_PRESETS[provider]["chat"],
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]
+
+
+def _exec_shell_tool(cmd: str):
+    """在线程池中执行 shell（元神工具用），返回 (exit_code, output)。"""
+    proc = subprocess.run(cmd, shell=True, cwd=os.path.expanduser("~"),
+                          capture_output=True, text=True, timeout=30)
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip() or "(无输出)"
+    return proc.returncode, out
+
+
+async def _run_meta_tool(name: str, args: dict) -> str:
+    """执行元神工具并落审计日志，返回给 LLM 的文本结果。重活（shell/playwright）走线程池。"""
+    try:
+        if name == "exec_command":
+            cmd = (args.get("command") or "").strip()
+            if not cmd:
+                return "⛔ 命令为空"
+            if DANGER_RE.search(cmd):
+                return f"⛔ 危险命令已拦截：{cmd}。此操作需用户在终端面板手动确认执行。"
+            try:
+                exit_code, out = await asyncio.to_thread(_exec_shell_tool, cmd)
+            except subprocess.TimeoutExpired:
+                exit_code, out = -1, "⛔ 命令执行超时 30s，已终止"
+            conn = get_db()
+            conn.execute(
+                "INSERT INTO exec_log (ts,agent_id,command,status,exit_code,output,confirmed) VALUES (?,?,?,?,?,?,?)",
+                (datetime.now().isoformat(), META_PID, cmd,
+                 "success" if exit_code == 0 else "error", exit_code, out[:4000], 1),
+            )
+            conn.commit()
+            conn.close()
+            return f"[exit {exit_code}]\n{out[:2000]}"
+        elif name == "browser_action":
+            action = args.get("action") or ""
+            url = (args.get("url") or "").strip()
+            if url and not (url.startswith("http://") or url.startswith("https://")):
+                return "⛔ 仅允许 http/https 地址"
+            res = await asyncio.to_thread(
+                _browser_run, action, url, (args.get("selector") or "").strip(), args.get("text") or "",
+            )
+            conn = get_db()
+            conn.execute(
+                "INSERT INTO browser_log (ts,agent_id,action,url,status,detail) VALUES (?,?,?,?,?,?)",
+                (datetime.now().isoformat(), META_PID, action, url,
+                 "success" if res.get("ok") else "error",
+                 (res.get("error") or "")[:500] or f"{res.get('title','')} · {res.get('count','')}项"[:500]),
+            )
+            conn.commit()
+            conn.close()
+            if not res.get("ok"):
+                return f"⛔ {res.get('error')}"
+            if action == "screenshot":
+                return f"[截图成功] {res.get('title','')} · {res.get('size',0)}B · URL: {res.get('url')}（图片可在浏览器面板查看）"
+            return json.dumps(res, ensure_ascii=False)[:2000]
+        return f"❌ 未知工具 {name}"
+    except subprocess.TimeoutExpired:
+        return "⛔ 命令执行超时 30s，已终止"
+    except Exception as e:
+        return f"❌ 工具执行异常：{type(e).__name__}: {str(e)[:300]}"
+
+
+async def _meta_chat_with_tools(history: list, system_prompt: str) -> str:
+    """元神对话工具循环：最多 6 轮（支持多步工具操作），基于工具结果让 LLM 总结回复。"""
+    cands = _available_providers(META_PID)
+    if not cands:
+        return "[元神·离线] 当前未配置可用模型 Key。"
+    last_err = ""
+    last_content = ""
+    for _round in range(6):
+        for provider, base, key, model in cands:
+            try:
+                t0 = datetime.now()
+                msg = _call_provider_tools(provider, base, key, model, history, system_prompt, META_TOOLS)
+                latency = int((datetime.now() - t0).total_seconds() * 1000)
+                _log_usage(META_PID, provider, model, latency, "success")
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    history.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
+                    for tc in tool_calls:
+                        fname = tc.get("function", {}).get("name", "")
+                        try:
+                            fargs = json.loads(tc.get("function", {}).get("arguments") or "{}")
+                        except Exception:
+                            fargs = {}
+                        history.append({"role": "tool", "tool_call_id": tc.get("id"),
+                                        "content": await _run_meta_tool(fname, fargs)})
+                    break  # 工具已执行，进入下一轮让 LLM 总结
+                last_content = (msg.get("content") or "").strip()
+                return last_content
+            except Exception as e:
+                last_err = f"{provider}: {e}"
+                continue
+        else:
+            break  # 所有 provider 失败
+    if last_err:
+        return f"[元神·降级] 工具调用链路异常（{last_err[:150]}）。"
+    return last_content or "[元神] 已执行多步工具调用，但未生成总结文本。"
 
 
 
@@ -1464,7 +1622,7 @@ def delete_module(pid: str, mid: str):
     return {"ok": True}
 
 
-# ── 角色系统提示词（自主执行链 v0.19.0）──────────────────────────
+# ── 角色系统提示词（自主执行链 v0.20.0）──────────────────────────
 ROLE_SYSTEMS = {
     "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
     "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
@@ -1482,7 +1640,7 @@ ROLE_NAMES = {
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
-    """项目群聊对话（v0.19.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
+    """项目群聊对话（v0.20.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
@@ -2507,7 +2665,7 @@ async def meta_chat(req: Request):
             continue
         role = "assistant" if r["kind"] == "meta" else "user"
         hist.append({"role": role, "content": r["text"]})
-    reply = call_llm(META_PID, hist, META_SYSTEM)
+    reply = await _meta_chat_with_tools(hist, META_SYSTEM)  # v0.20.0：元神对话工具调用（exec/浏览器）
     # 落库元神回复
     conn = get_db()
     conn.execute(
