@@ -49,7 +49,7 @@ META_SYSTEM = """你是「元神」，岳衡（ChooseWiki 选择学习法品牌�
 - 简洁、有主见，给可执行建议；不堆砌、不谄媚。
 - 涉及团队/进度时，以"组织 / 监督 / 兜底"的视角回应。
 
-【可用工具（v0.23.0）】
+【可用工具（v0.25.0）】
 - 你有两个工具可调用：exec_command（代岳衡在电脑上执行命令）与 browser_action（无头浏览器：打开网页/截图/抓取/填表/点击）。
 - 当岳衡要求执行命令、查看网页、截图、抓取网页信息时，**必须调用对应工具获取真实结果后再回答，不要凭空编造**。
 - 工具返回失败时如实说明，必要时给出替代建议。
@@ -73,7 +73,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.23.0")
+app = FastAPI(title="分身 v1 后端", version="0.25.0")
 
 
 def get_db():
@@ -138,6 +138,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS browser_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT, agent_id TEXT, action TEXT, url TEXT, status TEXT, detail TEXT
+        );
+        CREATE TABLE IF NOT EXISTS file_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT, agent_id TEXT, action TEXT, path TEXT, status TEXT, detail TEXT
         );
         CREATE TABLE IF NOT EXISTS long_term_memory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -209,7 +213,8 @@ def init_db():
             is_builtin INTEGER DEFAULT 0,
             ts TEXT,
             goal TEXT DEFAULT '',
-            roles TEXT DEFAULT '[]'
+            roles TEXT DEFAULT '[]',
+            meta TEXT DEFAULT '{}'
         );
         CREATE TABLE IF NOT EXISTS modules (
             id TEXT PRIMARY KEY,
@@ -313,13 +318,15 @@ def init_db():
             "INSERT INTO meta_files (name,ts) VALUES (?,?)",
             [("我的工程规范.md", now), ("写作风格样例.txt", now)],
         )
-    # 迁移：旧库 project_templates 补 goal/roles 列（幂等，v0.23.0）
+    # 迁移：旧库 project_templates 补列（幂等，v0.25.0+）
     try:
         tcols = [r[1] for r in cur.execute("PRAGMA table_info(project_templates)").fetchall()]
         if "goal" not in tcols:
             cur.execute("ALTER TABLE project_templates ADD COLUMN goal TEXT DEFAULT ''")
         if "roles" not in tcols:
             cur.execute("ALTER TABLE project_templates ADD COLUMN roles TEXT DEFAULT '[]'")
+        if "meta" not in tcols:
+            cur.execute("ALTER TABLE project_templates ADD COLUMN meta TEXT DEFAULT '{}'")
     except Exception:
         pass
     conn.commit()
@@ -649,7 +656,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.23.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.25.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -710,42 +717,62 @@ async def update_project(pid: str, req: Request):
     return {"ok": True}
 
 
-# ── API：项目模板（v0.23.0 多项目模板沉淀）────────────────────────
+# ── API：项目模板（v0.25.0 多项目模板沉淀）────────────────────────
 BUILTIN_TEMPLATES = [
     {"name": "标准 Web 应用", "desc": "登录 → 支付 → 内容列表，最常见的 MVP 结构",
      "goal": "一个带账号体系、支付与内容展示的 Web 应用 MVP",
      "roles": ["architect", "backend", "frontend", "tester"],
-     "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "支付", "owner_role": "后端"}, {"name": "内容/题库列表", "owner_role": "前端"}]},
+     "meta": {"version": "1.0", "tags": ["web", "mvp", "sass"], "scenario": "带账号+支付+内容展示的通用 Web 应用起步"},
+     "modules": [{"name": "登录/注册", "owner_role": "后端", "depends_on": []},
+                 {"name": "支付", "owner_role": "后端", "depends_on": ["登录/注册"]},
+                 {"name": "内容/题库列表", "owner_role": "前端", "depends_on": ["登录/注册"]}]},
     {"name": "电商小程序", "desc": "用户 → 商品 → 购物车 → 订单 → 支付",
      "goal": "一个可下单支付的电商小程序（用户/商品/购物车/订单/支付闭环）",
      "roles": ["architect", "backend", "frontend", "tester"],
-     "modules": [{"name": "用户中心", "owner_role": "后端"}, {"name": "商品管理", "owner_role": "后端"}, {"name": "购物车", "owner_role": "后端"}, {"name": "订单", "owner_role": "后端"}, {"name": "支付", "owner_role": "后端"}, {"name": "商城页面", "owner_role": "前端"}]},
+     "meta": {"version": "1.0", "tags": ["电商", "小程序", "交易"], "scenario": "需要下单支付闭环的电商小程序"},
+     "modules": [{"name": "用户中心", "owner_role": "后端", "depends_on": []},
+                 {"name": "商品管理", "owner_role": "后端", "depends_on": []},
+                 {"name": "购物车", "owner_role": "后端", "depends_on": ["用户中心", "商品管理"]},
+                 {"name": "订单", "owner_role": "后端", "depends_on": ["购物车", "用户中心"]},
+                 {"name": "支付", "owner_role": "后端", "depends_on": ["订单"]},
+                 {"name": "商城页面", "owner_role": "前端", "depends_on": ["购物车", "商品管理"]}]},
     {"name": "内容社区", "desc": "登录 → 发帖 → 评论 → 关注 → 内容流",
      "goal": "一个可发帖评论互动的社区（登录/发帖/评论/关注/信息流）",
      "roles": ["architect", "backend", "frontend", "tester"],
-     "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "发帖/编辑", "owner_role": "后端"}, {"name": "评论/互动", "owner_role": "后端"}, {"name": "关注/关系", "owner_role": "后端"}, {"name": "内容流页面", "owner_role": "前端"}]},
+     "meta": {"version": "1.0", "tags": ["社区", "UGC", "内容"], "scenario": "需要用户产出内容与互动的社区产品"},
+     "modules": [{"name": "登录/注册", "owner_role": "后端", "depends_on": []},
+                 {"name": "发帖/编辑", "owner_role": "后端", "depends_on": ["登录/注册"]},
+                 {"name": "评论/互动", "owner_role": "后端", "depends_on": ["发帖/编辑"]},
+                 {"name": "关注/关系", "owner_role": "后端", "depends_on": ["登录/注册"]},
+                 {"name": "内容流页面", "owner_role": "前端", "depends_on": ["发帖/编辑", "关注/关系"]}]},
     {"name": "AI 工具应用", "desc": "登录 → AI 对话 → 用量计费 → 管理后台",
      "goal": "一个按量计费的 AI 工具应用（对话生成 + 用量计费 + 管理后台）",
      "roles": ["architect", "backend", "frontend", "tester"],
-     "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "AI 对话/生成", "owner_role": "后端"}, {"name": "用量/计费", "owner_role": "后端"}, {"name": "管理后台", "owner_role": "后端"}, {"name": "对话界面", "owner_role": "前端"}]},
+     "meta": {"version": "1.0", "tags": ["AI", "SaaS", "计费"], "scenario": "按量计费、带管理后台的 AI 工具"},
+     "modules": [{"name": "登录/注册", "owner_role": "后端", "depends_on": []},
+                 {"name": "AI 对话/生成", "owner_role": "后端", "depends_on": ["登录/注册"]},
+                 {"name": "用量/计费", "owner_role": "后端", "depends_on": ["AI 对话/生成"]},
+                 {"name": "管理后台", "owner_role": "后端", "depends_on": ["登录/注册"]},
+                 {"name": "对话界面", "owner_role": "前端", "depends_on": ["AI 对话/生成"]}]},
 ]
 
 
 def _seed_templates(conn):
-    """内置模板 upsert（幂等）：不存在则插入，存在则按 name 更新 desc/goal/roles/modules（v0.23.0 支持补新字段）。"""
+    """内置模板 upsert（幂等）：不存在则插入，存在则按 name 更新 desc/goal/roles/modules/meta（v0.25.0 支持补新字段）。"""
     for t in BUILTIN_TEMPLATES:
         row = conn.execute("SELECT id FROM project_templates WHERE name=? AND is_builtin=1", (t["name"],)).fetchone()
         if row:
             conn.execute(
-                "UPDATE project_templates SET desc=?,goal=?,roles=?,modules=? WHERE id=?",
+                "UPDATE project_templates SET desc=?,goal=?,roles=?,modules=?,meta=? WHERE id=?",
                 (t["desc"], t.get("goal", ""), json.dumps(t.get("roles", []), ensure_ascii=False),
-                 json.dumps(t["modules"], ensure_ascii=False), row["id"]),
+                 json.dumps(t["modules"], ensure_ascii=False), json.dumps(t.get("meta", {}), ensure_ascii=False), row["id"]),
             )
         else:
             conn.execute(
-                "INSERT INTO project_templates (name,desc,modules,is_builtin,ts,goal,roles) VALUES (?,?,?,1,?,?,?)",
+                "INSERT INTO project_templates (name,desc,modules,is_builtin,ts,goal,roles,meta) VALUES (?,?,?,1,?,?,?,?)",
                 (t["name"], t["desc"], json.dumps(t["modules"], ensure_ascii=False), datetime.now().isoformat(),
-                 t.get("goal", ""), json.dumps(t.get("roles", []), ensure_ascii=False)),
+                 t.get("goal", ""), json.dumps(t.get("roles", []), ensure_ascii=False),
+                 json.dumps(t.get("meta", {}), ensure_ascii=False)),
             )
 
 
@@ -767,6 +794,10 @@ def list_templates():
             d["roles"] = json.loads(d["roles"] or "[]")
         except Exception:
             d["roles"] = []
+        try:
+            d["meta"] = json.loads(d.get("meta") or "{}")
+        except Exception:
+            d["meta"] = {}
         out.append(d)
     return out
 
@@ -780,9 +811,10 @@ async def save_template(req: Request):
         return {"ok": False, "error": "模板名与模块列表必填"}
     conn = get_db()
     conn.execute(
-        "INSERT INTO project_templates (name,desc,modules,is_builtin,ts,goal,roles) VALUES (?,?,?,0,?,?,?)",
+        "INSERT INTO project_templates (name,desc,modules,is_builtin,ts,goal,roles,meta) VALUES (?,?,?,0,?,?,?,?)",
         (name, data.get("desc", ""), json.dumps(modules, ensure_ascii=False), datetime.now().isoformat(),
-         data.get("goal", ""), json.dumps(data.get("roles") or [], ensure_ascii=False)),
+         data.get("goal", ""), json.dumps(data.get("roles") or [], ensure_ascii=False),
+         json.dumps(data.get("meta") or {}, ensure_ascii=False)),
     )
     conn.commit()
     tid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1070,7 +1102,7 @@ def exec_log():
 
 
 
-# ── API：浏览器自动化（v0.23.0，playwright + 系统 Chrome headless）────
+# ── API：浏览器自动化（v0.25.0，playwright + 系统 Chrome headless）────
 # 动作：open(打开+取标题/正文摘要) / screenshot(截图 base64) /
 #       extract(按 selector 抓文本) / fill(填表) / click(点击)
 # 安全：仅 http/https URL；30s 超时；全量审计 browser_log
@@ -1182,8 +1214,16 @@ def browser_log():
     return [dict(r) for r in rows]
 
 
+@app.get("/api/file/log")
+def file_log():
+    conn = get_db()
+    rows = conn.execute("SELECT id,ts,agent_id,action,path,status,detail FROM file_log ORDER BY id DESC LIMIT 50").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
-# ── 元神工具调用（v0.23.0：Function Calling——对话直接驱动 exec/浏览器）──
+
+
+# ── 元神工具调用（v0.25.0：Function Calling——对话直接驱动 exec/浏览器）──
 META_TOOLS = [
     {
         "type": "function",
@@ -1213,6 +1253,49 @@ META_TOOLS = [
                     "text": {"type": "string", "description": "填入输入框的文本（fill 用）"}
                 },
                 "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取用户电脑上的文本文件内容（返回前 4000 字符）。路径限制在用户主目录（~）下，禁止访问 .ssh/.aws/.git 等敏感目录。当用户要求查看某文件内容、读配置、读代码时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "文件绝对路径，例如 /Users/a13401098230/Desktop/notes.md 或 ~/Desktop/notes.md"}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "在用户电脑上写入文本文件（覆盖已有内容）。路径限制在用户主目录下，禁止写入敏感目录。文件内容上限 50KB。当用户要求创建/修改文档、代码、配置时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "文件绝对路径，例如 ~/Desktop/报告.md"},
+                    "content": {"type": "string", "description": "要写入的完整文本内容"}
+                },
+                "required": ["path", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "列出用户电脑上某个目录下的文件和文件夹（一层，不递归）。路径限制在用户主目录下。当用户要求查看目录结构、找文件时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "目录绝对路径，例如 ~/Desktop 或 ~/WorkBuddy"}
+                },
+                "required": ["path"]
             }
         }
     }
@@ -1290,6 +1373,8 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
             if action == "screenshot":
                 return f"[截图成功] {res.get('title','')} · {res.get('size',0)}B · URL: {res.get('url')}（图片可在浏览器面板查看）"
             return json.dumps(res, ensure_ascii=False)[:2000]
+        elif name in ("read_file", "write_file", "list_files"):
+            return await _run_file_tool(name, args, agent_id)
         return f"❌ 未知工具 {name}"
     except subprocess.TimeoutExpired:
         return "⛔ 命令执行超时 30s，已终止"
@@ -1297,8 +1382,106 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
         return f"❌ 工具执行异常：{type(e).__name__}: {str(e)[:300]}"
 
 
+# ── 文件执行器（v0.25.0：读/写/列目录，安全护栏 + 全量审计）────────
+FILE_SENSITIVE_PARTS = {".ssh", ".aws", ".gnupg", ".git", "Library", "System", "Applications", "private", "etc", "usr", "bin", "sbin", "var", "tmp", "cores"}
+FILE_MAX_WRITE = 50 * 1024  # 单文件写入上限 50KB
+
+
+def _safe_file_path(path: str):
+    """校验并规范化路径：必须在用户主目录下且不触碰敏感目录。返回绝对路径或 None。"""
+    if not path or not isinstance(path, str):
+        return None
+    path = os.path.expanduser(path.strip())
+    if not path.startswith("/"):
+        return None
+    home = os.path.expanduser("~")
+    try:
+        real = os.path.realpath(path)
+        real_home = os.path.realpath(home)
+    except Exception:
+        return None
+    if not (real == real_home or real.startswith(real_home + os.sep)):
+        return None
+    parts = real[len(real_home):].strip(os.sep).split(os.sep)
+    if any(p in FILE_SENSITIVE_PARTS for p in parts):
+        return None
+    return real
+
+
+def _list_files_tool(path: str):
+    real = _safe_file_path(path)
+    if not real:
+        return "⛔ 路径不安全或被禁止（仅限用户主目录下，避开 .ssh/.git/系统目录等）"
+    if not os.path.isdir(real):
+        return f"⛔ 目录不存在: {path}"
+    try:
+        items = sorted(os.listdir(real))
+        lines = []
+        for it in items:
+            full = os.path.join(real, it)
+            is_dir = os.path.isdir(full)
+            size = "" if is_dir else f"（{os.path.getsize(full)}B）"
+            lines.append(f"{'📁' if is_dir else '📄'} {it}{size}")
+        return f"[目录 {path} · {len(items)} 项]\n" + "\n".join(lines[:100])
+    except Exception as e:
+        return f"⛔ 列目录失败: {e}"
+
+
+def _read_file_tool(path: str):
+    real = _safe_file_path(path)
+    if not real:
+        return "⛔ 路径不安全或被禁止（仅限用户主目录下，避开 .ssh/.git/系统目录等）"
+    if not os.path.isfile(real):
+        return f"⛔ 文件不存在: {path}"
+    try:
+        with open(real, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(4000)
+        return f"[文件 {path} · {os.path.getsize(real)}B]\n{content}"
+    except Exception as e:
+        return f"⛔ 读取失败: {e}"
+
+
+def _write_file_tool(path: str, content: str):
+    real = _safe_file_path(path)
+    if not real:
+        return "⛔ 路径不安全或被禁止（仅限用户主目录下，避开 .ssh/.git/系统目录等）"
+    if len(content) > FILE_MAX_WRITE:
+        return f"⛔ 内容超过 {FILE_MAX_WRITE // 1024}KB 上限"
+    try:
+        os.makedirs(os.path.dirname(real), exist_ok=True)
+        with open(real, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"[已写入] {path} · {os.path.getsize(real)}B"
+    except Exception as e:
+        return f"⛔ 写入失败: {e}"
+
+
+async def _run_file_tool(name: str, args: dict, agent_id: str) -> str:
+    """执行文件工具（线程池）并落审计 file_log。"""
+    path = args.get("path") or ""
+    content = args.get("content") or ""
+    if name == "list_files":
+        out = await asyncio.to_thread(_list_files_tool, path)
+    elif name == "read_file":
+        out = await asyncio.to_thread(_read_file_tool, path)
+    elif name == "write_file":
+        out = await asyncio.to_thread(_write_file_tool, path, content)
+    else:
+        out = f"⛔ 未知文件工具 {name}"
+    real = _safe_file_path(path) or path
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO file_log (ts,agent_id,action,path,status,detail) VALUES (?,?,?,?,?,?)",
+        (datetime.now().isoformat(), agent_id, name, real,
+         "success" if not out.startswith("⛔") else "error", out[:500]),
+    )
+    conn.commit()
+    conn.close()
+    return out
+
+
 async def _chat_with_tools(agent_id: str, history: list, system_prompt: str) -> str:
-    """通用工具对话循环（元神/群聊共用，v0.23.0）：最多 6 轮（支持多步工具操作）。"""
+    """通用工具对话循环（元神/群聊共用，v0.25.0）：最多 6 轮（支持多步工具操作）。"""
     cands = _available_providers(agent_id)
     if not cands:
         return "[分身·离线] 当前该角色未配置可用模型 Key。"
@@ -1737,7 +1920,7 @@ def delete_module(pid: str, mid: str):
     return {"ok": True}
 
 
-# ── 角色系统提示词（自主执行链 v0.23.0）──────────────────────────
+# ── 角色系统提示词（自主执行链 v0.25.0）──────────────────────────
 ROLE_SYSTEMS = {
     "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
     "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
@@ -1755,7 +1938,7 @@ ROLE_NAMES = {
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
-    """项目群聊对话（v0.23.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
+    """项目群聊对话（v0.25.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
@@ -1793,7 +1976,7 @@ async def project_chat(pid: str, req: Request):
     ).fetchall()
     conn.close()
 
-    # ── Step 1: 元神分析 → 调度计划（v0.23.0：支持先调工具查状态再调度）──
+    # ── Step 1: 元神分析 → 调度计划（v0.25.0：支持先调工具查状态再调度）──
     dispatch_sys = (
         "你是「元神」，在项目群聊中接收用户指令后，需要分析并调度团队执行。\n"
         "根据用户指令和项目当前状态，判断是否需要调度团队执行：\n"
@@ -1801,7 +1984,7 @@ async def project_chat(pid: str, req: Request):
         "- 如果是闲聊/提问/汇报，只在 reply 中回答，actions 为空数组\n\n"
         f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
         f"{mod_desc}\n{task_desc}\n\n"
-        "【可用工具（v0.23.0）】你可调用 exec_command（执行命令/查看文件/查系统状态）与 browser_action（打开网页/截图/抓取）"
+        "【可用工具（v0.25.0）】你可调用 exec_command（执行命令/查看文件/查系统状态）与 browser_action（打开网页/截图/抓取）"
         "获取真实信息后再回复或调度，不要凭空编造。危险命令会被拦截。\n\n"
         "输出格式（必须为合法 JSON）：\n"
         '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
@@ -1858,7 +2041,7 @@ async def project_chat(pid: str, req: Request):
         conn.commit()
         conn.close()
 
-        # 调用角色 AI 执行（v0.23.0：角色也可调工具——跑命令验证/查资料）
+        # 调用角色 AI 执行（v0.25.0：角色也可调工具——跑命令验证/查资料）
         role_sys = ROLE_SYSTEMS[role]
         role_hist = [
             {"role": "system", "content": role_sys + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"},
@@ -2782,7 +2965,7 @@ async def meta_chat(req: Request):
             continue
         role = "assistant" if r["kind"] == "meta" else "user"
         hist.append({"role": role, "content": r["text"]})
-    reply = await _chat_with_tools(META_PID, hist, META_SYSTEM)  # v0.23.0：元神对话工具调用（exec/浏览器）
+    reply = await _chat_with_tools(META_PID, hist, META_SYSTEM)  # v0.25.0：元神对话工具调用（exec/浏览器）
     # 落库元神回复
     conn = get_db()
     conn.execute(
