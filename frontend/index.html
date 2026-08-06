@@ -157,13 +157,20 @@
     .app { max-width:100%; padding-bottom:50px; }
     .topbar { padding:0 10px; gap:8px; }
     .brand small { display:none; }
-    .sidenav { position:fixed; left:0; right:0; bottom:0; top:auto; width:100%; flex-direction:row; border-right:none; border-top:0.5px solid var(--gray-200); padding:4px 2px; gap:0; z-index:45; background:var(--gray-50); }
-    .sidenav .navitem { flex:1; justify-content:center; padding:8px 2px; font-size:11px; gap:4px; }
+    .sidenav { position:fixed; left:0; right:0; bottom:0; top:auto; width:100%; flex-direction:row; border-right:none; border-top:0.5px solid var(--gray-200); padding:4px 2px; gap:0; z-index:45; background:var(--gray-50); padding-bottom:calc(4px + env(safe-area-inset-bottom)); }
+    .sidenav .navitem { flex:1; justify-content:center; padding:9px 2px; font-size:11px; gap:4px; min-height:44px; }
     .sidenav .navitem .dotk { display:none; }
     .sidenav .foot { display:none; }
     .body { flex-direction:column; }
     .rooms { width:100%; border-right:none; }
+    .room { padding:13px 14px; min-height:46px; }
     .chat { width:100%; }
+    .chat-body { padding:12px 12px; }
+    .chat-head { padding:11px 12px; }
+    .bubble { max-width:88%; }
+    .chat-input { padding:10px 10px; padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
+    .chat-input input { font-size:16px; padding:10px 14px; } /* ≥16px 防 iOS 聚焦自动放大 */
+    .chat-input .send { width:40px; height:40px; }
     .mobile-only { display:inline-block; }
     #sec-chat .chat { display:none; }
     #sec-chat.chat-open .chat { display:flex; }
@@ -172,7 +179,14 @@
     #sec-meta .chat { width:100%; }
     #sec-meta .rooms { width:100%; border-right:none; border-top:0.5px solid var(--gray-200); }
     .grid { grid-template-columns:1fr; }
+    .grid-wrap { padding:12px 12px; }
+    .btn, .btn.sm, .btn.primary { min-height:40px; padding:10px 14px; }
+    input, select, textarea { font-size:16px; }
+    .mask .modal { width:94vw !important; max-width:94vw !important; }
+    .steps .st { min-width:0; }
+    #rolePick .rp { min-height:44px; display:flex; align-items:center; }
   }
+  @media (max-width:768px){ html { -webkit-tap-highlight-color:transparent; } }
 </style>
 </head>
 <body>
@@ -316,7 +330,7 @@
         </div>
       </div>
 
-      <!-- 浏览器工具（v0.23.0 元神可代你操作浏览器） -->
+      <!-- 浏览器工具（v0.25.0 元神可代你操作浏览器） -->
       <div class="section" id="sec-browser">
         <div class="grid-wrap">
           <div class="grid-head"><span class="t">浏览器工具 · 元神网页自动化</span><span class="rl" style="font-size:11px;color:var(--gray-400)">playwright + 系统 Chrome（headless），打开/截图/填表/点击/抓取</span></div>
@@ -709,7 +723,7 @@ function backToRooms(){ document.getElementById('sec-chat').classList.remove('ch
 async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
 async function sendMsg(){
   const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value='';
-  // v0.23.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
+  // v0.25.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
   // 不再前端 postMsg（后端 project_chat 统一落库，避免消息重复）
   const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='元神分析中…';
   if(inp) inp.disabled=true;
@@ -922,7 +936,7 @@ function showTemplateDesc(){
 function applyTemplate(){
   const sel=document.getElementById('wTemplate'); const t=wTemplates.find(x=>String(x.id)===String(sel?.value));
   if(!t) return;
-  modRows=(t.modules||[]).map(m=>({name:m.name, owner:(m.owner_role==='前端'?'前端':'后端')}));
+  modRows=(t.modules||[]).map(m=>({name:m.name, owner:(m.owner_role==='前端'?'前端':'后端'), depends_on:m.depends_on||[]}));
   renderModRows(); showTemplateDesc();
   // 目标联动（模板带 goal 且用户未填时自动填充）
   const goal=document.getElementById('wGoal');
@@ -955,20 +969,28 @@ function renderModRows(){
   const el=document.getElementById('modEditor'); el.innerHTML='';
   modRows.forEach((m,i)=>{
     const row=document.createElement('div');
-    row.style.cssText='display:flex;gap:6px;margin-bottom:6px;align-items:center';
+    row.style.cssText='display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap';
+    const depOpts=modRows.map((d,di)=>`<option value="${d.name}" ${(m.depends_on||[]).includes(d.name)?'selected':''}>依赖:${d.name}</option>`).join('');
     row.innerHTML=`<input id="modName${i}" value="${m.name}" placeholder="模块名" style="flex:2;padding:6px 8px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;min-width:0">
       <select id="modRole${i}" style="flex:1;padding:6px 6px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff">
         <option ${m.owner==='后端'?'selected':''}>后端</option><option ${m.owner==='前端'?'selected':''}>前端</option><option ${m.owner==='产品'?'selected':''}>产品</option>
+      </select>
+      <select id="modDep${i}" multiple size="1" style="flex:1.5;padding:6px 6px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:11px;background:#fff;color:var(--gray-500)" title="依赖模块（可多选）">
+        <option value="">无依赖</option>${depOpts}
       </select>
       <button class="btn sm" style="color:var(--red)" onclick="delModRow(${i})">✕</button>`;
     el.appendChild(row);
   });
 }
-function addModRow(){ modRows.push({name:'',owner:'后端'}); renderModRows(); }
+function addModRow(){ modRows.push({name:'',owner:'后端',depends_on:[]}); renderModRows(); }
 function delModRow(i){ modRows.splice(i,1); renderModRows(); }
 function collectModRows(){
-  return modRows.map((m,i)=>({name:document.getElementById('modName'+i)?.value.trim()||m.name, owner_role:document.getElementById('modRole'+i)?.value||'后端'}))
-    .filter(m=>m.name);
+  return modRows.map((m,i)=>{
+    const dep=document.getElementById('modDep'+i);
+    return {name:document.getElementById('modName'+i)?.value.trim()||m.name,
+            owner_role:document.getElementById('modRole'+i)?.value||'后端',
+            depends_on:dep?[...dep.selectedOptions].map(o=>o.value).filter(v=>v):(m.depends_on||[])}
+  }).filter(m=>m.name);
 }
 async function wizardNext(){ if(wStep===1){ if(!document.getElementById('wName').value.trim()){alert('请填写项目名称');return;}
     wStep=2; document.getElementById('wz1').style.display='none'; document.getElementById('wz2').style.display=''; document.getElementById('ws2').classList.add('on'); document.getElementById('wNext').textContent='下一步'; }
@@ -1131,7 +1153,7 @@ async function loadTermLog(){
   }catch(e){ out.textContent='加载失败'; }
 }
 
-/* ── 浏览器工具（v0.23.0）── */
+/* ── 浏览器工具（v0.25.0）── */
 async function bwRun(action){
   const url=document.getElementById('bwUrl').value.trim();
   const sel=document.getElementById('bwSel').value.trim();
