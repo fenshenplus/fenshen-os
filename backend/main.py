@@ -49,7 +49,7 @@ META_SYSTEM = """你是「元神」，岳衡（ChooseWiki 选择学习法品牌�
 - 简洁、有主见，给可执行建议；不堆砌、不谄媚。
 - 涉及团队/进度时，以"组织 / 监督 / 兜底"的视角回应。
 
-【可用工具（v0.21.0）】
+【可用工具（v0.23.0）】
 - 你有两个工具可调用：exec_command（代岳衡在电脑上执行命令）与 browser_action（无头浏览器：打开网页/截图/抓取/填表/点击）。
 - 当岳衡要求执行命令、查看网页、截图、抓取网页信息时，**必须调用对应工具获取真实结果后再回答，不要凭空编造**。
 - 工具返回失败时如实说明，必要时给出替代建议。
@@ -73,7 +73,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.21.0")
+app = FastAPI(title="分身 v1 后端", version="0.23.0")
 
 
 def get_db():
@@ -207,7 +207,9 @@ def init_db():
             desc TEXT DEFAULT '',
             modules TEXT NOT NULL,
             is_builtin INTEGER DEFAULT 0,
-            ts TEXT
+            ts TEXT,
+            goal TEXT DEFAULT '',
+            roles TEXT DEFAULT '[]'
         );
         CREATE TABLE IF NOT EXISTS modules (
             id TEXT PRIMARY KEY,
@@ -311,6 +313,15 @@ def init_db():
             "INSERT INTO meta_files (name,ts) VALUES (?,?)",
             [("我的工程规范.md", now), ("写作风格样例.txt", now)],
         )
+    # 迁移：旧库 project_templates 补 goal/roles 列（幂等，v0.23.0）
+    try:
+        tcols = [r[1] for r in cur.execute("PRAGMA table_info(project_templates)").fetchall()]
+        if "goal" not in tcols:
+            cur.execute("ALTER TABLE project_templates ADD COLUMN goal TEXT DEFAULT ''")
+        if "roles" not in tcols:
+            cur.execute("ALTER TABLE project_templates ADD COLUMN roles TEXT DEFAULT '[]'")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -638,7 +649,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.21.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.23.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -699,27 +710,42 @@ async def update_project(pid: str, req: Request):
     return {"ok": True}
 
 
-# ── API：项目模板（v0.21.0 多项目模板沉淀）────────────────────────
+# ── API：项目模板（v0.23.0 多项目模板沉淀）────────────────────────
 BUILTIN_TEMPLATES = [
     {"name": "标准 Web 应用", "desc": "登录 → 支付 → 内容列表，最常见的 MVP 结构",
+     "goal": "一个带账号体系、支付与内容展示的 Web 应用 MVP",
+     "roles": ["architect", "backend", "frontend", "tester"],
      "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "支付", "owner_role": "后端"}, {"name": "内容/题库列表", "owner_role": "前端"}]},
     {"name": "电商小程序", "desc": "用户 → 商品 → 购物车 → 订单 → 支付",
+     "goal": "一个可下单支付的电商小程序（用户/商品/购物车/订单/支付闭环）",
+     "roles": ["architect", "backend", "frontend", "tester"],
      "modules": [{"name": "用户中心", "owner_role": "后端"}, {"name": "商品管理", "owner_role": "后端"}, {"name": "购物车", "owner_role": "后端"}, {"name": "订单", "owner_role": "后端"}, {"name": "支付", "owner_role": "后端"}, {"name": "商城页面", "owner_role": "前端"}]},
     {"name": "内容社区", "desc": "登录 → 发帖 → 评论 → 关注 → 内容流",
+     "goal": "一个可发帖评论互动的社区（登录/发帖/评论/关注/信息流）",
+     "roles": ["architect", "backend", "frontend", "tester"],
      "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "发帖/编辑", "owner_role": "后端"}, {"name": "评论/互动", "owner_role": "后端"}, {"name": "关注/关系", "owner_role": "后端"}, {"name": "内容流页面", "owner_role": "前端"}]},
     {"name": "AI 工具应用", "desc": "登录 → AI 对话 → 用量计费 → 管理后台",
+     "goal": "一个按量计费的 AI 工具应用（对话生成 + 用量计费 + 管理后台）",
+     "roles": ["architect", "backend", "frontend", "tester"],
      "modules": [{"name": "登录/注册", "owner_role": "后端"}, {"name": "AI 对话/生成", "owner_role": "后端"}, {"name": "用量/计费", "owner_role": "后端"}, {"name": "管理后台", "owner_role": "后端"}, {"name": "对话界面", "owner_role": "前端"}]},
 ]
 
 
 def _seed_templates(conn):
-    """首次启动写入内置模板（幂等）。"""
-    n = conn.execute("SELECT COUNT(*) FROM project_templates WHERE is_builtin=1").fetchone()[0]
-    if n == 0:
-        for t in BUILTIN_TEMPLATES:
+    """内置模板 upsert（幂等）：不存在则插入，存在则按 name 更新 desc/goal/roles/modules（v0.23.0 支持补新字段）。"""
+    for t in BUILTIN_TEMPLATES:
+        row = conn.execute("SELECT id FROM project_templates WHERE name=? AND is_builtin=1", (t["name"],)).fetchone()
+        if row:
             conn.execute(
-                "INSERT INTO project_templates (name,desc,modules,is_builtin,ts) VALUES (?,?,?,1,?)",
-                (t["name"], t["desc"], json.dumps(t["modules"], ensure_ascii=False), datetime.now().isoformat()),
+                "UPDATE project_templates SET desc=?,goal=?,roles=?,modules=? WHERE id=?",
+                (t["desc"], t.get("goal", ""), json.dumps(t.get("roles", []), ensure_ascii=False),
+                 json.dumps(t["modules"], ensure_ascii=False), row["id"]),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO project_templates (name,desc,modules,is_builtin,ts,goal,roles) VALUES (?,?,?,1,?,?,?)",
+                (t["name"], t["desc"], json.dumps(t["modules"], ensure_ascii=False), datetime.now().isoformat(),
+                 t.get("goal", ""), json.dumps(t.get("roles", []), ensure_ascii=False)),
             )
 
 
@@ -737,6 +763,10 @@ def list_templates():
             d["modules"] = json.loads(d["modules"])
         except Exception:
             d["modules"] = []
+        try:
+            d["roles"] = json.loads(d["roles"] or "[]")
+        except Exception:
+            d["roles"] = []
         out.append(d)
     return out
 
@@ -750,8 +780,9 @@ async def save_template(req: Request):
         return {"ok": False, "error": "模板名与模块列表必填"}
     conn = get_db()
     conn.execute(
-        "INSERT INTO project_templates (name,desc,modules,is_builtin,ts) VALUES (?,?,?,0,?)",
-        (name, data.get("desc", ""), json.dumps(modules, ensure_ascii=False), datetime.now().isoformat()),
+        "INSERT INTO project_templates (name,desc,modules,is_builtin,ts,goal,roles) VALUES (?,?,?,0,?,?,?)",
+        (name, data.get("desc", ""), json.dumps(modules, ensure_ascii=False), datetime.now().isoformat(),
+         data.get("goal", ""), json.dumps(data.get("roles") or [], ensure_ascii=False)),
     )
     conn.commit()
     tid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1039,7 +1070,7 @@ def exec_log():
 
 
 
-# ── API：浏览器自动化（v0.21.0，playwright + 系统 Chrome headless）────
+# ── API：浏览器自动化（v0.23.0，playwright + 系统 Chrome headless）────
 # 动作：open(打开+取标题/正文摘要) / screenshot(截图 base64) /
 #       extract(按 selector 抓文本) / fill(填表) / click(点击)
 # 安全：仅 http/https URL；30s 超时；全量审计 browser_log
@@ -1152,7 +1183,7 @@ def browser_log():
 
 
 
-# ── 元神工具调用（v0.21.0：Function Calling——对话直接驱动 exec/浏览器）──
+# ── 元神工具调用（v0.23.0：Function Calling——对话直接驱动 exec/浏览器）──
 META_TOOLS = [
     {
         "type": "function",
@@ -1215,8 +1246,8 @@ def _exec_shell_tool(cmd: str):
     return proc.returncode, out
 
 
-async def _run_meta_tool(name: str, args: dict) -> str:
-    """执行元神工具并落审计日志，返回给 LLM 的文本结果。重活（shell/playwright）走线程池。"""
+async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str:
+    """执行工具（exec/浏览器）并落审计日志，返回给 LLM 的文本结果。重活（shell/playwright）走线程池。"""
     try:
         if name == "exec_command":
             cmd = (args.get("command") or "").strip()
@@ -1231,7 +1262,7 @@ async def _run_meta_tool(name: str, args: dict) -> str:
             conn = get_db()
             conn.execute(
                 "INSERT INTO exec_log (ts,agent_id,command,status,exit_code,output,confirmed) VALUES (?,?,?,?,?,?,?)",
-                (datetime.now().isoformat(), META_PID, cmd,
+                (datetime.now().isoformat(), agent_id, cmd,
                  "success" if exit_code == 0 else "error", exit_code, out[:4000], 1),
             )
             conn.commit()
@@ -1248,7 +1279,7 @@ async def _run_meta_tool(name: str, args: dict) -> str:
             conn = get_db()
             conn.execute(
                 "INSERT INTO browser_log (ts,agent_id,action,url,status,detail) VALUES (?,?,?,?,?,?)",
-                (datetime.now().isoformat(), META_PID, action, url,
+                (datetime.now().isoformat(), agent_id, action, url,
                  "success" if res.get("ok") else "error",
                  (res.get("error") or "")[:500] or f"{res.get('title','')} · {res.get('count','')}项"[:500]),
             )
@@ -1266,11 +1297,11 @@ async def _run_meta_tool(name: str, args: dict) -> str:
         return f"❌ 工具执行异常：{type(e).__name__}: {str(e)[:300]}"
 
 
-async def _meta_chat_with_tools(history: list, system_prompt: str) -> str:
-    """元神对话工具循环：最多 6 轮（支持多步工具操作），基于工具结果让 LLM 总结回复。"""
-    cands = _available_providers(META_PID)
+async def _chat_with_tools(agent_id: str, history: list, system_prompt: str) -> str:
+    """通用工具对话循环（元神/群聊共用，v0.23.0）：最多 6 轮（支持多步工具操作）。"""
+    cands = _available_providers(agent_id)
     if not cands:
-        return "[元神·离线] 当前未配置可用模型 Key。"
+        return "[分身·离线] 当前该角色未配置可用模型 Key。"
     last_err = ""
     last_content = ""
     for _round in range(6):
@@ -1279,7 +1310,7 @@ async def _meta_chat_with_tools(history: list, system_prompt: str) -> str:
                 t0 = datetime.now()
                 msg = _call_provider_tools(provider, base, key, model, history, system_prompt, META_TOOLS)
                 latency = int((datetime.now() - t0).total_seconds() * 1000)
-                _log_usage(META_PID, provider, model, latency, "success")
+                _log_usage(agent_id, provider, model, latency, "success")
                 tool_calls = msg.get("tool_calls")
                 if tool_calls:
                     history.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
@@ -1290,7 +1321,7 @@ async def _meta_chat_with_tools(history: list, system_prompt: str) -> str:
                         except Exception:
                             fargs = {}
                         history.append({"role": "tool", "tool_call_id": tc.get("id"),
-                                        "content": await _run_meta_tool(fname, fargs)})
+                                        "content": await _run_meta_tool(fname, fargs, agent_id)})
                     break  # 工具已执行，进入下一轮让 LLM 总结
                 last_content = (msg.get("content") or "").strip()
                 return last_content
@@ -1300,8 +1331,8 @@ async def _meta_chat_with_tools(history: list, system_prompt: str) -> str:
         else:
             break  # 所有 provider 失败
     if last_err:
-        return f"[元神·降级] 工具调用链路异常（{last_err[:150]}）。"
-    return last_content or "[元神] 已执行多步工具调用，但未生成总结文本。"
+        return f"[分身·降级] 工具调用链路异常（{last_err[:150]}）。"
+    return last_content or "[分身] 已执行多步工具调用，但未生成总结文本。"
 
 
 
@@ -1706,7 +1737,7 @@ def delete_module(pid: str, mid: str):
     return {"ok": True}
 
 
-# ── 角色系统提示词（自主执行链 v0.21.0）──────────────────────────
+# ── 角色系统提示词（自主执行链 v0.23.0）──────────────────────────
 ROLE_SYSTEMS = {
     "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
     "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
@@ -1724,7 +1755,7 @@ ROLE_NAMES = {
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
-    """项目群聊对话（v0.21.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
+    """项目群聊对话（v0.23.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
@@ -1762,7 +1793,7 @@ async def project_chat(pid: str, req: Request):
     ).fetchall()
     conn.close()
 
-    # ── Step 1: 元神分析 → 调度计划 ──
+    # ── Step 1: 元神分析 → 调度计划（v0.23.0：支持先调工具查状态再调度）──
     dispatch_sys = (
         "你是「元神」，在项目群聊中接收用户指令后，需要分析并调度团队执行。\n"
         "根据用户指令和项目当前状态，判断是否需要调度团队执行：\n"
@@ -1770,6 +1801,8 @@ async def project_chat(pid: str, req: Request):
         "- 如果是闲聊/提问/汇报，只在 reply 中回答，actions 为空数组\n\n"
         f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
         f"{mod_desc}\n{task_desc}\n\n"
+        "【可用工具（v0.23.0）】你可调用 exec_command（执行命令/查看文件/查系统状态）与 browser_action（打开网页/截图/抓取）"
+        "获取真实信息后再回复或调度，不要凭空编造。危险命令会被拦截。\n\n"
         "输出格式（必须为合法 JSON）：\n"
         '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
         '"actions": [{"role": "frontend|backend|architect|tester", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令"}]}\n'
@@ -1782,7 +1815,7 @@ async def project_chat(pid: str, req: Request):
         role = "assistant" if r["kind"] in ("agent", "meta") else "user"
         hist.append({"role": role, "content": r["text"]})
     hist.append({"role": "user", "content": user_text})
-    dispatch_reply = call_llm("__meta__", hist, dispatch_sys)
+    dispatch_reply = await _chat_with_tools("__meta__", hist, dispatch_sys)
 
     # 解析 JSON（容错：LLM 可能返回非 JSON）
     meta_reply = dispatch_reply
@@ -1825,13 +1858,13 @@ async def project_chat(pid: str, req: Request):
         conn.commit()
         conn.close()
 
-        # 调用角色 AI 执行
+        # 调用角色 AI 执行（v0.23.0：角色也可调工具——跑命令验证/查资料）
         role_sys = ROLE_SYSTEMS[role]
         role_hist = [
             {"role": "system", "content": role_sys + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"},
-            {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。"},
+            {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
         ]
-        role_reply = call_llm(role, role_hist, role_sys)
+        role_reply = await _chat_with_tools(role, role_hist, role_sys)
 
         # 落库角色回复
         conn = get_db()
@@ -2749,7 +2782,7 @@ async def meta_chat(req: Request):
             continue
         role = "assistant" if r["kind"] == "meta" else "user"
         hist.append({"role": role, "content": r["text"]})
-    reply = await _meta_chat_with_tools(hist, META_SYSTEM)  # v0.21.0：元神对话工具调用（exec/浏览器）
+    reply = await _chat_with_tools(META_PID, hist, META_SYSTEM)  # v0.23.0：元神对话工具调用（exec/浏览器）
     # 落库元神回复
     conn = get_db()
     conn.execute(
