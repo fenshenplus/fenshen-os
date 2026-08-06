@@ -316,7 +316,7 @@
         </div>
       </div>
 
-      <!-- 浏览器工具（v0.21.0 元神可代你操作浏览器） -->
+      <!-- 浏览器工具（v0.23.0 元神可代你操作浏览器） -->
       <div class="section" id="sec-browser">
         <div class="grid-wrap">
           <div class="grid-head"><span class="t">浏览器工具 · 元神网页自动化</span><span class="rl" style="font-size:11px;color:var(--gray-400)">playwright + 系统 Chrome（headless），打开/截图/填表/点击/抓取</span></div>
@@ -709,7 +709,7 @@ function backToRooms(){ document.getElementById('sec-chat').classList.remove('ch
 async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
 async function sendMsg(){
   const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value='';
-  // v0.21.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
+  // v0.23.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
   // 不再前端 postMsg（后端 project_chat 统一落库，避免消息重复）
   const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='元神分析中…';
   if(inp) inp.disabled=true;
@@ -915,19 +915,33 @@ async function loadTemplates(){
 function showTemplateDesc(){
   const sel=document.getElementById('wTemplate'); const d=document.getElementById('wTemplateDesc');
   const t=wTemplates.find(x=>String(x.id)===String(sel?.value));
-  d.textContent=t?`${t.desc}（${(t.modules||[]).length} 个模块）`:'';
+  if(!t){ d.textContent=''; return; }
+  const roles=(t.roles||[]).length?` · 角色 ${(t.roles||[]).join('/')}`:'';
+  d.textContent=`${t.desc}（${(t.modules||[]).length} 个模块${roles}）`;
 }
 function applyTemplate(){
   const sel=document.getElementById('wTemplate'); const t=wTemplates.find(x=>String(x.id)===String(sel?.value));
   if(!t) return;
   modRows=(t.modules||[]).map(m=>({name:m.name, owner:(m.owner_role==='前端'?'前端':'后端')}));
   renderModRows(); showTemplateDesc();
+  // 目标联动（模板带 goal 且用户未填时自动填充）
+  const goal=document.getElementById('wGoal');
+  if(t.goal && !goal.value.trim()) goal.value=t.goal;
+  // 角色集联动：取消全部选择后按模板勾选
+  if((t.roles||[]).length){
+    document.querySelectorAll('#rolePick .rp').forEach(rp=>{
+      const hit=(t.roles||[]).includes(rp.dataset.id);
+      rp.classList.toggle('sel',hit);
+    });
+  }
 }
 async function saveCurAsTemplate(){
   const name=prompt('模板名称：'); if(!name) return;
   const modules=collectModRows(); if(!modules.length){ alert('当前没有模块，无法存为模板'); return; }
-  try{ const r=await fetch('/api/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,modules})});
-    const j=await r.json(); if(j.ok){ await loadTemplates(); alert('✅ 已保存为模板，可随时套用'); } else alert('❌ '+j.error);
+  const goal=document.getElementById('wGoal').value.trim();
+  const roles=[...document.querySelectorAll('#rolePick .rp.sel')].map(r=>r.dataset.id);
+  try{ const r=await fetch('/api/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,modules,goal,roles})});
+    const j=await r.json(); if(j.ok){ await loadTemplates(); alert('✅ 已保存为模板（含目标与角色集），可随时套用'); } else alert('❌ '+j.error);
   }catch(e){ alert('保存失败：'+e); }
 }
 function openWizard(){ wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value='';
@@ -1117,7 +1131,7 @@ async function loadTermLog(){
   }catch(e){ out.textContent='加载失败'; }
 }
 
-/* ── 浏览器工具（v0.21.0）── */
+/* ── 浏览器工具（v0.23.0）── */
 async function bwRun(action){
   const url=document.getElementById('bwUrl').value.trim();
   const sel=document.getElementById('bwSel').value.trim();
