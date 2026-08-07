@@ -185,6 +185,13 @@
     .mask .modal { width:94vw !important; max-width:94vw !important; }
     .steps .st { min-width:0; }
     #rolePick .rp { min-height:44px; display:flex; align-items:center; }
+    /* 看板移动端：横向滚动 + 触控加大（v0.27.0） */
+    #boardGrid { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    #boardGrid > div { min-width:800px; }
+    #boardGrid select { min-height:30px; }
+    #boardGrid [style*="cursor:pointer"] { min-height:44px; display:flex; flex-direction:column; justify-content:center; }
+    #topicMask .mb { flex-direction:column; }
+    #topicMask .mb > div:first-child { width:100%; border-right:none; border-bottom:.5px solid var(--gray-200); padding-bottom:8px; }
   }
   @media (max-width:768px){ html { -webkit-tap-highlight-color:transparent; } }
 </style>
@@ -330,7 +337,7 @@
         </div>
       </div>
 
-      <!-- 浏览器工具（v0.25.0 元神可代你操作浏览器） -->
+      <!-- 浏览器工具（v0.27.0 元神可代你操作浏览器） -->
       <div class="section" id="sec-browser">
         <div class="grid-wrap">
           <div class="grid-head"><span class="t">浏览器工具 · 元神网页自动化</span><span class="rl" style="font-size:11px;color:var(--gray-400)">playwright + 系统 Chrome（headless），打开/截图/填表/点击/抓取</span></div>
@@ -723,7 +730,7 @@ function backToRooms(){ document.getElementById('sec-chat').classList.remove('ch
 async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
 async function sendMsg(){
   const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value='';
-  // v0.25.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
+  // v0.27.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
   // 不再前端 postMsg（后端 project_chat 统一落库，避免消息重复）
   const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='元神分析中…';
   if(inp) inp.disabled=true;
@@ -883,6 +890,12 @@ async function loadMetaBoard(){
     +'<select id="patrolLevel" onchange="savePatrol()" style="padding:4px 6px;border:.5px solid var(--gray-200);border-radius:6px;font-size:11px;background:#fff">'
     +'<option value="red">只报严重(阻塞)</option><option value="all">全部(含滞留提醒)</option></select>'
     +'<span id="patrolStatus" style="font-size:10px;color:var(--gray-400)"></span>'
+    +'</div>'
+    +'<div style="margin-top:8px;display:flex;gap:6px;align-items:center">'
+    +'<input id="watchPaths" placeholder="文件监控：路径逗号分隔，如 ~/Desktop/分身, ~/Desktop/元神/SOUL.md" style="flex:1;padding:6px 8px;border:.5px solid var(--gray-200);border-radius:6px;font-size:11px;min-width:0">'
+    +'<button class="btn sm" onclick="savePatrol()">保存监控</button>'
+    +'</div>'
+    +'<div style="font-size:10px;color:var(--gray-400);margin-top:4px">巡检时对比快照，文件新增/修改/删除 → 元神私聊汇报（与自动巡检同频率）</div>'
     +'</div></div></div>';
   el.innerHTML=html;
   // 回填已保存的巡检设置
@@ -894,6 +907,7 @@ async function loadPatrolSettings(){
     const en=document.getElementById('patrolEnabled'); if(en) en.checked=!!s.patrol_enabled;
     const iv=document.getElementById('patrolInterval'); if(iv) iv.value=String(s.patrol_interval||60);
     const lv=document.getElementById('patrolLevel'); if(lv) lv.value=s.patrol_level||'red';
+    const wp=document.getElementById('watchPaths'); if(wp) wp.value=(s.watch_paths||[]).join(', ');
     const st=document.getElementById('patrolStatus');
     if(st) st.textContent=s.patrol_enabled?`已启用 · 每 ${s.patrol_interval} 分钟`:'未启用（默认关闭，你可随时打开）';
   }catch(e){}
@@ -902,11 +916,13 @@ async function savePatrol(){
   const en=document.getElementById('patrolEnabled').checked;
   const iv=parseInt(document.getElementById('patrolInterval').value);
   const lv=document.getElementById('patrolLevel').value;
+  const wp=document.getElementById('watchPaths')?document.getElementById('watchPaths').value:'';
+  const watch_paths=wp.split(',').map(s=>s.trim()).filter(Boolean);
   try{
-    const r=await fetch('/api/meta/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patrol_enabled:en,patrol_interval:iv,patrol_level:lv})});
+    const r=await fetch('/api/meta/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patrol_enabled:en,patrol_interval:iv,patrol_level:lv,watch_paths})});
     const j=await r.json();
     const st=document.getElementById('patrolStatus');
-    if(st) st.textContent=en?`✅ 已保存 · 每 ${iv} 分钟自动巡检`:'已关闭自动巡检';
+    if(st) st.textContent=en?`✅ 已保存 · 每 ${iv} 分钟自动巡检${watch_paths.length?` · 监控 ${watch_paths.length} 个路径`:''}`:'已关闭自动巡检';
   }catch(e){ alert('保存失败：'+e); }
 }
 
@@ -1153,7 +1169,7 @@ async function loadTermLog(){
   }catch(e){ out.textContent='加载失败'; }
 }
 
-/* ── 浏览器工具（v0.25.0）── */
+/* ── 浏览器工具（v0.27.0）── */
 async function bwRun(action){
   const url=document.getElementById('bwUrl').value.trim();
   const sel=document.getElementById('bwSel').value.trim();

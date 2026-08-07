@@ -49,7 +49,7 @@ META_SYSTEM = """你是「元神」，岳衡（ChooseWiki 选择学习法品牌�
 - 简洁、有主见，给可执行建议；不堆砌、不谄媚。
 - 涉及团队/进度时，以"组织 / 监督 / 兜底"的视角回应。
 
-【可用工具（v0.25.0）】
+【可用工具（v0.27.0）】
 - 你有两个工具可调用：exec_command（代岳衡在电脑上执行命令）与 browser_action（无头浏览器：打开网页/截图/抓取/填表/点击）。
 - 当岳衡要求执行命令、查看网页、截图、抓取网页信息时，**必须调用对应工具获取真实结果后再回答，不要凭空编造**。
 - 工具返回失败时如实说明，必要时给出替代建议。
@@ -73,7 +73,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.25.0")
+app = FastAPI(title="分身 v1 后端", version="0.27.0")
 
 
 def get_db():
@@ -318,7 +318,7 @@ def init_db():
             "INSERT INTO meta_files (name,ts) VALUES (?,?)",
             [("我的工程规范.md", now), ("写作风格样例.txt", now)],
         )
-    # 迁移：旧库 project_templates 补列（幂等，v0.25.0+）
+    # 迁移：旧库 project_templates 补列（幂等，v0.27.0+）
     try:
         tcols = [r[1] for r in cur.execute("PRAGMA table_info(project_templates)").fetchall()]
         if "goal" not in tcols:
@@ -656,7 +656,7 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.25.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.27.0", "port": 8002, "llm": llm}
 
 
 @app.get("/api/projects")
@@ -717,7 +717,7 @@ async def update_project(pid: str, req: Request):
     return {"ok": True}
 
 
-# ── API：项目模板（v0.25.0 多项目模板沉淀）────────────────────────
+# ── API：项目模板（v0.27.0 多项目模板沉淀）────────────────────────
 BUILTIN_TEMPLATES = [
     {"name": "标准 Web 应用", "desc": "登录 → 支付 → 内容列表，最常见的 MVP 结构",
      "goal": "一个带账号体系、支付与内容展示的 Web 应用 MVP",
@@ -754,11 +754,37 @@ BUILTIN_TEMPLATES = [
                  {"name": "用量/计费", "owner_role": "后端", "depends_on": ["AI 对话/生成"]},
                  {"name": "管理后台", "owner_role": "后端", "depends_on": ["登录/注册"]},
                  {"name": "对话界面", "owner_role": "前端", "depends_on": ["AI 对话/生成"]}]},
+    {"name": "学习考试产品", "desc": "登录 → 题库 → 刷题 → 错题本 → 付费解锁（选择大于努力类）",
+     "goal": "一个可刷题学习、按科目付费解锁的学习考试产品",
+     "roles": ["architect", "backend", "frontend", "tester"],
+     "meta": {"version": "1.0", "tags": ["教育", "题库", "知识付费"], "scenario": "题库刷题 + 付费解锁的学习产品（如驾考/资格证）"},
+     "modules": [{"name": "登录/注册", "owner_role": "后端", "depends_on": []},
+                 {"name": "题库管理", "owner_role": "后端", "depends_on": ["登录/注册"]},
+                 {"name": "刷题/练习", "owner_role": "后端", "depends_on": ["题库管理"]},
+                 {"name": "错题本/进度", "owner_role": "后端", "depends_on": ["刷题/练习"]},
+                 {"name": "付费解锁", "owner_role": "后端", "depends_on": ["登录/注册", "题库管理"]},
+                 {"name": "学习页面", "owner_role": "前端", "depends_on": ["刷题/练习", "错题本/进度"]}]},
+    {"name": "营销落地页+付费", "desc": "落地页 → 支付 → 用户管理 → 数据分析（投流转化类）",
+     "goal": "一个承接投流流量的营销落地页，支持付费转化与数据追踪",
+     "roles": ["architect", "backend", "frontend", "tester"],
+     "meta": {"version": "1.0", "tags": ["营销", "落地页", "转化"], "scenario": "投流/软文承接 + 付费转化的营销落地页"},
+     "modules": [{"name": "落地页", "owner_role": "前端", "depends_on": []},
+                 {"name": "支付/订单", "owner_role": "后端", "depends_on": ["落地页"]},
+                 {"name": "用户管理", "owner_role": "后端", "depends_on": ["支付/订单"]},
+                 {"name": "数据分析", "owner_role": "后端", "depends_on": ["用户管理"]}]},
+    {"name": "API 后端服务", "desc": "认证 → 核心 API → 数据库 → 监控（to B / 多端共用后端）",
+     "goal": "一个供多端/第三方调用的 API 后端服务（认证 + 核心接口 + 可观测）",
+     "roles": ["architect", "backend", "tester"],
+     "meta": {"version": "1.0", "tags": ["API", "后端", "toB"], "scenario": "纯后端 API 服务（App/Web/小程序共用）"},
+     "modules": [{"name": "认证/令牌", "owner_role": "后端", "depends_on": []},
+                 {"name": "核心业务 API", "owner_role": "后端", "depends_on": ["认证/令牌"]},
+                 {"name": "数据存储", "owner_role": "后端", "depends_on": ["核心业务 API"]},
+                 {"name": "日志/监控", "owner_role": "后端", "depends_on": ["核心业务 API"]}]},
 ]
 
 
 def _seed_templates(conn):
-    """内置模板 upsert（幂等）：不存在则插入，存在则按 name 更新 desc/goal/roles/modules/meta（v0.25.0 支持补新字段）。"""
+    """内置模板 upsert（幂等）：不存在则插入，存在则按 name 更新 desc/goal/roles/modules/meta（v0.27.0 支持补新字段）。"""
     for t in BUILTIN_TEMPLATES:
         row = conn.execute("SELECT id FROM project_templates WHERE name=? AND is_builtin=1", (t["name"],)).fetchone()
         if row:
@@ -1102,7 +1128,7 @@ def exec_log():
 
 
 
-# ── API：浏览器自动化（v0.25.0，playwright + 系统 Chrome headless）────
+# ── API：浏览器自动化（v0.27.0，playwright + 系统 Chrome headless）────
 # 动作：open(打开+取标题/正文摘要) / screenshot(截图 base64) /
 #       extract(按 selector 抓文本) / fill(填表) / click(点击)
 # 安全：仅 http/https URL；30s 超时；全量审计 browser_log
@@ -1223,7 +1249,7 @@ def file_log():
 
 
 
-# ── 元神工具调用（v0.25.0：Function Calling——对话直接驱动 exec/浏览器）──
+# ── 元神工具调用（v0.27.0：Function Calling——对话直接驱动 exec/浏览器）──
 META_TOOLS = [
     {
         "type": "function",
@@ -1296,6 +1322,22 @@ META_TOOLS = [
                     "path": {"type": "string", "description": "目录绝对路径，例如 ~/Desktop 或 ~/WorkBuddy"}
                 },
                 "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": "在用户电脑主目录下递归搜索文件：按文件名关键词匹配（可选扩展名过滤，可选起始目录）。跳过 .ssh/.git/Library 等敏感目录。当用户要求找某个文件、搜某类文件时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "文件名关键词，例如 报告、计划、README"},
+                    "path": {"type": "string", "description": "起始目录（可选，默认 ~），例如 ~/Desktop"},
+                    "ext": {"type": "string", "description": "扩展名过滤（可选，不带点），例如 md、txt、py"}
+                },
+                "required": ["query"]
             }
         }
     }
@@ -1373,7 +1415,7 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
             if action == "screenshot":
                 return f"[截图成功] {res.get('title','')} · {res.get('size',0)}B · URL: {res.get('url')}（图片可在浏览器面板查看）"
             return json.dumps(res, ensure_ascii=False)[:2000]
-        elif name in ("read_file", "write_file", "list_files"):
+        elif name in ("read_file", "write_file", "list_files", "search_files"):
             return await _run_file_tool(name, args, agent_id)
         return f"❌ 未知工具 {name}"
     except subprocess.TimeoutExpired:
@@ -1382,7 +1424,7 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
         return f"❌ 工具执行异常：{type(e).__name__}: {str(e)[:300]}"
 
 
-# ── 文件执行器（v0.25.0：读/写/列目录，安全护栏 + 全量审计）────────
+# ── 文件执行器（v0.27.0：读/写/列目录，安全护栏 + 全量审计）────────
 FILE_SENSITIVE_PARTS = {".ssh", ".aws", ".gnupg", ".git", "Library", "System", "Applications", "private", "etc", "usr", "bin", "sbin", "var", "tmp", "cores"}
 FILE_MAX_WRITE = 50 * 1024  # 单文件写入上限 50KB
 
@@ -1456,6 +1498,40 @@ def _write_file_tool(path: str, content: str):
         return f"⛔ 写入失败: {e}"
 
 
+def _search_files_tool(query: str, path: str = "", ext: str = "", max_results: int = 30):
+    """递归搜索文件名（跳过敏感目录，限深度防卡死）。"""
+    query = (query or "").strip().lower()
+    if not query:
+        return "⛔ 搜索关键词不能为空"
+    start = _safe_file_path(path) if path else os.path.expanduser("~")
+    if not start or not os.path.isdir(start):
+        return f"⛔ 起始目录不可用: {path or '~'}"
+    ext = (ext or "").lower().lstrip(".")
+    hits = []
+    for root, dirs, files in os.walk(start):
+        # 跳过敏感目录
+        dirs[:] = [d for d in dirs if d not in FILE_SENSITIVE_PARTS and not d.startswith(".")]
+        depth = root[len(start):].count(os.sep)
+        if depth > 6:
+            dirs[:] = []
+            continue
+        for f in files:
+            if ext and not f.lower().endswith("." + ext):
+                continue
+            if query in f.lower():
+                full = os.path.join(root, f)
+                try:
+                    size = os.path.getsize(full)
+                except Exception:
+                    size = 0
+                hits.append(f"{full}（{size}B）")
+                if len(hits) >= max_results:
+                    return f"[搜索 \"{query}\" · 命中 {len(hits)}（已达上限）]\n" + "\n".join(hits)
+    if not hits:
+        return f"[搜索 \"{query}\" · 未找到匹配文件]"
+    return f"[搜索 \"{query}\" · 命中 {len(hits)} 个]\n" + "\n".join(hits)
+
+
 async def _run_file_tool(name: str, args: dict, agent_id: str) -> str:
     """执行文件工具（线程池）并落审计 file_log。"""
     path = args.get("path") or ""
@@ -1466,6 +1542,8 @@ async def _run_file_tool(name: str, args: dict, agent_id: str) -> str:
         out = await asyncio.to_thread(_read_file_tool, path)
     elif name == "write_file":
         out = await asyncio.to_thread(_write_file_tool, path, content)
+    elif name == "search_files":
+        out = await asyncio.to_thread(_search_files_tool, args.get("query") or "", path, args.get("ext") or "")
     else:
         out = f"⛔ 未知文件工具 {name}"
     real = _safe_file_path(path) or path
@@ -1481,7 +1559,7 @@ async def _run_file_tool(name: str, args: dict, agent_id: str) -> str:
 
 
 async def _chat_with_tools(agent_id: str, history: list, system_prompt: str) -> str:
-    """通用工具对话循环（元神/群聊共用，v0.25.0）：最多 6 轮（支持多步工具操作）。"""
+    """通用工具对话循环（元神/群聊共用，v0.27.0）：最多 6 轮（支持多步工具操作）。"""
     cands = _available_providers(agent_id)
     if not cands:
         return "[分身·离线] 当前该角色未配置可用模型 Key。"
@@ -1920,7 +1998,7 @@ def delete_module(pid: str, mid: str):
     return {"ok": True}
 
 
-# ── 角色系统提示词（自主执行链 v0.25.0）──────────────────────────
+# ── 角色系统提示词（自主执行链 v0.27.0）──────────────────────────
 ROLE_SYSTEMS = {
     "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
     "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
@@ -1938,7 +2016,7 @@ ROLE_NAMES = {
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
-    """项目群聊对话（v0.25.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
+    """项目群聊对话（v0.27.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
@@ -1976,7 +2054,7 @@ async def project_chat(pid: str, req: Request):
     ).fetchall()
     conn.close()
 
-    # ── Step 1: 元神分析 → 调度计划（v0.25.0：支持先调工具查状态再调度）──
+    # ── Step 1: 元神分析 → 调度计划（v0.27.0：支持先调工具查状态再调度）──
     dispatch_sys = (
         "你是「元神」，在项目群聊中接收用户指令后，需要分析并调度团队执行。\n"
         "根据用户指令和项目当前状态，判断是否需要调度团队执行：\n"
@@ -1984,7 +2062,7 @@ async def project_chat(pid: str, req: Request):
         "- 如果是闲聊/提问/汇报，只在 reply 中回答，actions 为空数组\n\n"
         f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
         f"{mod_desc}\n{task_desc}\n\n"
-        "【可用工具（v0.25.0）】你可调用 exec_command（执行命令/查看文件/查系统状态）与 browser_action（打开网页/截图/抓取）"
+        "【可用工具（v0.27.0）】你可调用 exec_command（执行命令/查看文件/查系统状态）与 browser_action（打开网页/截图/抓取）"
         "获取真实信息后再回复或调度，不要凭空编造。危险命令会被拦截。\n\n"
         "输出格式（必须为合法 JSON）：\n"
         '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
@@ -2041,7 +2119,7 @@ async def project_chat(pid: str, req: Request):
         conn.commit()
         conn.close()
 
-        # 调用角色 AI 执行（v0.25.0：角色也可调工具——跑命令验证/查资料）
+        # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
         role_sys = ROLE_SYSTEMS[role]
         role_hist = [
             {"role": "system", "content": role_sys + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"},
@@ -2872,11 +2950,16 @@ async def meta_quality_check(req: Request):
 # ── API：元神设置 + 自动巡检（v3.5 用户自安排巡检）────────────────
 @app.get("/api/meta/settings")
 def meta_settings_get():
-    """读取元神设置（自动巡检开关/频率等）。"""
+    """读取元神设置（自动巡检开关/频率 + 文件监控路径等）。"""
+    try:
+        watch_paths = json.loads(get_setting("watch_paths", "[]"))
+    except Exception:
+        watch_paths = []
     return {
         "patrol_enabled": get_setting("patrol_enabled", "0") == "1",
         "patrol_interval": int(get_setting("patrol_interval", "60")),  # 分钟
         "patrol_level": get_setting("patrol_level", "red"),  # red / all
+        "watch_paths": watch_paths,
     }
 
 
@@ -2895,7 +2978,90 @@ async def meta_settings_set(req: Request):
         if lv not in ("red", "all"):
             return {"ok": False, "error": "巡检级别必须是 red 或 all"}
         set_setting("patrol_level", lv)
+    if "watch_paths" in data:
+        paths = data["watch_paths"]
+        if isinstance(paths, str):
+            paths = [p.strip() for p in paths.split(",") if p.strip()]
+        elif not isinstance(paths, list):
+            return {"ok": False, "error": "watch_paths 必须是数组或逗号分隔字符串"}
+        set_setting("watch_paths", json.dumps(paths, ensure_ascii=False))
+        # 路径变化 → 重置快照，下次巡检全量对比
+        set_setting("watch_snapshot", "{}")
     return {"ok": True, "settings": meta_settings_get()}
+
+
+def _snapshot_path(p: str) -> dict:
+    """生成监控路径快照：{绝对路径: "mtime|size"}。目录递归深度≤3，条目≤500，跳过敏感/隐藏目录。"""
+    real = _safe_file_path(p)
+    if not real:
+        return {}
+    snap = {}
+    try:
+        if os.path.isfile(real):
+            st = os.stat(real)
+            snap[real] = f"{int(st.st_mtime)}|{st.st_size}"
+        elif os.path.isdir(real):
+            for root, dirs, files in os.walk(real):
+                dirs[:] = [d for d in dirs if d not in FILE_SENSITIVE_PARTS and not d.startswith(".")]
+                depth = root[len(real):].count(os.sep)
+                if depth > 3:
+                    dirs[:] = []
+                    continue
+                for f in files:
+                    full = os.path.join(root, f)
+                    try:
+                        st = os.stat(full)
+                        snap[full] = f"{int(st.st_mtime)}|{st.st_size}"
+                    except Exception:
+                        pass
+                    if len(snap) >= 500:
+                        return snap
+    except Exception:
+        pass
+    return snap
+
+
+def _check_watch_paths(conn):
+    """文件监控：对比上次快照，检测新增/修改/删除 → 元神私聊汇报。"""
+    try:
+        watch_paths = json.loads(get_setting("watch_paths", "[]"))
+    except Exception:
+        watch_paths = []
+    if not watch_paths:
+        return
+    try:
+        prev = json.loads(get_setting("watch_snapshot", "{}"))
+    except Exception:
+        prev = {}
+    cur = {}
+    for wp in watch_paths:
+        cur.update(_snapshot_path(wp))
+    set_setting("watch_snapshot", json.dumps(cur))
+    if not prev:
+        return  # 首轮建立基线，不汇报
+    added = [k for k in cur if k not in prev]
+    removed = [k for k in prev if k not in cur]
+    modified = [k for k in cur if k in prev and cur[k] != prev[k]]
+    if not (added or removed or modified):
+        return
+    def short(k):
+        home = os.path.expanduser("~")
+        return k.replace(home, "~") if k.startswith(home) else k
+    lines = []
+    for k in added[:10]:
+        lines.append(f"🆕 新增 {short(k)}")
+    for k in removed[:10]:
+        lines.append(f"🗑️ 删除 {short(k)}")
+    for k in modified[:10]:
+        lines.append(f"✏️ 修改 {short(k)}")
+    more = f"\n…共 {len(added) + len(removed) + len(modified)} 处变化" if len(lines) >= 30 else ""
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+        (META_PID, "分身 · 元神", "meta",
+         f"📁 文件监控：检测到 {len(added) + len(removed) + len(modified)} 处变化\n" + "\n".join(lines) + more,
+         "progress", datetime.now().isoformat()),
+    )
+    conn.commit()
 
 
 async def _patrol_loop():
@@ -2915,6 +3081,8 @@ async def _patrol_loop():
             set_setting("patrol_last_ts", str(time.time()))
             # 执行巡检
             conn = get_db()
+            # ── 文件监控（v0.27.0：对比监控路径快照，发现变化→私聊汇报）──
+            _check_watch_paths(conn)
             projects = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
             issues = []
             for p in projects:
@@ -2965,7 +3133,7 @@ async def meta_chat(req: Request):
             continue
         role = "assistant" if r["kind"] == "meta" else "user"
         hist.append({"role": role, "content": r["text"]})
-    reply = await _chat_with_tools(META_PID, hist, META_SYSTEM)  # v0.25.0：元神对话工具调用（exec/浏览器）
+    reply = await _chat_with_tools(META_PID, hist, META_SYSTEM)  # v0.27.0：元神对话工具调用（exec/浏览器）
     # 落库元神回复
     conn = get_db()
     conn.execute(
