@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>分身 v1 原型 · prototype-v1.0</title>
 <style>
+  .btext{white-space:pre-wrap;word-break:break-word;}
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
     /* Layer1 原语 */
@@ -715,21 +716,30 @@ function refreshPhaseUI(r){
   const fb=document.getElementById('freezeBtn'); fb.textContent=r.frozen?'解冻':'冻结';
   const sel=document.getElementById('phaseSelect'); sel.innerHTML=PHASES.map(p=>`<option value="${p}" ${p===r.phase?'selected':''}>${PHASE_NAMES[p]}</option>`).join('');
 }
+function streamText(row){
+  const sp=row.querySelector('.btext'); if(!sp) return;
+  const full=sp.getAttribute('data-full')||sp.textContent; sp.setAttribute('data-full',full);
+  sp.textContent=''; let i=0;
+  const t=setInterval(()=>{ i+=2; sp.textContent=full.slice(0,i); if(i>=full.length){ sp.textContent=full; clearInterval(t); } },16);
+}
 function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerHTML='';
   if(!msgs.length){ b.innerHTML='<div class="empty"><div class="ic">💬</div><div>还没有消息，发送第一条指令开始工作</div></div>'; b.scrollTop=b.scrollHeight; return; }
+  let lastRow=null;
   msgs.forEach(m=>{ const row=document.createElement('div');
     if(m.kind==='sys'){ row.className='sysmsg'; row.innerHTML=`<span>${m.text}</span>`; }
     else { row.className='msg '+(m.kind==='self'?'right':'left');
       const cls=m.kind==='meta'?'meta':m.kind; const tag=m.tag?`<span class="tag ${m.tag}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
       let acts=''; if(m.kind==='meta') acts=`<div class="acts"><button class="btn sm" onclick="metaCheck()">检查产出</button><button class="btn sm ghost" onclick="metaStop()">中止</button><button class="btn sm" onclick="metaReassign()">重派</button></div>`;
-      row.innerHTML=`<div class="bubble ${cls}"><div class="sender">${m.sender||''}</div>${tag}${m.text}${acts}</div>`; }
-    b.appendChild(row); }); b.scrollTop=b.scrollHeight; }
+      row.innerHTML=`<div class="bubble ${cls}"><div class="sender">${m.sender||''}</div>${tag}<span class="btext">${m.text}</span>${acts}</div>`; }
+    b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; });
+  b.scrollTop=b.scrollHeight;
+  if(window.__DEMO_STREAM__ && window.__LAST_SENT__ && lastRow){ streamText(lastRow); window.__LAST_SENT__=false; } }
 function selectRoom(id){ curRoom=id; renderRooms(); loadChat(id);
   if(window.innerWidth<=768){ document.getElementById('sec-chat').classList.add('chat-open'); } }
 function backToRooms(){ document.getElementById('sec-chat').classList.remove('chat-open'); }
 async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
 async function sendMsg(){
-  const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value='';
+  const v=document.getElementById('msgInput').value.trim(); if(!v||!curRoom)return; document.getElementById('msgInput').value=''; window.__LAST_SENT__=true;
   // v0.27.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
   // 不再前端 postMsg（后端 project_chat 统一落库，避免消息重复）
   const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='元神分析中…';
@@ -803,16 +813,18 @@ async function saveRole(){ const id=document.getElementById('rId').value.trim()|
 async function loadMeta(){ const b=document.getElementById('metaChat'); b.innerHTML='加载中…';
   let msgs=[]; try{ const res=await fetch('/api/messages/'+META_PID); msgs=await res.json(); }catch(e){ console.error(e); }
   b.innerHTML='';
+  let lastRow=null;
   msgs.forEach(m=>{ const row=document.createElement('div');
     if(m.kind==='sys'){ row.className='sysmsg'; row.innerHTML=`<span>${m.text}</span>`; }
     else { row.className='msg '+(m.kind==='self'?'right':'left'); const cls=m.kind==='meta'?'meta':m.kind;
-      row.innerHTML=`<div class="bubble ${cls}"><div class="sender">${m.sender||''}</div>${m.text}</div>`; }
-    b.appendChild(row); }); b.scrollTop=b.scrollHeight;
+      row.innerHTML=`<div class="bubble ${cls}"><div class="sender">${m.sender||''}</div><span class="btext">${m.text}</span></div>`; }
+    b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; }); b.scrollTop=b.scrollHeight;
+  if(window.__DEMO_STREAM__ && window.__LAST_SENT__ && lastRow){ streamText(lastRow); window.__LAST_SENT__=false; }
   const f=document.getElementById('metaFiles'); f.innerHTML='加载中…';
   let files=[]; try{ const res=await fetch('/api/meta/files'); files=await res.json(); }catch(e){ console.error(e); }
   f.innerHTML=''; files.forEach(x=>{ const d=document.createElement('div'); d.className='room';
     d.innerHTML=`<span class="s" style="background:var(--meta-700)"></span><div class="info"><div class="nm">${x.name}</div><div class="ds">资料库 · 已学习</div></div>`; f.appendChild(d); }); }
-async function sendMeta(){ const v=document.getElementById('metaInput').value.trim(); if(!v)return; document.getElementById('metaInput').value='';
+async function sendMeta(){ const v=document.getElementById('metaInput').value.trim(); if(!v)return; document.getElementById('metaInput').value=''; window.__LAST_SENT__=true;
   await fetch('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v})});
   await loadMeta(); }
 function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.value='';
