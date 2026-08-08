@@ -251,6 +251,24 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS user_model (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dim TEXT NOT NULL,
+            field TEXT NOT NULL,
+            value TEXT NOT NULL,
+            confidence REAL DEFAULT 0.3,
+            source TEXT DEFAULT 'interview',
+            qid TEXT,
+            created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS meta_interview (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asked JSON DEFAULT '[]',
+            answers JSON DEFAULT '{}',
+            focus_dim TEXT,
+            last_ask_at TEXT,
+            updated_at TEXT
+        );
         """
     )
     # ── 兼容迁移：projects 增加 phase / frozen 列（老库升级）──
@@ -3139,13 +3157,14 @@ async def meta_chat(req: Request):
         "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 12", (META_PID,)
     ).fetchall()
     conn.close()
-    hist = [{"role": "system", "content": META_SYSTEM}]
+    sys_prompt = compile_meta_system()
+    hist = [{"role": "system", "content": sys_prompt}]
     for r in reversed(rows):
         if r["kind"] == "sys":
             continue
         role = "assistant" if r["kind"] == "meta" else "user"
         hist.append({"role": role, "content": r["text"]})
-    reply = await _chat_with_tools(META_PID, hist, META_SYSTEM)  # v0.27.0：元神对话工具调用（exec/浏览器）
+    reply = await _chat_with_tools(META_PID, hist, sys_prompt)  # v0.27.0：元神对话工具调用（exec/浏览器）
     # 落库元神回复
     conn = get_db()
     conn.execute(
@@ -3156,6 +3175,7 @@ async def meta_chat(req: Request):
     conn.close()
     # 自动后处理：触发记忆提炼 + 上下文压缩 + 技能提炼 + 复盘
     asyncio.create_task(_auto_after_chat())
+    asyncio.create_task(_auto_distill_user(user_text))
     return {"reply": reply, "ok": True, "version": "0.7.0"}
 
 
@@ -3221,6 +3241,17 @@ async def _auto_after_chat():
         conn.close()
     except Exception as e:
         pass  # 静默处理，不影响主流程
+
+
+# ── 元神人格蒸馏（访谈 / 上传 / 画像 / 动态 grounding）──
+try:
+    from backend import meta_distill
+    compile_meta_system = meta_distill.compile_meta_system
+    _auto_distill_user = meta_distill._auto_distill_user
+except Exception as e:
+    print("meta_distill 加载失败:", e)
+    compile_meta_system = lambda: META_SYSTEM
+    async def _auto_distill_user(t): pass
 
 
 # 静态托管前端（放最后，"/" 兜底）
