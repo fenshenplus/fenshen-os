@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="icon" type="image/png" href="./favicon.png" />
-<title>分身 v1 — 你的 AI 团队群聊助手</title>
+<title>分身 — 你的数字分身 · 24 小时在线的 AI 团队总管</title>
 <style>
   :root{
     --blue:#007aff; --blue-600:#0066d6; --blue-50:#e8f0fe;
@@ -15,13 +15,13 @@
     --radius:12px; --radius-sm:8px;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  html{-webkit-font-smoothing:antialiased}
+  html{-webkit-font-smoothing:antialiased;scroll-behavior:smooth}
   body{
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
     color:var(--gray-900); background:var(--gray-100); font-size:14px; line-height:1.6; font-weight:400;
   }
   a{color:inherit;text-decoration:none}
-  .wrap{max-width:980px;margin:0 auto;padding:0 20px}
+  .wrap{max-width:1020px;margin:0 auto;padding:0 20px}
   /* 顶栏 */
   nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:saturate(180%) blur(8px);border-bottom:.5px solid var(--gray-200)}
   .nav-inner{display:flex;align-items:center;justify-content:space-between;height:54px}
@@ -39,37 +39,57 @@
   .btn.meta{background:var(--meta);border-color:var(--meta);color:#fff}
   .btn.meta:hover{background:var(--meta-900);border-color:var(--meta-900)}
   /* Hero */
-  .hero{padding:72px 0 56px;text-align:center}
-  .hero .logo{width:92px;height:92px;margin:0 auto 22px;object-fit:contain;border-radius:22px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
-  .hero h1{font-size:34px;font-weight:500;letter-spacing:-.5px;line-height:1.25}
-  .hero .sub{margin:18px auto 0;max-width:560px;color:var(--gray-400);font-size:15px}
-  .hero .actions{margin-top:28px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
-  .pill{display:inline-flex;align-items:center;gap:6px;margin-top:22px;padding:5px 12px;border-radius:18px;background:var(--gray-100);border:.5px solid var(--gray-200);font-size:12px;color:var(--gray-400)}
+  .hero{padding:76px 0 60px;text-align:center}
+  .hero .logo{width:96px;height:96px;margin:0 auto 22px;object-fit:contain;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+  .hero h1{font-size:36px;font-weight:600;letter-spacing:-.5px;line-height:1.25}
+  .hero h1 .accent{color:var(--meta)}
+  .hero .sub{margin:18px auto 0;max-width:620px;color:var(--gray-400);font-size:15px}
+  .hero .actions{margin-top:30px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .pill{display:inline-flex;align-items:center;gap:6px;margin-top:22px;padding:5px 12px;border-radius:18px;background:#fff;border:.5px solid var(--gray-200);font-size:12px;color:var(--gray-400)}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--green)}
   /* 区块 */
-  section{padding:48px 0}
-  .sec-title{font-size:13px;font-weight:500;color:var(--gray-400);letter-spacing:.4px;text-transform:uppercase;margin-bottom:18px}
-  .sec-h{font-size:22px;font-weight:500;margin-bottom:6px}
-  .sec-d{color:var(--gray-400);font-size:14px;margin-bottom:26px}
-  /* 四机制网格 */
+  section{padding:52px 0}
+  .sec-title{font-size:13px;font-weight:500;color:var(--gray-400);letter-spacing:.4px;text-transform:uppercase;margin-bottom:16px}
+  .sec-h{font-size:24px;font-weight:600;margin-bottom:8px;letter-spacing:-.3px}
+  .sec-d{color:var(--gray-400);font-size:14px;margin-bottom:28px}
+  /* 三支柱 */
+  .pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .pillar{background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:20px;position:relative}
+  .pillar .em{font-size:26px;margin-bottom:10px}
+  .pillar h3{font-size:16px;font-weight:600;margin-bottom:8px}
+  .pillar p{color:var(--gray-400);font-size:13px}
+  .pillar ul{list-style:none;margin-top:10px}
+  .pillar li{font-size:12px;color:var(--gray-900);padding:5px 0;border-top:.5px solid var(--gray-100)}
+  .pillar li span{color:var(--gray-400)}
+  /* 卡片网格 */
   .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
   .card{background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:18px}
   .card .ic{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:500;color:#fff;font-size:16px;margin-bottom:12px}
-  .card h3{font-size:15px;font-weight:500;margin-bottom:6px}
+  .card h3{font-size:15px;font-weight:600;margin-bottom:6px}
   .card p{color:var(--gray-400);font-size:13px}
-  .ic.meta{background:var(--meta)} .ic.blue{background:var(--blue)} .ic.green{background:var(--green)} .ic.amber{background:var(--amber)}
+  .card .tags{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
+  .card .tag{font-size:11px;padding:2px 8px;border-radius:10px;background:var(--gray-100);color:var(--gray-400)}
+  .ic.meta{background:var(--meta)} .ic.blue{background:var(--blue)} .ic.green{background:var(--green)} .ic.amber{background:var(--amber)} .ic.red{background:var(--red)}
+  /* 时间线 */
+  .timeline{background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:20px 22px}
+  .tl-item{display:flex;gap:14px;padding:9px 0;border-bottom:.5px solid var(--gray-100)}
+  .tl-item:last-child{border-bottom:none}
+  .tl-v{width:74px;flex-shrink:0;font-weight:600;font-size:13px;color:var(--meta);padding-top:1px}
+  .tl-d{font-size:13px;color:var(--gray-900)}
+  .tl-d span{color:var(--gray-400)}
   /* 安装步骤 */
   .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   .step{background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:18px}
   .step .n{width:24px;height:24px;border-radius:50%;background:var(--blue-50);color:var(--blue);font-size:12px;font-weight:500;display:flex;align-items:center;justify-content:center;margin-bottom:12px}
-  .step h4{font-size:14px;font-weight:500;margin-bottom:6px}
+  .step h4{font-size:14px;font-weight:600;margin-bottom:6px}
   .step p{color:var(--gray-400);font-size:13px}
+  .step code{background:var(--gray-100);padding:1px 5px;border-radius:4px;font-size:12px}
   .note{margin-top:16px;font-size:12px;color:var(--gray-400)}
   /* Gatekeeper 提示 */
   .gatekeeper{margin-top:18px;background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:16px 18px}
-  .gk-title{font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px}
+  .gk-title{font-size:14px;font-weight:600;margin-bottom:8px}
   .gatekeeper p{font-size:13px;color:var(--gray-400);line-height:1.7;margin:6px 0}
-  .gatekeeper pre{background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--ink);overflow-x:auto;margin:6px 0}
+  .gatekeeper pre{background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:10px 12px;font-size:13px;overflow-x:auto;margin:6px 0}
   /* 技术说明 */
   .specs{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
   .spec{background:#fff;border:.5px solid var(--gray-200);border-radius:var(--radius);padding:16px}
@@ -81,9 +101,11 @@
   .foot-brand{display:flex;align-items:center;gap:7px}
   .foot-brand img{width:18px;height:18px;object-fit:contain}
   @media(max-width:680px){
-    .grid,.steps,.specs{grid-template-columns:1fr}
+    .grid,.steps,.specs,.pillars{grid-template-columns:1fr}
     .nav-links a.link{display:none}
-    .hero h1{font-size:27px}
+    .hero h1{font-size:28px}
+    .hero{padding:52px 0 40px}
+    .tl-v{width:60px;font-size:12px}
   }
 </style>
 </head>
@@ -96,7 +118,8 @@
       <span class="name">分身</span>
     </div>
     <div class="nav-links">
-      <a class="link" href="#features">功能</a>
+      <a class="link" href="#capabilities">能力</a>
+      <a class="link" href="#timeline">演进</a>
       <a class="link" href="#install">安装</a>
       <a class="link" href="#tech">技术</a>
       <a class="btn primary" href="./分身-v1-macOS.zip">下载 macOS</a>
@@ -107,42 +130,118 @@
 <header class="hero">
   <div class="wrap">
     <img class="logo" src="./logo.png" alt="分身 Logo" />
-    <h1>分身 v1<br/>你的 AI 团队群聊助手</h1>
-    <p class="sub">为每个项目拉起一个 AI 团队：元神管方向，角色分工协作，公共资源统一调度。本地优先，数据不落云。</p>
+    <h1>你的<span class="accent">数字分身</span><br/>24 小时在线的 AI 团队总管</h1>
+    <p class="sub">分身跑在你自己的电脑上——它像你一样拥有这台电脑的最高权限：能看所有项目、能派活、能质检，还能亲自上手：执行命令、操作浏览器、读写文件。手机随时远程看板，数据不落云。</p>
     <div class="actions">
       <a class="btn primary" href="./分身-v1-macOS.zip">下载 macOS 版</a>
-      <a class="btn" href="#features">查看功能</a>
+      <a class="btn meta" href="#capabilities">看它现在能做什么</a>
     </div>
-    <div class="pill"><span class="dot"></span> 本地运行 · 端口 8002 · 数据存本机 SQLite</div>
+    <div class="pill"><span class="dot"></span> 已发布 deploy v3.8 · 本机运行 · 端口 8002 · 数据存本机 SQLite</div>
   </div>
 </header>
 
-<section id="features">
+<section id="capabilities">
   <div class="wrap">
-    <div class="sec-title">核心机制</div>
-    <div class="sec-h">四机制，一套群聊App</div>
-    <div class="sec-d">把高效 coding 工作流产品化，砍掉 80% 不常用的功能。</div>
+    <div class="sec-title">一句话看懂</div>
+    <div class="sec-h">能看 · 能派 · 能动手</div>
+    <div class="sec-d">元神从「会聊天的助手」进化成「能干活的总管」——不是聊天机器人，是你电脑上的分身。</div>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="em">👁️</div>
+        <h3>能看：全局尽收眼底</h3>
+        <p>所有项目 × 模块 × 任务聚合到一张总看板，三色巡检主动发现阻塞与滞留。</p>
+        <ul>
+          <li>总看板聚合 <span>· 一屏看所有项目</span></li>
+          <li>自动巡检 <span>· 频率由你定</span></li>
+          <li>文件监控 <span>· 关键目录变动即汇报</span></li>
+          <li>真模型质检 <span>· 不合格自动退回</span></li>
+        </ul>
+      </div>
+      <div class="pillar">
+        <div class="em">🧭</div>
+        <h3>能派：一句话拉起团队</h3>
+        <p>群聊发一句指令，元神拆解调度，角色用真 AI 干活，任务自动落看板。</p>
+        <ul>
+          <li>自主执行链 <span>· 指令→调度→执行→汇报</span></li>
+          <li>7 套项目模板 <span>· 模块/目标/角色/依赖一键套用</span></li>
+          <li>跨项目调度 <span>· 资源按需重派</span></li>
+          <li>阶段门禁 <span>· UI 定稿前禁止写代码</span></li>
+        </ul>
+      </div>
+      <div class="pillar">
+        <div class="em">🛠️</div>
+        <h3>能动手：对话直达工具</h3>
+        <p>对它说「查一下服务器」「抓热搜榜」「读那个文件」——它真的会去执行，不是嘴上说说。</p>
+        <ul>
+          <li>执行命令 <span>· 危险命令拦截+确认</span></li>
+          <li>浏览器五动作 <span>· 打开/截图/填表/点击/抓取</span></li>
+          <li>文件三件套 <span>· 读/写/列目录</span></li>
+          <li>文件搜索 <span>· 全盘按名查找</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features" style="background:#fff;border-top:.5px solid var(--gray-200);border-bottom:.5px solid var(--gray-200)">
+  <div class="wrap">
+    <div class="sec-title">能力全景</div>
+    <div class="sec-h">从想法到交付，全程闭环</div>
+    <div class="sec-d">不只是聊天群——项目工厂、记忆进化、多模型协作，越用越懂你。</div>
     <div class="grid">
       <div class="card">
         <div class="ic meta">元</div>
-        <h3>元神 · 管理者</h3>
-        <p>你的个人人格分身，1:1 私聊 + 资料库，代表你的利益与风格，监督、兜底、可强制中止任意 agent。</p>
+        <h3>元神 · 你的数字分身</h3>
+        <p>1:1 私聊 + 人格 grounding，代表你的利益与风格。可强制中止任意 agent、检查产出、重派任务，异常时兜底。</p>
+        <div class="tags"><span class="tag">人格分身</span><span class="tag">监督兜底</span><span class="tag">总看板</span></div>
       </div>
       <div class="card">
-        <div class="ic blue">群</div>
-        <h3>项目群聊</h3>
-        <p>每个项目一个房间，团队按角色分工协作，消息全程留痕，进度透明可查。</p>
+        <div class="ic blue">板</div>
+        <h3>项目群聊 + 模块看板</h3>
+        <p>每项目一个房间；看板按「模块 × 阶段」管理进度；话题对话组按模块隔离上下文，讨论后一键提炼为任务。</p>
+        <div class="tags"><span class="tag">两层看板</span><span class="tag">三层模型</span><span class="tag">依赖门禁</span></div>
       </div>
       <div class="card">
-        <div class="ic green">角</div>
-        <h3>角色库</h3>
-        <p>Agent 角色 Schema 定义与复用，成立项目即按设计拉起对应的团队角色。</p>
+        <div class="ic green">记</div>
+        <h3>记忆与进化</h3>
+        <p>长期记忆沉淀你的偏好；技能库自动提炼流程性做法；经验库记录成败案例并复盘进化——越用越懂你。</p>
+        <div class="tags"><span class="tag">长期记忆</span><span class="tag">技能提炼</span><span class="tag">进化复盘</span></div>
       </div>
       <div class="card">
-        <div class="ic amber">库</div>
-        <h3>公共资源库</h3>
-        <p>服务器、支付等公共资源统一授权管理，开关可控，避免重复配置与越权。</p>
+        <div class="ic amber">模</div>
+        <h3>多模型协作</h3>
+        <p>元神与每个角色可单独指定模型（DeepSeek / OpenAI / Claude / 本地 Ollama），用量统计，失败自动降级。</p>
+        <div class="tags"><span class="tag">角色级配置</span><span class="tag">降级链</span><span class="tag">用量统计</span></div>
       </div>
+      <div class="card">
+        <div class="ic red">锁</div>
+        <h3>工程纪律</h3>
+        <p>阶段门禁（UI 确认前禁止写代码）、冻结锁 + 修改单、版本快照可回滚、依赖门禁防乱序开发。</p>
+        <div class="tags"><span class="tag">门禁</span><span class="tag">冻结</span><span class="tag">快照回滚</span></div>
+      </div>
+      <div class="card">
+        <div class="ic green">安</div>
+        <h3>安全护栏</h3>
+        <p>危险命令对话内拦截、文件限主目录+敏感路径保护、exec/browser/file 三套全量审计、模型 Key 不落前端。</p>
+        <div class="tags"><span class="tag">危险拦截</span><span class="tag">全量审计</span><span class="tag">本地优先</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="timeline">
+  <div class="wrap">
+    <div class="sec-title">持续演进</div>
+    <div class="sec-h">从「群聊助手」到「数字分身」</div>
+    <div class="sec-d">八个发布基线，每一版都在让分身更接近「你」。</div>
+    <div class="timeline">
+      <div class="tl-item"><div class="tl-v">v1.0</div><div class="tl-d">四机制落地：元神 / 项目群聊 / 角色库 / 资源库 <span>· 桌面引擎 + 手机远程看板</span></div></div>
+      <div class="tl-item"><div class="tl-v">v2.0</div><div class="tl-d">记忆与门禁：长期记忆 / 清理中心 / 阶段门禁 / 冻结锁 / 快照回滚 <span>· 技能库 / 经验库 / 进化复盘</span></div></div>
+      <div class="tl-item"><div class="tl-v">v3.0</div><div class="tl-d">群聊最前端 + 两层看板：模块×阶段 / 话题机制 / 上下文按模块隔离 / 任务完成自动沉淀</div></div>
+      <div class="tl-item"><div class="tl-v">v3.5</div><div class="tl-d">元神觉醒：总看板 / 自动巡检 / 跨项目调度 / 真模型质检 <span>· 消灭最后模拟点</span></div></div>
+      <div class="tl-item"><div class="tl-v">v3.6</div><div class="tl-d">工具化：元神/群聊对话直达工具（命令/浏览器）<span>· 多项目模板沉淀</span></div></div>
+      <div class="tl-item"><div class="tl-v">v3.7</div><div class="tl-d">文件执行器（读/写/列目录）<span>· 模板带依赖与元数据 · 手机端 H5 触控打磨</span></div></div>
+      <div class="tl-item"><div class="tl-v">v3.8</div><div class="tl-d">文件搜索 <span>· 元神文件监控 · 模板库扩到 7 套 · 手机也能看板</span></div></div>
     </div>
   </div>
 </section>
@@ -151,12 +250,12 @@
   <div class="wrap">
     <div class="sec-title">安装</div>
     <div class="sec-h">三步装好，浏览器即用</div>
-    <div class="sec-d">引擎运行在你的 Mac 上（需本机权限，可代你执行操作）。手机/其他设备只是远程看板——连上同一网络，用浏览器打开即可与桌面端通信。</div>
+    <div class="sec-d">引擎运行在你的 Mac 上（拥有本机权限，可代你执行操作）。手机/其他设备只是远程看板——连上同一网络，浏览器打开即可。</div>
     <div class="steps">
       <div class="step">
         <div class="n">1</div>
         <h4>下载安装包</h4>
-        <p>点上方「下载 macOS 版」，得到 <code>分身-v1-macOS.zip</code>。</p>
+        <p>点上方「下载 macOS 版」，得到 <code>分身-v1-macOS.zip</code>（约 70KB，纯净无依赖安装）。</p>
       </div>
       <div class="step">
         <div class="n">2</div>
@@ -166,7 +265,7 @@
       <div class="step">
         <div class="n">3</div>
         <h4>打开即用</h4>
-        <p>浏览器自动打开 <code>http://localhost:8002/</code>，开始使用。</p>
+        <p>浏览器自动打开 <code>http://localhost:8002/</code>；手机连同一 Wi-Fi 访问 <code>http://&lt;电脑IP&gt;:8002/</code>。</p>
       </div>
     </div>
     <p class="note">说明：首次安装需联网拉取运行依赖（Python 包），之后完全离线可用。停止服务双击 <code>停止.command</code>。</p>
@@ -178,7 +277,7 @@
       <p>回车后再双击 <code>安装.command</code> 即可正常打开。</p>
       <p><b>方法 B（单次信任）</b>：右键 <code>安装.command</code> → 打开 → 在弹窗中点「打开」。之后 <code>启动.command</code> / <code>停止.command</code> 也用同样方式首次打开一次即可。</p>
     </div>
-    <p class="note" style="margin-top:8px">架构：<b>桌面端是引擎</b>（跑模型、管项目、可调用系统）；<b>手机端是通信终端</b>，不跑模型、不持权限，仅通过局域网/中继与桌面端对话。换电脑只需把整个文件夹拷贝过去。</p>
+    <p class="note" style="margin-top:8px">架构：<b>桌面端是引擎</b>（跑模型、管项目、可调用系统，拥有最高权限）；<b>手机端是通信终端</b>（不跑模型、不持权限）。换电脑只需把整个文件夹拷贝过去。</p>
   </div>
 </section>
 
@@ -186,19 +285,21 @@
   <div class="wrap">
     <div class="sec-title">技术说明</div>
     <div class="sec-h">干净、轻量、守纪律</div>
-    <div class="sec-d">面向个人与小型团队的本地优先方案。</div>
+    <div class="sec-d">本地优先的个人与小型团队方案。</div>
     <div class="specs">
       <div class="spec"><div class="k">技术栈</div><div class="v">FastAPI + SQLite + 原生 H5</div></div>
-      <div class="spec"><div class="k">服务端口</div><div class="v">8002（规避 8000 生产占用）</div></div>
+      <div class="spec"><div class="k">工具链</div><div class="v">命令 / 浏览器 / 文件读·写·搜 共 6 类，对话直达</div></div>
+      <div class="spec"><div class="k">多模型</div><div class="v">DeepSeek / OpenAI / Claude / Ollama，角色级配置+降级</div></div>
+      <div class="spec"><div class="k">安全</div><div class="v">危险拦截 + 敏感路径保护 + 三套全量审计</div></div>
       <div class="spec"><div class="k">数据存储</div><div class="v">本机 SQLite，不落云</div></div>
-      <div class="spec"><div class="k">元神 LLM</div><div class="v">DeepSeek，密钥失效自动降级</div></div>
+      <div class="spec"><div class="k">服务端口</div><div class="v">8002（规避 8000 生产占用）</div></div>
     </div>
   </div>
 </section>
 
 <footer>
   <div class="wrap foot-inner">
-    <div class="foot-brand"><img src="./logo.png" alt="" /> 分身 v1.0 · 本地优先的 AI 团队群聊助手</div>
+    <div class="foot-brand"><img src="./logo.png" alt="" /> 分身 v3.8 · 本地优先的数字分身引擎</div>
     <div>端口守纪 8002 · © 2026 分身</div>
   </div>
 </footer>
