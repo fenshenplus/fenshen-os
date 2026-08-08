@@ -263,11 +263,41 @@
             <div><div class="t">元神 · 我的个人分身</div><div class="sub">完全代表你的利益与风格</div></div>
             <div style="display:flex;gap:6px;align-items:center">
               <button class="btn sm meta" id="metaViewToggle" onclick="toggleMetaView()">总看板</button>
+              <button class="btn sm meta" onclick="toggleInterview()">了解我</button>
+              <button class="btn sm meta" onclick="toggleProfile()">画像</button>
               <button class="btn sm meta" onclick="showMetaInfo()">这是谁</button>
             </div>
           </div>
           <div class="chat-body" id="metaChat"></div>
           <div class="meta-board hidden" id="metaBoard"></div>
+          <!-- 元神持续访谈面板 -->
+          <div class="meta-board hidden" id="interviewPanel">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line,#2a2a30);font-size:13px;font-weight:600">
+              <span>了解你 · 元神持续访谈</span><button class="btn sm ghost" onclick="toggleInterview()">收起</button>
+            </div>
+            <div style="padding:14px;overflow:auto;height:calc(100% - 44px)">
+              <div id="ivProgress" style="font-size:12px;color:var(--gray-400);margin-bottom:10px"></div>
+              <div id="ivQuestion" style="font-size:14px;line-height:1.6;margin-bottom:8px"></div>
+              <div id="ivProbes" style="font-size:12px;color:var(--gray-400);margin-bottom:10px;line-height:1.7"></div>
+              <textarea id="ivAnswer" rows="3" placeholder="写下你的回答…（回车换行，Ctrl+Enter 提交）" style="width:100%;background:var(--bg-2,#1c1c22);color:var(--fg,#e8e8ea);border:1px solid var(--line,#2a2a30);border-radius:8px;padding:8px;font-size:13px"></textarea>
+              <div style="margin-top:8px;display:flex;gap:8px">
+                <button class="btn primary sm" onclick="submitInterview()">提交并继续了解我</button>
+                <button class="btn sm ghost" onclick="loadInterview()">跳过这题</button>
+              </div>
+              <div id="ivReflection" style="margin-top:14px"></div>
+            </div>
+          </div>
+          <!-- 元神画像仪表盘 -->
+          <div class="meta-board hidden" id="profilePanel">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line,#2a2a30);font-size:13px;font-weight:600">
+              <span>我的画像 · 元神对你的理解</span><button class="btn sm ghost" onclick="toggleProfile()">收起</button>
+            </div>
+            <div style="padding:14px;overflow:auto;height:calc(100% - 44px)">
+              <div id="pvNarrative" style="font-size:13px;line-height:1.7"></div>
+              <div id="pvBars" style="margin-top:12px"></div>
+              <div id="pvFacts" style="margin-top:12px"></div>
+            </div>
+          </div>
           <div class="chat-input" id="metaInputBar">
             <input id="metaInput" placeholder="和元神说点什么…（回车发送）" onkeydown="if(event.key==='Enter')sendMeta()">
             <button class="send" onclick="sendMeta()">↑</button>
@@ -828,9 +858,39 @@ async function sendMeta(){ const v=document.getElementById('metaInput').value.tr
   await fetch('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v})});
   await loadMeta(); }
 function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.value='';
-  (async()=>{ await fetch('/api/meta/files',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name})});
-    await postMsg(META_PID,'分身 · 元神','meta',`已接收资料「${f.name}」，正在学习你的风格与偏好…`); await loadMeta(); })(); }
+  const reader=new FileReader();
+  reader.onload=async ()=>{ const text=String(reader.result||'').slice(0,8000);
+    await fetch('/api/meta/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,text})});
+    await postMsg(META_PID,'分身 · 元神','meta',`已接收资料「${f.name}」，正在学习你的风格与偏好…`); await loadMeta(); };
+  reader.readAsText(f); }
 function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元神 = 你的个人人格分身：代表你的利益与风格，拥有最高管理权限，但不替代你做最终决策。'); await loadMeta(); })(); }
+
+/* ── 元神持续访谈 / 画像 ── */
+function toggleInterview(){ const p=document.getElementById('interviewPanel'), b=document.getElementById('metaBoard'), pf=document.getElementById('profilePanel');
+  if(!p.classList.contains('hidden')){ p.classList.add('hidden'); return; }
+  b.classList.add('hidden'); pf.classList.add('hidden'); p.classList.remove('hidden'); loadInterview(); }
+function toggleProfile(){ const p=document.getElementById('profilePanel'), b=document.getElementById('metaBoard'), iv=document.getElementById('interviewPanel');
+  if(!p.classList.contains('hidden')){ p.classList.add('hidden'); return; }
+  b.classList.add('hidden'); iv.classList.add('hidden'); p.classList.remove('hidden'); showProfile(); }
+async function loadInterview(){ try{ const r=await fetch('/api/meta/interview/next'); const d=await r.json(); renderInterview(d); }catch(e){ console.error(e); } }
+function renderInterview(d){
+  document.getElementById('ivProgress').textContent='进度 '+d.progress+' / '+d.total+' · '+(d.phase==='complete'?'已完成 🎉':'持续了解中');
+  const q=document.getElementById('ivQuestion'), pr=document.getElementById('ivProbes'), an=document.getElementById('ivAnswer');
+  if(d.phase==='complete' || !d.question){ q.innerHTML='🎉 元神已经比较了解你了！也可以随时补充，或直接上传聊天记录/笔记让它更懂你。'; pr.innerHTML=''; an.style.display='none'; }
+  else { q.textContent=d.question; pr.innerHTML=(d.probes||[]).map(p=>'· '+p).join('<br>'); an.style.display=''; an.value=''; an.dataset.qid=d.qid; }
+  document.getElementById('ivReflection').innerHTML = d.reflection ? '<div style="padding:10px;background:var(--bg-2,#1c1c22);border-left:3px solid var(--meta-700);border-radius:6px;font-size:13px;line-height:1.7">'+d.reflection.replace(/\n/g,'<br>')+'</div>' : '';
+}
+async function submitInterview(){ const a=document.getElementById('ivAnswer'); const qid=a.dataset.qid; const v=a.value.trim(); if(!v||!qid)return; a.value='';
+  try{ const r=await fetch('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v})}); const d=await r.json(); renderInterview(d.next||d); }catch(e){ console.error(e); } }
+async function showProfile(){ try{ const r=await fetch('/api/meta/profile'); const d=await r.json();
+  document.getElementById('pvNarrative').innerHTML='<div>'+ (d.narrative||'').replace(/\n/g,'<br>') +'</div>';
+  const dims={fact:'身份',personality:'人格',preference:'偏好',knowledge:'知识',workflow:'工作流',relationship:'关系',secret:'私密',expectation:'期望'};
+  let h='<div style="font-size:12px;color:var(--gray-400);margin-bottom:6px">维度置信度（越满越懂你）</div>';
+  for(const k in dims){ const c=d.dim_confidence? (d.dim_confidence[k]||0):0;
+    h+='<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px"><div style="width:42px">'+dims[k]+'</div><div style="flex:1;height:8px;background:#2a2a30;border-radius:4px"><div style="width:'+Math.round(c*100)+'%;height:100%;background:var(--meta-700);border-radius:4px"></div></div><div style="width:34px;text-align:right">'+Math.round(c*100)+'%</div></div>'; }
+  document.getElementById('pvBars').innerHTML=h;
+  document.getElementById('pvFacts').innerHTML='<div style="font-size:12px;color:var(--gray-400);margin:10px 0 4px">已蒸馏 '+d.total+' 条关于你的事实</div>'+(d.facts||[]).map(f=>'<div style="font-size:12px;margin:3px 0"><b>'+f.field+'</b>：'+f.value+'</div>').join('');
+}catch(e){ console.error(e); } }
 
 /* ── 元神总看板（v3.5 元神睁眼） ── */
 let metaBoardVisible=false;
