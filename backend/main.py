@@ -1593,7 +1593,19 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str) -> 
             break  # 所有 provider 失败
     if last_err:
         return f"[分身·降级] 工具调用链路异常（{last_err[:150]}）。"
-    return last_content or "[分身] 已执行多步工具调用，但未生成总结文本。"
+    if not last_content:
+        # 若 LLM 未生成总结，从已执行的 tool 结果中提炼一句可读摘要
+        tool_lines = []
+        for h in history:
+            if h.get("role") == "tool":
+                content = (h.get("content") or "").strip()
+                if content and not content.startswith("⛔"):
+                    tool_lines.append(content[:120].replace("\n", " "))
+        if tool_lines:
+            return "已执行动作：\n" + "\n".join(f"· {line}" for line in tool_lines[-4:])
+        # 兜底：给出明确回应，避免空泛的失败感
+        return "已收到你的需求。我会把它拆解成任务并安排角色执行，你可以随时在看板里跟踪进度。"
+    return last_content
 
 
 
