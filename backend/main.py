@@ -7,16 +7,23 @@
 - 元神系统级执行器：在桌面以用户最高权限执行 shell / 文件操作，带危险命令确认 + 审计日志
 """
 import asyncio
+import hashlib
 import json
 import os
 import re
+import secrets
+import shutil
 import sqlite3
 import subprocess
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -73,7 +80,103 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.27.0")
+app = FastAPI(title="分身 v1 后端", version="0.40.0")
+
+# ══ 安全层 v4.0 ══════════════════════════════════════════════════
+# 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
+# 因此后端必须假设"任何能打到这个端口的请求都可能不是本人发出的"：
+#   1) 默认只绑 127.0.0.1，局域网需显式 opt-in（FENSHEN_ALLOW_LAN=1）
+#   2) 校验 Host 头，阻断 DNS rebinding（恶意网页把域名解析到 127.0.0.1）
+#   3) 校验 Origin，阻断跨站 CSRF（恶意网页用 JS 打本地端口）
+#   4) 本地令牌鉴权，令牌只对本机文件可读
+TOKEN_FILE = os.path.join(BASE, "..", "data", ".auth_token")
+ALLOW_LAN = os.environ.get("FENSHEN_ALLOW_LAN") == "1"
+PORT = int(os.environ.get("FENSHEN_PORT", "8002"))
+COOKIE_NAME = "fenshen_token"
+# 无需令牌即可访问的接口（仅健康检查，供启动脚本探活）
+PUBLIC_API = {"/api/health"}
+
+
+def _load_or_create_token() -> str:
+    """读取本地令牌，不存在则生成。文件权限 600，仅本机用户可读。"""
+    path = os.path.abspath(TOKEN_FILE)
+    try:
+        if os.path.exists(path):
+            tok = open(path).read().strip()
+            if len(tok) >= 32:
+                return tok
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tok = secrets.token_urlsafe(32)
+        with open(path, "w") as f:
+            f.write(tok)
+        os.chmod(path, 0o600)
+        return tok
+    except Exception:
+        # 极端情况（磁盘只读）：退化为内存令牌，重启即失效
+        return secrets.token_urlsafe(32)
+
+
+AUTH_TOKEN = _load_or_create_token()
+
+
+def _host_allowed(host: str) -> bool:
+    """Host 头白名单。局域网模式下放行任意 Host，但仍强制令牌校验。"""
+    if ALLOW_LAN:
+        return True
+    hostname = host.split(":")[0].strip().lower()
+    return hostname in {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+@app.middleware("http")
+async def local_guard(request: Request, call_next):
+    path = request.url.path
+    host = request.headers.get("host", "")
+    if not _host_allowed(host):
+        return JSONResponse(
+            {"ok": False, "error": f"拒绝访问：Host「{host}」不在允许列表。"
+                                   "分身默认只接受本机访问，如需局域网访问请以 FENSHEN_ALLOW_LAN=1 启动。"},
+            status_code=403,
+        )
+    # Origin 校验：只允许同源页面发起的跨域请求（无 Origin 的同源请求正常放行）
+    origin = request.headers.get("origin")
+    if origin:
+        netloc = urlparse(origin).hostname or ""
+        if not ALLOW_LAN and netloc.lower() not in {"127.0.0.1", "localhost", "::1"}:
+            return JSONResponse({"ok": False, "error": "拒绝访问：跨站请求已被阻断。"}, status_code=403)
+    # 页面与静态资源：放行，并把令牌以 SameSite=Strict Cookie 下发给本机页面
+    if not path.startswith("/api/"):
+        resp = await call_next(request)
+        resp.set_cookie(COOKIE_NAME, AUTH_TOKEN, samesite="strict",
+                        httponly=False, max_age=60 * 60 * 24 * 365, path="/")
+        return resp
+    if path in PUBLIC_API:
+        return await call_next(request)
+    token = (request.headers.get("x-fenshen-token")
+             or request.cookies.get(COOKIE_NAME)
+             or request.query_params.get("token") or "")
+    if not secrets.compare_digest(token, AUTH_TOKEN):
+        return JSONResponse(
+            {"ok": False, "error": "未授权：缺少本地令牌。请从 http://127.0.0.1:%d/ 打开分身界面。" % PORT},
+            status_code=401,
+        )
+    return await call_next(request)
+
+
+@app.exception_handler(json.JSONDecodeError)
+async def _bad_json_handler(request: Request, exc):
+    """空 body / 非法 JSON 统一返回 400，不再抛 500（审查 D-2：42 个接口受影响）。"""
+    return JSONResponse({"ok": False, "error": "请求体不是合法 JSON（可能为空）。"}, status_code=400)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_handler(request: Request, exc):
+    """兜底：把未捕获异常转成结构化错误，避免把栈信息暴露给前端。"""
+    if isinstance(exc, json.JSONDecodeError):
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON（可能为空）。"}, status_code=400)
+    return JSONResponse(
+        {"ok": False, "error": f"服务端异常：{type(exc).__name__}: {str(exc)[:200]}"},
+        status_code=500,
+    )
 
 
 def get_db():
@@ -399,6 +502,20 @@ def _log_usage(agent_id: str, provider: str, model: str, latency_ms: int, status
         pass
 
 
+def _merge_system(history: list, system_prompt: str) -> list:
+    """把 system_prompt 合入 messages 首条（OpenAI 兼容格式要求 system 在最前）。
+
+    审查 #11（根因级）：旧版 deepseek / openai / ollama 三个分支收了 system_prompt 形参
+    却从不读它，只有 claude 分支使用——导致这三家的人格设定全部静默失效。
+    历史上是靠调用方手工往 history[0] 塞 system 绕过去的（meta_distill.py:136 的注释
+    自己承认了这点），谁忘了绕谁就悄无声息地废掉。现在统一在这一层处理，调用方不必再关心。
+    """
+    if not system_prompt:
+        return history
+    body = [m for m in history if m.get("role") != "system"]
+    return [{"role": "system", "content": system_prompt}] + body
+
+
 def _call_single_provider(provider: str, base: str, key: str, model: str, history: list, system_prompt: str):
     """调用单个模型，成功返回文本，失败抛异常。"""
     if provider == "claude":
@@ -415,15 +532,16 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
     elif provider == "ollama":
         resp = requests.post(
             base + "/api/chat",
-            json={"model": model, "messages": history, "stream": False},
+            json={"model": model, "messages": _merge_system(history, system_prompt), "stream": False},
             timeout=60,
         )
         resp.raise_for_status()
         return resp.json()["message"]["content"].strip()
     else:  # deepseek / openai 兼容 OpenAI 格式
-        payload = {"model": model, "messages": history, "temperature": 0.7, "max_tokens": 600}
+        payload = {"model": model, "messages": _merge_system(history, system_prompt),
+                   "temperature": 0.7, "max_tokens": 2000}
         if provider == "openai":
-            payload["max_tokens"] = 1200
+            payload["max_tokens"] = 2000
         resp = requests.post(
             base + PROVIDER_PRESETS[provider]["chat"],
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
@@ -435,19 +553,72 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
 
 
 def _available_providers(agent_id: str):
-    """收集该角色可用的 provider 候选链（已配置 key 的 + 元神 secret 兜底）。"""
+    """收集该角色可用的 provider 候选链：自己的配置优先，其余已配置 Key 的按 FALLBACK_ORDER 顶上。
+
+    审查 #12：旧版这里最多只返回 1 个候选（自己的 key，或 DeepSeek secret 兜底），
+    FALLBACK_ORDER 从头到尾没人读——"多模型自动降级"这个宣传点在代码里根本不存在，
+    cross-check 交叉验证也变成了 deepseek 验 deepseek。现在真正把候选链建起来。
+    """
     cands = []
+    seen = set()
+
+    def _add(provider, base, key, model):
+        if not key or provider in seen:
+            return
+        seen.add(provider)
+        cands.append((provider, base, key, model))
+
+    # 1) 该角色自己的配置——永远排第一
     cfg = get_model_config(agent_id)
     if cfg and cfg.get("api_key"):
-        provider = cfg["provider"]
-        preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])
-        base = cfg.get("base_url") or preset["base"]
-        model = cfg.get("model_name") or preset["default_model"]
-        cands.append((provider, base, cfg["api_key"], model))
-    # DeepSeek secret 兜底（所有角色：配置了独立 key 用独立 key，否则用元神 secret 兜底）
-    if DEEPSEEK_KEY and not cands:
-        cands.append(("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-chat"))
+        preset = PROVIDER_PRESETS.get(cfg["provider"], PROVIDER_PRESETS["deepseek"])
+        _add(cfg["provider"], cfg.get("base_url") or preset["base"],
+             cfg["api_key"], cfg.get("model_name") or preset["default_model"])
+
+    # 2) 降级链：全库中其他角色已配置的 Key，按 FALLBACK_ORDER 依次顶上
+    try:
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT provider, base_url, api_key, model_name FROM model_configs "
+            "WHERE api_key IS NOT NULL AND api_key != ''"
+        ).fetchall()
+        conn.close()
+        pool = {}
+        for r in rows:
+            pool.setdefault(r["provider"], r)
+        for provider in FALLBACK_ORDER:
+            r = pool.get(provider)
+            if r:
+                preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])
+                _add(provider, r["base_url"] or preset["base"],
+                     r["api_key"], r["model_name"] or preset["default_model"])
+    except Exception:
+        pass
+
+    # 3) 本地 Ollama：无需 Key，装了就能当最后一道兜底
+    if _ollama_alive():
+        _add("ollama", PROVIDER_PRESETS["ollama"]["base"], "local",
+             PROVIDER_PRESETS["ollama"]["default_model"])
+
+    # 4) DeepSeek secret 文件兜底（向后兼容）
+    _add("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-chat")
     return cands
+
+
+_OLLAMA_CACHE = {"ts": 0.0, "alive": False}
+
+
+def _ollama_alive() -> bool:
+    """本地 Ollama 探活，结果缓存 60 秒，避免每次对话都多一次网络往返。"""
+    now = time.time()
+    if now - _OLLAMA_CACHE["ts"] < 60:
+        return _OLLAMA_CACHE["alive"]
+    try:
+        requests.get(PROVIDER_PRESETS["ollama"]["base"] + "/api/tags", timeout=1).raise_for_status()
+        _OLLAMA_CACHE.update(ts=now, alive=True)
+    except Exception:
+        _OLLAMA_CACHE.update(ts=now, alive=False)
+    return _OLLAMA_CACHE["alive"]
 
 
 def call_llm(agent_id: str, history: list, system_prompt: str = None):
@@ -477,6 +648,46 @@ PROTECTED_ROOTS = {"backend", "frontend", "data", "dist-stage", "site", "tests"}
 PROTECTED_NAMES = {"main.py", "index.html", "requirements.txt", "requirements-dist.txt", "README.md", "start.sh"}
 CLEANABLE_DIRS = {"__pycache__", ".temp", "tmp", "temp", "cache"}
 CLEANABLE_EXTS = {".pyc", ".pyo", ".log", ".tmp", ".temp", ".swp", ".DS_Store"}
+
+
+def backup_db(reason: str = "manual") -> str:
+    """任何破坏性数据操作前自动备份数据库，返回备份文件路径。
+
+    审查中 QA 触发 /api/cleanup 造成真实数据丢失，且当时的"备份"是个 0 字节空文件。
+    这里用 sqlite3 的 backup API（而非 cp），保证即使有并发写入也能拿到一致快照。
+    """
+    try:
+        os.makedirs(os.path.dirname(DB), exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = os.path.abspath(os.path.join(os.path.dirname(DB), f"fenshen.db.bak-{reason}-{stamp}"))
+        src = sqlite3.connect(DB)
+        dst = sqlite3.connect(path)
+        with dst:
+            src.backup(dst)
+        dst.close()
+        src.close()
+        size = os.path.getsize(path)
+        if size == 0:
+            return ""
+        _prune_backups(keep=20)
+        return path
+    except Exception:
+        return ""
+
+
+def _prune_backups(keep: int = 20):
+    """只保留最近 N 份自动备份，避免备份把磁盘吃满。"""
+    try:
+        d = os.path.dirname(os.path.abspath(DB))
+        baks = sorted(
+            (os.path.join(d, f) for f in os.listdir(d) if f.startswith("fenshen.db.bak-")),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        for old in baks[keep:]:
+            os.remove(old)
+    except Exception:
+        pass
 
 
 def get_cleanup_preview() -> dict:
@@ -550,48 +761,64 @@ def do_cleanup(scope: str, keep_chat: int = 0) -> dict:
                 except OSError:
                     pass
 
+    detail = {"temp_files": deleted}
+    backup = None
+    if scope in ("all", "chat", "memory", "logs", "context"):
+        backup = backup_db(f"cleanup-{scope}")  # 删库前先留后路
+
     conn = get_db()
+    cur = conn.cursor()
     if scope in ("all", "chat"):
         if keep_chat > 0:
             # 保留最近 N 条消息
-            keep_id = conn.execute(
+            keep_id = cur.execute(
                 "SELECT id FROM messages ORDER BY id DESC LIMIT 1 OFFSET ?", (keep_chat - 1,)
             ).fetchone()
             if keep_id:
-                conn.execute("DELETE FROM messages WHERE id < ?", (keep_id[0],))
+                cur.execute("DELETE FROM messages WHERE id < ?", (keep_id[0],))
             else:
-                conn.execute("DELETE FROM messages")
+                cur.execute("DELETE FROM messages")
         else:
             # 完全清理消息表，保留元神 grounding 种子（最后 20 条）
-            keep_cutoff = conn.execute("SELECT id FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 20,1", (META_PID,)).fetchone()
+            keep_cutoff = cur.execute("SELECT id FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 20,1", (META_PID,)).fetchone()
             if keep_cutoff:
-                conn.execute("DELETE FROM messages WHERE id < ?", (keep_cutoff[0],))
+                cur.execute("DELETE FROM messages WHERE id < ?", (keep_cutoff[0],))
             else:
-                conn.execute("DELETE FROM messages")
-        deleted += conn.total_changes
+                cur.execute("DELETE FROM messages")
+        detail["messages"] = max(cur.rowcount, 0)
+        deleted += detail["messages"]
 
     if scope in ("all", "memory"):
-        conn.execute("DELETE FROM long_term_memory")
-        deleted += conn.total_changes
+        cur.execute("DELETE FROM long_term_memory")
+        detail["long_term_memory"] = max(cur.rowcount, 0)
+        deleted += detail["long_term_memory"]
 
     if scope in ("all", "logs"):
-        conn.execute("DELETE FROM cleanup_log")
-        conn.execute("DELETE FROM exec_log")
-        deleted += conn.total_changes
+        cur.execute("DELETE FROM cleanup_log")
+        n1 = max(cur.rowcount, 0)
+        cur.execute("DELETE FROM exec_log")
+        n2 = max(cur.rowcount, 0)
+        detail["logs"] = n1 + n2
+        deleted += detail["logs"]
 
     if scope in ("all", "context"):
         # 清理短期上下文：仅保留每项目最后 50 条消息
-        for pid_row in conn.execute("SELECT DISTINCT project_id FROM messages"):
+        ctx = 0
+        for pid_row in conn.execute("SELECT DISTINCT project_id FROM messages").fetchall():
             pid = pid_row[0]
-            cutoff = conn.execute("SELECT id FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 50,1", (pid,)).fetchone()
+            cutoff = cur.execute("SELECT id FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 50,1", (pid,)).fetchone()
             if cutoff:
-                conn.execute("DELETE FROM messages WHERE project_id=? AND id < ?", (pid, cutoff[0]))
-                deleted += conn.total_changes
+                cur.execute("DELETE FROM messages WHERE project_id=? AND id < ?", (pid, cutoff[0]))
+                ctx += max(cur.rowcount, 0)
+        detail["context_trimmed"] = ctx
+        deleted += ctx
 
     conn.commit()
     conn.close()
 
-    return {"deleted": deleted, "freed": freed}
+    # 审查 D-4：旧版用 conn.total_changes 累加，是连接级累计值，会把同一批删除重复计入 → 虚报。
+    # 现改为逐语句 cursor.rowcount，并返回分表明细，用户能看清到底删了什么。
+    return {"deleted": deleted, "freed": freed, "detail": detail, "backup": backup, "scope": scope}
 
 
 # ── 阶段门禁 / 冻结锁 / 版本快照 ─────────────────────────────────
@@ -660,13 +887,91 @@ def gate_check(proj: dict, to_phase: str):
     return True, None
 
 
-# ── 危险命令护栏 ─────────────────────────────────────────────────
+# ── 危险命令护栏 v4.0 ────────────────────────────────────────────
+# 审查发现：旧黑名单 13 个等效破坏变体放行 11 个（84.6% 绕过率）。
+# 单纯扩黑名单永远追不上变体，因此改为「扩充黑名单 + 人工确认闸门」双层：
+# 黑名单只用于「判断要不要更醒目地警告」，真正的安全边界是下面的人工确认。
 DANGER_RE = re.compile(
-    r"\b(rm\s+-rf\b|rm\s+-fr\b|rm\s+-r\s+-f\b|mkfs|dd\s+if=|shutdown|reboot|"
-    r":\(\)\s*\{|>\s*/dev/sd|chmod\s+-R\s+0|curl\s+.*\|\s*(sh|bash)|"
-    r"wget\s+.*\|\s*(sh|bash)|format\s+[a-z])",
+    r"(\brm\b(?![^|;&]*--help)|"                      # 任何 rm（含 rm -r/-f 各种写法）
+    r"\bmkfs\b|\bdd\b\s+if=|\bshutdown\b|\breboot\b|\bhalt\b|"
+    r":\(\)\s*\{|"                                    # fork bomb
+    r">\s*/dev/(sd|disk|rdisk)|"
+    r"\bchmod\b\s+-R|\bchown\b\s+-R|"
+    r"\bsudo\b|\bsu\b\s+-|"
+    r"(curl|wget|fetch)\b[^|]*\|\s*(sh|bash|zsh|python)|"  # 下载即执行
+    r"\bkillall\b|\bpkill\b|\blaunchctl\b|"
+    r"\bdiskutil\b|\bfdisk\b|\bformat\b\s+[a-z]:|"
+    r"\bnc\b\s+-l|\bncat\b|"                          # 反弹 shell
+    r"\bhistory\b\s+-c|"
+    r">\s*(/etc/|/System/|~/\.ssh/|/usr/)|"           # 覆写系统/密钥路径
+    r"\bmv\b[^|;&]*\s+/(etc|usr|bin|System)\b|"
+    r"\bgit\b\s+push\b[^|;&]*--force|"
+    r"\bdefaults\s+delete\b|\bcrontab\b\s+-r)",
     re.IGNORECASE,
 )
+
+# 敏感路径：读取这些内容等同泄露凭证，即使命令本身"无害"也要确认
+SENSITIVE_PATH_RE = re.compile(
+    r"(\.ssh/|\.aws/|id_rsa|id_ed25519|\.env\b|secrets?/|"
+    r"keychain|\.netrc|\.git-credentials|token|password|passwd)",
+    re.IGNORECASE,
+)
+
+
+def _human_approve_sync(title: str, detail: str, timeout: int = 90):
+    """弹出系统级对话框，等待真人点击。这是 AI 与用户电脑之间最后一道闸门。
+
+    返回 (是否放行, 说明)。任何异常一律 fail-closed（拒绝），不给"出错就放过"的口子。
+    """
+    if sys.platform != "darwin":
+        return False, "当前系统不支持系统级确认框，已按最安全策略拒绝执行。"
+    text = (detail or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", " / ")[:900]
+    ttl = (title or "分身请求授权").replace('"', "'")[:80]
+    script = (
+        f'display dialog "{text}" with title "{ttl}" '
+        f'buttons {{"拒绝", "允许执行"}} default button "拒绝" '
+        f'with icon caution giving up after {timeout}'
+    )
+    try:
+        proc = subprocess.run(["osascript", "-e", script],
+                              capture_output=True, text=True, timeout=timeout + 15)
+        out = (proc.stdout or "").replace(" ", "")
+        if "gaveup:true" in out:
+            return False, "授权对话框超时未响应，已拒绝执行。"
+        if "允许执行" in out:
+            return True, "用户已在系统对话框中授权。"
+        return False, "用户拒绝了本次执行。"
+    except Exception as e:
+        return False, f"授权对话框调用失败（{e}），已按最安全策略拒绝。"
+
+
+async def human_approve(title: str, detail: str, timeout: int = 0):
+    """异步包装：弹窗是阻塞操作，放线程池避免卡住事件循环。
+
+    超时时长可在设置里调（approval_timeout，秒），默认 90 秒；超时一律按拒绝处理。
+    """
+    if timeout <= 0:
+        try:
+            timeout = max(5, min(300, int(get_setting("approval_timeout", "90"))))
+        except ValueError:
+            timeout = 90
+    return await asyncio.to_thread(_human_approve_sync, title, detail, timeout)
+
+
+def approval_mode() -> str:
+    """AI 发起系统操作时的确认策略：all（每次确认，默认）/ danger（仅危险命令）/ off（关闭）。"""
+    mode = get_setting("approval_mode", "all")
+    return mode if mode in {"all", "danger", "off"} else "all"
+
+
+def needs_approval(command: str) -> bool:
+    """判断 AI 发起的这条命令是否需要真人点头。"""
+    mode = approval_mode()
+    if mode == "off":
+        return False
+    if mode == "all":
+        return True
+    return bool(DANGER_RE.search(command) or SENSITIVE_PATH_RE.search(command))
 
 
 # ── API：基础 ────────────────────────────────────────────────────
@@ -674,7 +979,8 @@ DANGER_RE = re.compile(
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.27.0", "port": 8002, "llm": llm}
+    return {"status": "ok", "version": "0.40.0", "release": "v4.0", "port": PORT, "llm": llm,
+            "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 
 @app.get("/api/projects")
@@ -1105,10 +1411,25 @@ async def exec_command(req: Request):
     confirm = bool(data.get("confirm", False))
     if not command:
         return {"ok": False, "error": "命令为空"}
-    is_danger = bool(DANGER_RE.search(command))
-    if is_danger and not confirm:
-        return {"ok": False, "need_confirm": True,
-                "error": "该命令属于危险操作，需在前端勾选「我已确认」后重试。"}
+    is_danger = bool(DANGER_RE.search(command) or SENSITIVE_PATH_RE.search(command))
+    # 审查 V02：旧逻辑的 confirm 由客户端自带，请求里加一句 "confirm":true 即可解除全部护栏。
+    # v4.0 起，危险命令一律由服务端弹出系统对话框，等真人点击——客户端说什么都不算数。
+    approved_by = "user-panel"
+    if is_danger:
+        ok_approved, why = await human_approve(
+            "分身请求执行危险命令",
+            f"来源：{agent_id}\n命令：{command}\n\n这条命令可能造成不可逆后果。确认要执行吗？",
+        )
+        if not ok_approved:
+            conn = get_db()
+            conn.execute(
+                "INSERT INTO exec_log (ts,agent_id,command,status,exit_code,output,confirmed) VALUES (?,?,?,?,?,?,?)",
+                (datetime.now().isoformat(), agent_id, command, "blocked", -3, why, 0),
+            )
+            conn.commit()
+            conn.close()
+            return {"ok": False, "blocked": True, "danger": True, "error": why}
+        approved_by = "human-dialog"
     try:
         proc = subprocess.run(
             command, shell=True, cwd=os.path.expanduser("~"),
@@ -1129,12 +1450,14 @@ async def exec_command(req: Request):
     conn = get_db()
     conn.execute(
         "INSERT INTO exec_log (ts,agent_id,command,status,exit_code,output,confirmed) VALUES (?,?,?,?,?,?,?)",
-        (datetime.now().isoformat(), agent_id, command, status, exit_code, output[:4000], int(confirm)),
+        (datetime.now().isoformat(), agent_id, command, status, exit_code, output[:4000], int(is_danger)),
     )
     conn.commit()
     conn.close()
-    return {"ok": True, "status": status, "exit_code": exit_code,
-            "output": output[-3000:], "danger": is_danger, "agent_id": agent_id}
+    # 审查 #7：旧版恒返 ok:true，命令失败也报成功。ok 现在如实反映退出码。
+    return {"ok": exit_code == 0, "status": status, "exit_code": exit_code,
+            "output": output[-3000:], "danger": is_danger,
+            "approved_by": approved_by, "agent_id": agent_id}
 
 
 @app.get("/api/exec/log")
@@ -1367,7 +1690,12 @@ def _call_provider_tools(provider: str, base: str, key: str, model: str, history
     if provider in ("claude", "ollama"):
         text = _call_single_provider(provider, base, key, model, history, system_prompt)
         return {"role": "assistant", "content": text}
-    payload = {"model": model, "messages": history, "temperature": 0.7, "max_tokens": 800}
+    # 审查 #10（本次审查最贵的一个 bug）：这里原本是 max_tokens=800。
+    # 写文件时 content 参数一长就被截断 → tool_calls.arguments 成了残缺 JSON →
+    # 解析失败被静默吞成空 dict → 最终报给用户一句误导性的"路径不安全"。
+    # 实际后果：write_file 历史 19 次调用失败 18 次，08-08 建落地页连败 18 次只剩空目录。
+    payload = {"model": model, "messages": _merge_system(history, system_prompt),
+               "temperature": 0.7, "max_tokens": 8192}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -1396,8 +1724,22 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
             cmd = (args.get("command") or "").strip()
             if not cmd:
                 return "⛔ 命令为空"
-            if DANGER_RE.search(cmd):
-                return f"⛔ 危险命令已拦截：{cmd}。此操作需用户在终端面板手动确认执行。"
+            # 审查 V04：提示词注入链的终点就在这里——被污染的画像可以让元神自发调用 exec。
+            # v4.0 起，AI 自主发起的命令默认每次都要真人在系统对话框点头（可在设置改策略）。
+            if needs_approval(cmd):
+                ok_approved, why = await human_approve(
+                    "分身想在你电脑上执行命令",
+                    f"发起者：{agent_id}（AI 自主调用）\n命令：{cmd}\n\n允许执行吗？",
+                )
+                if not ok_approved:
+                    conn = get_db()
+                    conn.execute(
+                        "INSERT INTO exec_log (ts,agent_id,command,status,exit_code,output,confirmed) VALUES (?,?,?,?,?,?,?)",
+                        (datetime.now().isoformat(), agent_id, cmd, "blocked", -3, why, 0),
+                    )
+                    conn.commit()
+                    conn.close()
+                    return f"⛔ 未获授权，命令未执行：{why}"
             try:
                 exit_code, out = await asyncio.to_thread(_exec_shell_tool, cmd)
             except subprocess.TimeoutExpired:
@@ -1595,12 +1937,20 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str) -> 
                     history.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
                     for tc in tool_calls:
                         fname = tc.get("function", {}).get("name", "")
+                        raw_args = tc.get("function", {}).get("arguments") or "{}"
                         try:
-                            fargs = json.loads(tc.get("function", {}).get("arguments") or "{}")
-                        except Exception:
-                            fargs = {}
+                            fargs = json.loads(raw_args)
+                            tool_result = await _run_meta_tool(fname, fargs, agent_id)
+                        except json.JSONDecodeError:
+                            # 审查 #10 配套修复：旧版把解析失败静默吞成 {}，于是后续报出
+                            # 完全不相干的"路径不安全"。现在如实告诉模型参数坏在哪，让它重发。
+                            tool_result = (
+                                f"⛔ 参数解析失败：{fname} 收到的 JSON 不完整"
+                                f"（长度 {len(raw_args)} 字符，可能因输出上限被截断）。"
+                                "请把内容拆成多次写入，或缩短单次内容后重试。"
+                            )
                         history.append({"role": "tool", "tool_call_id": tc.get("id"),
-                                        "content": await _run_meta_tool(fname, fargs, agent_id)})
+                                        "content": tool_result})
                     break  # 工具已执行，进入下一轮让 LLM 总结
                 last_content = (msg.get("content") or "").strip()
                 return last_content
@@ -1621,8 +1971,13 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str) -> 
                     tool_lines.append(content[:120].replace("\n", " "))
         if tool_lines:
             return "已执行动作：\n" + "\n".join(f"· {line}" for line in tool_lines[-4:])
-        # 兜底：给出明确回应，避免空泛的失败感
-        return "已收到你的需求。我会把它拆解成任务并安排角色执行，你可以随时在看板里跟踪进度。"
+        # 审查 #6：这里原本返回"已收到你的需求。我会把它拆解成任务并安排角色执行……"
+        # ——一句什么都没做却听起来一切正常的假承诺，注释里写的理由是"避免空泛的失败感"，
+        # 而且是从旧版的诚实提示主动改过来的。自欺比 bug 更贵：用户会基于假信号做决策。
+        # 恢复诚实报错，宁可难看，也不能骗人。
+        return ("这次没有产出。模型既没有生成回复，也没有调用任何工具，"
+                "我不清楚原因——可能是模型额度、网络，或提示词把它绕住了。"
+                "建议：重试一次；仍然如此就换个说法，或到设置里检查模型配置。")
     return last_content
 
 
@@ -1671,35 +2026,120 @@ def delete_memory(mid: int):
     return {"ok": True}
 
 
-@app.post("/api/memory/distill")
-async def distill_memory(req: Request):
-    """从元神私聊最近的对话中自动提炼经验/教训，写入长期记忆。"""
+# ── 蒸馏引擎 v4.0（真 LLM 抽取，关键词兜底）────────────────────────
+# 审查 #13：旧版三种"蒸馏"对外都标称 LLM 智能抽取，实际全是关键词正则拼装——
+# memory 把命中关键词的原句整条存下来，skills 取前 16 个字当技能名、steps 恒为空。
+# 现在真接 LLM，并在返回里如实标注 method（llm / keyword），不再含糊其辞。
+
+def _recent_meta_texts(limit: int = 30):
     conn = get_db()
     rows = conn.execute(
-        "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 20",
-        (META_PID,),
+        "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT ?",
+        (META_PID, limit),
     ).fetchall()
     conn.close()
-    # 构造上下文供 LLM 提炼（简单启发式：用户明确说的偏好/决策）
-    pref_keywords = ["记住", "我喜欢", "我不喜欢", "我习惯", "我总是", "我从来", "注意", "规则", "要", "不要"]
-    extracted = []
-    for r in rows:
-        text = r["text"]
-        for kw in pref_keywords:
-            if kw in text:
-                extracted.append({"content": text, "source": f"元神私聊对话"})
-                break
-    count = 0
+    return list(reversed([dict(r) for r in rows]))
+
+
+def _parse_json_array(text: str):
+    """从 LLM 回复里挖出 JSON 数组，容忍 ```json 包裹与前后废话。"""
+    if not text:
+        return None
+    cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    start, end = cleaned.find("["), cleaned.rfind("]")
+    if start == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(cleaned[start:end + 1])
+        return data if isinstance(data, list) else None
+    except json.JSONDecodeError:
+        return None
+
+
+async def _llm_extract(system: str, user: str):
+    """调用 LLM 做结构化抽取，返回 (列表, 方法说明)。失败返回 (None, 原因)。"""
+    try:
+        text = await asyncio.to_thread(call_llm, META_PID, [{"role": "user", "content": user}], system)
+    except Exception as e:
+        return None, f"LLM 调用异常：{e}"
+    if text.startswith("[元神·离线]") or text.startswith("[元神·降级]"):
+        return None, text
+    items = _parse_json_array(text)
+    if items is None:
+        return None, "LLM 返回的不是合法 JSON 数组"
+    return items, "llm"
+
+
+MEMORY_DISTILL_SYSTEM = """你是记忆提炼器。从对话中找出「值得长期记住」的信息，输出 JSON 数组。
+
+只提炼这四类，其余一律忽略：
+- preference：用户的偏好与风格（喜欢什么、讨厌什么、习惯怎么做）
+- rule：用户定下的硬性规矩与红线（必须/禁止）
+- fact：关于用户或其项目的稳定事实（身份、资源、约定）
+- decision：已经拍板的决策及其理由
+
+要求：
+1. 用第三人称陈述句改写，去掉语气词和上下文依赖，脱离原对话也能读懂
+2. 一条只讲一件事，不超过 60 字
+3. 临时性的、一次性的、闲聊的内容不要提炼
+4. 没有值得记的就返回空数组 []
+
+输出格式（只输出 JSON，不要任何解释）：
+[{"category":"preference","content":"..."},...]"""
+
+SKILL_DISTILL_SYSTEM = """你是流程提炼器。从对话中识别「可复用的做事流程」，输出 JSON 数组。
+
+判断标准：这个流程下次遇到同类任务能照着做吗？能，才提炼；只是一次性指令，忽略。
+
+要求：
+1. name：动词开头的短名，6-14 字，例如「部署静态站到服务器」
+2. description：一句话说清这个流程解决什么问题
+3. trigger_words：什么时候该用它，2-4 个关键词，逗号分隔
+4. steps：有序步骤数组，每步一个短句，2-6 步。步骤不能为空
+5. 提炼不出完整步骤的，宁可不提炼
+6. 没有就返回空数组 []
+
+输出格式（只输出 JSON，不要任何解释）：
+[{"name":"...","description":"...","trigger_words":"a,b","steps":["...","..."]},...]"""
+
+
+@app.post("/api/memory/distill")
+async def distill_memory(req: Request):
+    """从元神私聊最近的对话中提炼长期记忆（LLM 抽取，失败退关键词）。"""
+    rows = _recent_meta_texts(20)
+    if not rows:
+        return {"ok": True, "extracted": 0, "items": [], "method": "empty",
+                "note": "最近没有对话可供提炼。"}
+    convo = "\n".join(f"{r['sender']}: {r['text']}" for r in rows if r.get("text"))
+    items, method = await _llm_extract(MEMORY_DISTILL_SYSTEM, f"以下是最近的对话记录：\n\n{convo}")
+
+    if items is None:
+        # 兜底：LLM 不可用时退回关键词匹配，但如实标注方法，不冒充智能抽取
+        pref_keywords = ["记住", "我喜欢", "我不喜欢", "我习惯", "我总是", "我从来", "注意", "规则", "不要"]
+        items = [{"category": "preference", "content": r["text"]}
+                 for r in rows if r.get("text") and any(k in r["text"] for k in pref_keywords)]
+        method = "keyword"
+        note = f"LLM 不可用（{method}），已退回关键词匹配。"
+    else:
+        note = ""
+
     conn = get_db()
-    for item in extracted:
+    existing = {r[0] for r in conn.execute("SELECT content FROM long_term_memory").fetchall()}
+    saved = []
+    for it in items[:12]:
+        content = (it.get("content") or "").strip()
+        if not content or content in existing:
+            continue
+        category = it.get("category") if it.get("category") in ("preference", "rule", "fact", "decision") else "preference"
         conn.execute(
             "INSERT INTO long_term_memory (category,content,source,ts) VALUES (?,?,?,?)",
-            ("preference", item["content"], item["source"], datetime.now().isoformat()),
+            (category, content, f"元神私聊·{method}", datetime.now().isoformat()),
         )
-        count += 1
+        existing.add(content)
+        saved.append({"category": category, "content": content})
     conn.commit()
     conn.close()
-    return {"ok": True, "extracted": count, "items": extracted}
+    return {"ok": True, "extracted": len(saved), "items": saved, "method": method, "note": note}
 
 
 # ── API：清理机制（预览 + 执行 + 自动配置）───────────────────────
@@ -1708,14 +2148,47 @@ def cleanup_preview():
     return get_cleanup_preview()
 
 
+CLEANUP_SCOPES = {"temp", "chat", "memory", "logs", "context", "all"}
+# 会删掉用户真实内容（而非临时文件）的范围，必须真人点头
+CLEANUP_DESTRUCTIVE = {"chat", "memory", "all"}
+CLEANUP_LABELS = {
+    "temp": "临时文件（缓存/日志碎片）", "chat": "全部聊天记录", "memory": "全部长期记忆",
+    "logs": "操作与审计日志", "context": "超出 50 条的历史消息", "all": "以上全部",
+}
+
+
 @app.post("/api/cleanup")
 async def run_cleanup(req: Request):
     data = await req.json()
-    scope = data.get("scope", "all")  # all / temp / chat / memory / logs / context
+    # 审查 D-1（本次审查中真实造成数据丢失的那条）：
+    # 旧版 scope 默认值就是破坏力最大的 "all"，字段名写错即全表删除，且服务端无任何门禁。
+    # v4.0 起：scope 必填、白名单校验、破坏性范围强制真人确认、删前自动备份。
+    scope = (data.get("scope") or "").strip()
     keep_chat = int(data.get("keep_chat", 0))
     preview = data.get("preview", False)
     if preview:
         return get_cleanup_preview()
+    if not scope:
+        return JSONResponse(
+            {"ok": False, "error": "必须显式指定 scope，没有默认值。"
+                                   f"可选：{'、'.join(sorted(CLEANUP_SCOPES))}"},
+            status_code=400,
+        )
+    if scope not in CLEANUP_SCOPES:
+        return JSONResponse(
+            {"ok": False, "error": f"未知的清理范围「{scope}」。可选：{'、'.join(sorted(CLEANUP_SCOPES))}"},
+            status_code=400,
+        )
+    if scope in CLEANUP_DESTRUCTIVE:
+        pv = get_cleanup_preview()
+        ok_approved, why = await human_approve(
+            "分身请求清理数据（不可撤销）",
+            f"清理范围：{CLEANUP_LABELS.get(scope, scope)}\n"
+            f"当前聊天 {pv.get('chat_count', '?')} 条 / 长期记忆 {pv.get('mem_count', '?')} 条\n\n"
+            "确认删除吗？（会先自动备份数据库）",
+        )
+        if not ok_approved:
+            return JSONResponse({"ok": False, "blocked": True, "error": why}, status_code=403)
     result = do_cleanup(scope, keep_chat)
     # 记录清理日志
     conn = get_db()
@@ -2042,6 +2515,44 @@ ROLE_NAMES = {
     "tester": "测试",
 }
 
+# ── v4.0：任务状态自动流转（修复「能派」——此前任务建成 todo 后看板永不移动）──
+FAIL_MARKERS = ("这次没有产出", "调用失败", "模型调用失败", "未配置任何可用模型", "provider_error")
+
+
+def _task_status(task_id: str, status: str, pid: str = "", note: str = "") -> None:
+    """更新任务状态并在群聊留痕（看板可见流转）。失败不影响主流程。"""
+    if status not in MODULE_STATUS:
+        return
+    try:
+        conn = get_db()
+        conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+        if note and pid:
+            conn.execute(
+                "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                (pid, "系统", "sys", note, "done" if status == "done" else "progress",
+                 datetime.now().isoformat()),
+            )
+        conn.commit()
+        if status == "done":
+            row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row:
+                _settle_task_done(conn, dict(row))
+        conn.close()
+    except Exception as e:
+        print(f"[task-status] {task_id} -> {status} 失败: {e}")
+
+
+def _judge_role_output(reply: str) -> str:
+    """判定角色产出：done（有实质产出）/ review（产出可疑需人工看）/ todo（失败退回）。"""
+    text = (reply or "").strip()
+    if not text:
+        return "todo"
+    if any(m in text[:120] for m in FAIL_MARKERS):
+        return "todo"
+    if len(text) < 40:
+        return "review"
+    return "done"
+
 
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
@@ -2149,13 +2660,19 @@ async def project_chat(pid: str, req: Request):
         conn.commit()
         conn.close()
 
+        # v4.0：开工即流转到「进行中」，看板实时可见
+        _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{ROLE_NAMES[role]}，进入进行中")
+
         # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
         role_sys = ROLE_SYSTEMS[role]
         role_hist = [
             {"role": "system", "content": role_sys + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"},
             {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
         ]
-        role_reply = await _chat_with_tools(role, role_hist, role_sys)
+        try:
+            role_reply = await _chat_with_tools(role, role_hist, role_sys)
+        except Exception as e:
+            role_reply = f"这次没有产出。{ROLE_NAMES[role]}执行时出错：{e}"
 
         # 落库角色回复
         conn = get_db()
@@ -2165,7 +2682,16 @@ async def project_chat(pid: str, req: Request):
         )
         conn.commit()
         conn.close()
-        role_results.append({"role": role, "task_name": task_name, "task_id": task_id})
+
+        # v4.0：按真实产出判定终态（done/review/todo），不再一律停在 todo
+        final = _judge_role_output(role_reply)
+        note = {
+            "done": f"✅ 「{task_name}」已完成（{ROLE_NAMES[role]}）",
+            "review": f"🔍 「{task_name}」产出较少，转待复核",
+            "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
+        }[final]
+        _task_status(task_id, final, pid, note)
+        role_results.append({"role": role, "task_name": task_name, "task_id": task_id, "status": final})
 
     return {"reply": meta_reply, "actions": role_results, "ok": True}
 
@@ -2566,40 +3092,40 @@ async def rollback_skill(sid: int, ver: int, req: Request):
 
 @app.post("/api/skills/distill")
 async def distill_skills(req: Request):
-    """从元神私聊最近的对话中自动识别可复用的流程/技能（关键词启发式）。"""
+    """从元神私聊最近的对话中识别可复用流程（LLM 抽取，带完整步骤）。"""
+    rows = _recent_meta_texts(30)
+    if not rows:
+        return {"ok": True, "extracted": 0, "skills": [], "method": "empty",
+                "note": "最近没有对话可供提炼。"}
+    convo = "\n".join(f"{r['sender']}: {r['text']}" for r in rows if r.get("text"))
+    items, method = await _llm_extract(SKILL_DISTILL_SYSTEM, f"以下是最近的对话记录：\n\n{convo}")
+    if items is None:
+        # 审查 #13：旧版在这里取原句前 16 个字当技能名、steps 恒为 []，
+        # 存出来的"技能"既不可读也不可执行。现在宁可不产出，也不造垃圾数据。
+        return {"ok": True, "extracted": 0, "skills": [], "method": "unavailable",
+                "note": f"未能提炼：{method}。技能需要完整步骤，缺步骤的条目不入库。"}
+
     conn = get_db()
-    rows = conn.execute(
-        "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 30",
-        (META_PID,),
-    ).fetchall()
-    existing = {r["name"] for r in conn.execute("SELECT name FROM skills").fetchall()}
-    conn.close()
-    flow_keywords = ["先", "然后", "步骤", "流程", "每次", "惯例", "模板", "标准", "做法"]
-    skip_phrases = ["已记下", "收到", "明白了", "好的", "好的，", "没问题", "了解"]
-    candidates = []
-    for r in rows:
-        text = (r["text"] or "").strip()
-        if len(text) < 8 or any(k in text for k in ["先不要", "不知道", "?"]):
-            continue
-        if any(sp in text for sp in skip_phrases):
-            continue
-        if any(kw in text for kw in flow_keywords) and "?" not in text:
-            name = text[:16].rstrip("，。,.")
-            if name and name not in existing:
-                candidates.append({"text": text, "suggested_name": name})
-                existing.add(name)
+    existing = {r[0] for r in conn.execute("SELECT name FROM skills").fetchall()}
     created = []
-    conn = get_db()
-    for c in candidates[:5]:
+    for it in items[:5]:
+        name = (it.get("name") or "").strip()[:40]
+        steps = it.get("steps") or []
+        if not name or name in existing or not isinstance(steps, list) or len(steps) < 2:
+            continue  # 没名字、重名、步骤不足 2 步的一律不收
         now = datetime.now().isoformat()
         conn.execute(
-            "INSERT INTO skills (name,category,description,trigger_words,steps,version,enabled,created_at,updated_at) VALUES (?,?,?,?,?,1,0,?,?)",
-            (c["suggested_name"], "auto", c["text"], "", "[]", now, now),
+            "INSERT INTO skills (name,category,description,trigger_words,steps,version,enabled,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,1,0,?,?)",
+            (name, "auto", (it.get("description") or "").strip()[:200],
+             (it.get("trigger_words") or "").strip()[:100],
+             json.dumps([str(s)[:120] for s in steps], ensure_ascii=False), now, now),
         )
-        created.append(c["suggested_name"])
+        existing.add(name)
+        created.append({"name": name, "steps": len(steps)})
     conn.commit()
     conn.close()
-    return {"ok": True, "extracted": len(created), "skills": created}
+    return {"ok": True, "extracted": len(created), "skills": created, "method": method}
 
 
 # ── API：经验库（成功/失败案例归档，Phase 4）────────────────────
@@ -2655,44 +3181,60 @@ def delete_experience(eid: int):
     return {"ok": True}
 
 
+EXPERIENCE_DISTILL_SYSTEM = """你是复盘提炼器。从对话中找出「做过并且有结果的事」，输出 JSON 数组。
+
+只提炼真的发生过、且能看出结果的事情。计划、设想、还没做的，一律忽略。
+
+每条包含：
+- category：success（做成了）或 failure（失败或踩坑）
+- scenario：当时在做什么，一句话，不超过 30 字
+- goal：想达成什么
+- attempts：怎么做的，关键动作
+- outcome：结果如何
+- lesson：下次遇到同类情况该怎么办。这一条最重要，必须是可复用的判断，不能是"要仔细"这种废话
+
+没有就返回空数组 []。
+
+输出格式（只输出 JSON，不要任何解释）：
+[{"category":"failure","scenario":"...","goal":"...","attempts":"...","outcome":"...","lesson":"..."},...]"""
+
+
 @app.post("/api/experiences/distill")
 async def distill_experiences(req: Request):
-    """从元神私聊最近的对话中提炼成功/失败案例（启发式）。"""
+    """从元神私聊最近的对话中提炼成功/失败案例（LLM 抽取）。"""
+    rows = _recent_meta_texts(30)
+    if not rows:
+        return {"ok": True, "extracted": 0, "items": [], "method": "empty",
+                "note": "最近没有对话可供提炼。"}
+    convo = "\n".join(f"{r['sender']}: {r['text']}" for r in rows if r.get("text"))
+    items, method = await _llm_extract(EXPERIENCE_DISTILL_SYSTEM, f"以下是最近的对话记录：\n\n{convo}")
+    if items is None:
+        # 旧版在这里把命中"失败/成功"关键词的原句整条塞进 lesson 字段，
+        # 存出来的"经验"就是一句聊天记录，复用价值为零。宁可空手而归。
+        return {"ok": True, "extracted": 0, "items": [], "method": "unavailable",
+                "note": f"未能提炼：{method}。经验必须带可复用的教训，凑数的不入库。"}
+
     conn = get_db()
-    rows = conn.execute(
-        "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 30",
-        (META_PID,),
-    ).fetchall()
-    existing = set(r["scenario"] for r in conn.execute("SELECT scenario FROM experiences").fetchall())
-    conn.close()
-    fail_kw = ["失败", "报错", "卡住", "不行", "踩坑", "错误", "bug"]
-    success_kw = ["成功", "搞定", "完成", "通了", "解决了", "上线"]
-    skip_phrases = ["降级", "离线", "已记录", "稍后重试", "调用 deepseek"]
-    candidates = []
-    for r in rows:
-        text = (r["text"] or "").strip()
-        if len(text) < 10 or "?" in text:
-            continue
-        if any(sp in text for sp in skip_phrases):
-            continue
-        is_fail = any(k in text for k in fail_kw)
-        is_ok = any(k in text for k in success_kw)
-        if is_fail or is_ok:
-            scenario = text[:30].rstrip("，。,.")
-            if scenario not in existing:
-                existing.add(scenario)
-                candidates.append({"scenario": scenario, "text": text, "category": "failure" if is_fail and not is_ok else "success"})
+    existing = {r[0] for r in conn.execute("SELECT scenario FROM experiences").fetchall()}
     created = []
-    conn = get_db()
-    for c in candidates[:5]:
+    for it in items[:5]:
+        scenario = (it.get("scenario") or "").strip()[:60]
+        lesson = (it.get("lesson") or "").strip()
+        if not scenario or scenario in existing or len(lesson) < 6:
+            continue  # 没有教训的不算经验
+        category = "failure" if it.get("category") == "failure" else "success"
         conn.execute(
-            "INSERT INTO experiences (category,scenario,goal,attempts,outcome,lesson,project_id,source,ts) VALUES (?,?,?,?,?,?,?,?,?)",
-            (c["category"], c["scenario"], c["text"], "", "", c["text"], META_PID, "auto", datetime.now().isoformat()),
+            "INSERT INTO experiences (category,scenario,goal,attempts,outcome,lesson,project_id,source,ts) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (category, scenario, (it.get("goal") or "")[:200], (it.get("attempts") or "")[:500],
+             (it.get("outcome") or "")[:300], lesson[:500], META_PID, f"auto·{method}",
+             datetime.now().isoformat()),
         )
-        created.append(c["scenario"])
+        existing.add(scenario)
+        created.append({"scenario": scenario, "category": category})
     conn.commit()
     conn.close()
-    return {"ok": True, "extracted": len(created), "items": created}
+    return {"ok": True, "extracted": len(created), "items": created, "method": method}
 
 
 # ── API：进化引擎（复盘 → 确认 → 固化，Phase 4）─────────────────
@@ -2915,7 +3457,9 @@ async def meta_dispatch(req: Request):
     if not task:
         conn.close()
         return {"ok": False, "error": "任务不存在"}
-    conn.execute("UPDATE tasks SET owner_role=? WHERE id=?", (to_role, task_id))
+    # v4.0：派出即流转（idea/todo → doing），看板同步动起来
+    new_status = "doing" if task["status"] in ("idea", "todo") else task["status"]
+    conn.execute("UPDATE tasks SET owner_role=?, status=? WHERE id=?", (to_role, new_status, task_id))
     if task["topic_id"]:
         conn.execute(
             "INSERT INTO messages (project_id,sender,kind,text,tag,ts,topic_id) VALUES (?,?,?,?,?,?,?)",
@@ -2924,7 +3468,7 @@ async def meta_dispatch(req: Request):
         )
     conn.commit()
     conn.close()
-    return {"ok": True, "task_id": task_id, "owner_role": to_role}
+    return {"ok": True, "task_id": task_id, "owner_role": to_role, "status": new_status}
 
 
 @app.post("/api/meta/quality-check")
@@ -2990,6 +3534,10 @@ def meta_settings_get():
         "patrol_interval": int(get_setting("patrol_interval", "60")),  # 分钟
         "patrol_level": get_setting("patrol_level", "red"),  # red / all
         "watch_paths": watch_paths,
+        # v4.0 安全策略（AI 动手前的真人闸门）
+        "approval_mode": approval_mode(),                                  # all / danger / off
+        "approval_timeout": int(get_setting("approval_timeout", "90")),    # 秒，超时按拒绝
+        "bind": "lan" if ALLOW_LAN else "localhost",
     }
 
 
@@ -3017,6 +3565,20 @@ async def meta_settings_set(req: Request):
         set_setting("watch_paths", json.dumps(paths, ensure_ascii=False))
         # 路径变化 → 重置快照，下次巡检全量对比
         set_setting("watch_snapshot", "{}")
+    # v4.0：审批策略可调（默认最严 all；关成 off 需用户自己负责）
+    if "approval_mode" in data:
+        md = data["approval_mode"]
+        if md not in ("all", "danger", "off"):
+            return {"ok": False, "error": "approval_mode 必须是 all / danger / off"}
+        set_setting("approval_mode", md)
+    if "approval_timeout" in data:
+        try:
+            tv = int(data["approval_timeout"])
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "approval_timeout 必须是整数秒"}
+        if not 5 <= tv <= 300:
+            return {"ok": False, "error": "approval_timeout 需在 5~300 秒之间"}
+        set_setting("approval_timeout", str(tv))
     return {"ok": True, "settings": meta_settings_get()}
 
 
