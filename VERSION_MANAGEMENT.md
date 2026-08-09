@@ -102,6 +102,7 @@
 |------|------|----------|----------|
 | 2026-08-09 | v4.0 安全重构 + 诚实性修复 + 能派流转 | `backend/main.py`, `frontend/index.html`, `start.sh` | git `fix/v4.0-audit` |
 | 2026-08-09 | 新增回归测试 `tests/smoke_v40.py` | 39 项冒烟通过 | — |
+| 2026-08-09 | 官网改版 + 安装包更新为 v4.0 | `site/index.html`, `site/分身-v4.0-macOS.zip`, `dist-stage/分身-v1/*` | 默认 127.0.0.1 绑定；S4 不可达，线上未推送 |
 
 ---
 
