@@ -11,7 +11,10 @@ if curl -s -m 1 http://127.0.0.1:8002/api/health >/dev/null 2>&1; then
   echo "分身已在运行，打开浏览器…"
 else
   echo "分身启动中… (日志: /tmp/fenshen-v1.log)"
-  nohup "$PY" -m uvicorn backend.main:app --host 0.0.0.0 --port 8002 > /tmp/fenshen-v1.log 2>&1 &
+  # 只绑本机：分身能在这台电脑执行命令，绝不能让局域网里的其他设备直接打进来
+  HOST="127.0.0.1"
+  [ "$FENSHEN_ALLOW_LAN" = "1" ] && HOST="0.0.0.0" && echo "⚠️  局域网模式已开启，访问需令牌（data/.auth_token）"
+  nohup "$PY" -m uvicorn backend.main:app --host "$HOST" --port 8002 > /tmp/fenshen-v1.log 2>&1 &
   # 等待端口可用
   for i in $(seq 1 15); do
     curl -s -m 1 http://127.0.0.1:8002/api/health >/dev/null 2>&1 && break

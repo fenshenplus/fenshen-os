@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # 分身 v1 · 桌面托管启动脚本
 # 用法: bash start.sh   （或双击 启动分身.command 自动打开浏览器）
-# 手机访问：浏览器打开 http://<桌面局域网IP>:8002/
 # 端口 8002 规避 8000（choice-power 生产项目占用）
+#
+# 手机 / 局域网访问：FENSHEN_ALLOW_LAN=1 bash start.sh
+#   开启后需要令牌才能访问，令牌见 data/.auth_token
+#   仅在可信网络下使用——分身能在这台电脑上执行命令和读写文件。
 set -e
 cd "$(dirname "$0")"
 
@@ -20,5 +23,15 @@ if curl -s -m 1 http://127.0.0.1:8002/api/health >/dev/null 2>&1; then
   exit 0
 fi
 
+# 安全默认值：只绑本机回环地址。
+# v3.9 之前这里写死 --host 0.0.0.0，等于在同一 WiFi 下开了个后门——
+# 别人扫到 8002 端口就能调用能执行 shell 的接口，审查中已实测可接管整台电脑。
+HOST="127.0.0.1"
+if [ "$FENSHEN_ALLOW_LAN" = "1" ]; then
+  HOST="0.0.0.0"
+  echo "⚠️  局域网模式已开启：同一网络的设备可访问本机分身。"
+  echo "    访问需携带令牌，令牌见 data/.auth_token —— 请确保处于可信网络。"
+fi
+
 echo "分身 v1 启动中… 访问 http://localhost:8002/"
-exec "$PY" -m uvicorn backend.main:app --host 0.0.0.0 --port 8002
+exec "$PY" -m uvicorn backend.main:app --host "$HOST" --port 8002
