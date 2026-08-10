@@ -381,6 +381,9 @@ def init_db():
         cur.execute("ALTER TABLE projects ADD COLUMN phase TEXT DEFAULT 'requirement'")
     if "frozen" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN frozen INTEGER DEFAULT 0")
+    # ── 兼容迁移：projects 增加 autonomy_paused 列（项目级自主推进暂停开关，v4.2）──
+    if "autonomy_paused" not in cols:
+        cur.execute("ALTER TABLE projects ADD COLUMN autonomy_paused INTEGER DEFAULT 0")
     # ── 兼容迁移：messages 增加 topic_id 列（话题消息，空 = 项目群聊）──
     mcols = {r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()}
     if "topic_id" not in mcols:
@@ -1079,6 +1082,22 @@ def get_project(pid: str):
         "modules": module_stats,
     }
     return d
+
+
+@app.post("/api/projects/{pid}/autonomy")
+async def set_project_autonomy(pid: str, req: Request):
+    """v4.2：项目级自主推进暂停/恢复开关。paused=true → 自主循环跳过该项目（该项目的看板任务交由人工推进）。"""
+    data = await req.json()
+    paused = 1 if data.get("paused") else 0
+    conn = get_db()
+    row = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    conn.execute("UPDATE projects SET autonomy_paused=? WHERE id=?", (paused, pid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "paused": bool(paused)}
 
 
 @app.post("/api/projects")
@@ -4367,6 +4386,9 @@ async def _autonomy_loop():
             conn.close()
             for p in projects:
                 if p["id"] == META_PID:
+                    continue
+                # v4.2：项目级自主推进暂停开关（autonomy_paused=1 → 该项目的看板任务交由人工推进）
+                if p.get("autonomy_paused"):
                     continue
                 # 跳过占位种子项目（goal 是状态描述而非真实目标，如"完成 · 首页已上线"）
                 _g = (p["goal"] or "").strip()

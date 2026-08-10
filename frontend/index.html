@@ -293,6 +293,10 @@
                 <div style="height:8px;background:var(--gray-100);border-radius:99px;overflow:hidden;border:.5px solid var(--gray-200)">
                   <div id="boardProgBar" style="height:100%;width:0%;background:linear-gradient(90deg,#6d5bd0,#34c98e);border-radius:99px;transition:width .5s"></div>
                 </div>
+                <!-- v4.2 项目级自主推进开关 -->
+                <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                  <button class="btn sm" id="boardAutoBtn" onclick="toggleBoardAutonomy()" style="font-size:10px;padding:2px 10px"></button>
+                </div>
               </div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -1549,9 +1553,26 @@ async function loadBoard(){
       document.getElementById('boardProgBar').style.width=pct+'%';
       document.getElementById('boardProgLabel').textContent=`完成度 ${pct}%（${c.done}/${c.total} 卡）${pct>=100?' 🎉 已达 100%，等待进入下一阶段':''}`;
       document.getElementById('boardPhaseLabel').textContent='阶段：'+(j.phase||'requirement');
+      // 项目级自主推进开关（v4.2）
+      const ab=document.getElementById('boardAutoBtn');
+      const paused=!!j.autonomy_paused;
+      window._autoPaused=paused;
+      ab.textContent=paused?'▶ 恢复自主推进':'⏸ 暂停自主推进';
+      ab.style.background=paused?'#34c98e':'var(--gray-100)';
+      ab.style.color=paused?'#fff':'var(--gray-500)';
+      ab.style.border='none';
     } else wrap.style.display='none';
   }catch(e){ console.error(e); curMods=[]; curTasks=[]; curTopics=[]; }
   renderBoard();
+}
+async function toggleBoardAutonomy(){
+  if(!curRoom){ toast('先选择项目'); return; }
+  try{
+    const r=await fetch(`/api/projects/${curRoom}/autonomy`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paused:!(window._autoPaused)})});
+    const j=await r.json();
+    if(j.ok){ window._autoPaused=j.paused; toast(j.paused?'⏸ 已暂停自主推进（此项目看板任务由人工推进）':'▶ 已恢复自主推进'); await loadBoard(); }
+    else toast('❌ '+j.error);
+  }catch(e){ toast('请求失败：'+e); }
 }
 function renderBoard(){
   const g=document.getElementById('boardGridInline');

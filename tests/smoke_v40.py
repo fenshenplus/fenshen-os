@@ -384,6 +384,16 @@ def test_batch_d():
     ok_msg = isinstance(msgs, list) and any("自动进入下一阶段" in (m.get("text") or "") for m in msgs)
     check("批次D：阶段流转群聊留痕", ok_msg)
 
+    # v4.2 项目级自主推进暂停开关
+    _, ab = call("POST", f"/api/projects/{pid}/autonomy", {"paused": True})
+    check("批次D：项目级暂停自主推进", isinstance(ab, dict) and ab.get("paused") is True, str(ab)[:60])
+    _, d5 = call("GET", f"/api/projects/{pid}")
+    check("批次D：聚合详情透出 autonomy_paused",
+          isinstance(d5, dict) and d5.get("autonomy_paused") == 1,
+          f"paused={d5.get('autonomy_paused') if isinstance(d5, dict) else '?'}")
+    _, ab2 = call("POST", f"/api/projects/{pid}/autonomy", {"paused": False})
+    check("批次D：恢复自主推进", isinstance(ab2, dict) and ab2.get("paused") is False)
+
     # 清场
     call("DELETE", f"/api/projects/{pid}")
     call("POST", "/api/meta/settings", {"autonomy_enabled": old_auto == "1"}, timeout=20)
