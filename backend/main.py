@@ -1128,7 +1128,8 @@ def _bootstrap_project(pid: str, goal: str = "", standards: str = "", roles: lis
             return
         mods = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort", (pid,)).fetchall()
         mod_names = "、".join(m["name"] for m in mods) if mods else "（未拆分模块，可在看板补充分解）"
-        team = [ROLE_NAMES.get(r, r) for r in (roles or ROLE_NAMES)]
+        _, role_names = _roles_from_db()  # P3-1：角色从表动态加载
+        team = [role_names.get(r, r) for r in (roles or list(role_names))]
         team_text = "、".join(team)
         lines = [
             "🏗️ 元神已为项目搭建好基础设施：",
@@ -1213,6 +1214,113 @@ BUILTIN_TEMPLATES = [
                  {"name": "数据存储", "owner_role": "后端", "depends_on": ["核心业务 API"]},
                  {"name": "日志/监控", "owner_role": "后端", "depends_on": ["核心业务 API"]}]},
 ]
+
+
+# ── 预设技能活配件（P3-2：12 种内置技能，参照 BUILTIN_TEMPLATES 模式）──
+BUILTIN_SKILLS = [
+    {"name": "需求拆解", "category": "builtin", "description": "把模糊需求拆成可独立验收的子任务",
+     "trigger_words": "需求,拆解,需求分析,要做什么,目标", "steps": [
+         "确认项目目标与完成标准（对照项目 standards）",
+         "把需求拆成 2-5 个可独立验收的子任务",
+         "标注每个子任务的依赖关系与负责人",
+         "输出子任务清单供看板建卡"]},
+    {"name": "技术选型", "category": "builtin", "description": "按场景对比技术方案并给出选型结论",
+     "trigger_words": "技术选型,选型,技术方案,框架选择,对比", "steps": [
+         "列出候选方案（≥2 个）",
+         "按 学习成本/生态/性能/团队熟悉度 对比",
+         "给出明确选型结论与理由",
+         "标注风险与替代方案"]},
+    {"name": "UI 组件库", "category": "builtin", "description": "设计可复用的 UI 组件与样式规范",
+     "trigger_words": "组件,UI,界面,样式,页面设计,设计稿", "steps": [
+         "梳理页面所需组件清单",
+         "定义设计 token（色板/字号/间距/圆角）",
+         "给出 3-6 个核心组件的结构与样式要点",
+         "输出组件使用约定"]},
+    {"name": "API 设计", "category": "builtin", "description": "设计 REST API 接口定义",
+     "trigger_words": "API,接口设计,接口,路由,端点", "steps": [
+         "列出业务场景对应的接口清单",
+         "每个接口给出 method/path/请求参数/响应结构",
+         "定义错误码与鉴权方式",
+         "标注 done_criteria（可测试的验收点）"]},
+    {"name": "DB Schema", "category": "builtin", "description": "设计数据库表结构与数据模型",
+     "trigger_words": "数据库,表结构,Schema,建表,数据模型,ER", "steps": [
+         "识别核心实体与关系（1:N / N:M）",
+         "给出每张表的字段/类型/索引设计",
+         "定义外键与约束",
+         "给出 1 条核心查询示例验证设计"]},
+    {"name": "前端脚手架", "category": "builtin", "description": "初始化前端项目结构",
+     "trigger_words": "脚手架,前端项目,初始化项目,搭建前端,工程结构", "steps": [
+         "确定技术栈与目录结构",
+         "列出依赖清单",
+         "给出入口文件与路由骨架",
+         "验证 npm install 与本地启动可跑"]},
+    {"name": "后端脚手架", "category": "builtin", "description": "初始化后端服务结构",
+     "trigger_words": "后端项目,服务端,初始化后端,搭建后端,后端工程", "steps": [
+         "确定框架与目录分层（路由/服务/数据层）",
+         "给出依赖与环境配置",
+         "提供健康检查接口骨架",
+         "验证服务可启动"]},
+    {"name": "测试用例", "category": "builtin", "description": "编写覆盖关键路径的测试用例",
+     "trigger_words": "测试,用例,测试方案,冒烟,回归", "steps": [
+         "列出核心功能路径",
+         "为每条路径写正/反例用例",
+         "明确断言与前置条件",
+         "执行并给出通过率"]},
+    {"name": "代码审查", "category": "builtin", "description": "按清单审查代码质量与安全隐患",
+     "trigger_words": "审查,review,代码走查,检查代码,审计", "steps": [
+         "跑一遍功能验证是否可用",
+         "检查 SQL 注入/路径穿越/敏感信息泄漏",
+         "检查错误处理与日志",
+         "输出问题清单（按严重级排序）"]},
+    {"name": "部署上线", "category": "builtin", "description": "输出可执行的部署与上线步骤",
+     "trigger_words": "部署,上线,发布,服务器,运维", "steps": [
+         "明确服务器/端口/域名与回滚方案",
+         "给出构建与部署命令",
+         "给出上线前检查清单",
+         "给出回滚步骤"]},
+    {"name": "文档生成", "category": "builtin", "description": "生成项目/接口/使用文档",
+     "trigger_words": "文档,README,说明文档,手册,教程", "steps": [
+         "确定文档结构与目标读者",
+         "写清安装/配置/使用步骤",
+         "补关键接口或页面说明",
+         "用 write_file 落盘并核对"]},
+    {"name": "Bug 修复", "category": "builtin", "description": "定位并修复缺陷",
+     "trigger_words": "bug,修复,报错,错误,异常,崩溃", "steps": [
+         "复现并记录错误信息与触发条件",
+         "定位根因（查日志/代码/数据）",
+         "给出最小修复并验证不再复现",
+         "补充回归用例"]},
+]
+
+
+def _seed_builtin_skills():
+    """P3-2：启动时把 12 种预设技能种入 skills 表。
+    内置技能按 name upsert（同步出厂定义升级；enabled/version 等用户状态保留），
+    非内置技能不受影响。"""
+    try:
+        conn = get_db()
+        now = datetime.now().isoformat()
+        for s in BUILTIN_SKILLS:
+            row = conn.execute("SELECT id FROM skills WHERE name=? AND category='builtin'", (s["name"],)).fetchone()
+            steps = json.dumps(s["steps"], ensure_ascii=False)
+            if row:
+                conn.execute(
+                    "UPDATE skills SET description=?, trigger_words=?, steps=?, updated_at=? WHERE id=?",
+                    (s["description"], s["trigger_words"], steps, now, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO skills (name,category,description,trigger_words,steps,version,enabled,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,1,1,?,?)",
+                    (s["name"], s["category"], s["description"], s["trigger_words"], steps, now, now),
+                )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[skills-seed] 失败: {e}")
+
+
+_seed_builtin_skills()
 
 
 def _seed_templates(conn):
@@ -2037,14 +2145,45 @@ async def _run_file_tool(name: str, args: dict, agent_id: str) -> str:
     return out
 
 
+def _match_skill_steps(system_prompt: str, user_text: str) -> str:
+    """P3-2：按 trigger_words 命中 enabled 技能 → 返回注入文本（活配件）。
+    命中规则：技能触发词（逗号分隔）任一出现在 system_prompt 或最近用户消息中，即注入其步骤。"""
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT name,trigger_words,steps FROM skills WHERE enabled=1").fetchall()
+        conn.close()
+    except Exception:
+        return ""
+    haystack = f"{system_prompt or ''}\n{user_text or ''}"
+    parts = []
+    for r in rows:
+        words = [w.strip() for w in (r["trigger_words"] or "").replace("，", ",").split(",") if w.strip()]
+        if not words:
+            continue
+        if any(w in haystack for w in words):
+            try:
+                steps = json.loads(r["steps"] or "[]")
+            except Exception:
+                steps = []
+            if steps:
+                lines = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(steps[:6]))
+                parts.append(f"【技能：{r['name']}】请按以下步骤执行：\n{lines}")
+    return "\n\n".join(parts)
+
+
 async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, tools: list = None) -> str:
     """通用工具对话循环（元神/群聊共用，v0.27.0）：最多 6 轮（支持多步工具操作）。
     批次 B / P2-1：tools 参数控制工具集——元神默认 META_TOOLS（只读+搭建，无写文件），
-    角色默认 ROLE_TOOLS（含 write_file 可动手产出）。"""
+    角色默认 ROLE_TOOLS（含 write_file 可动手产出）。
+    批次 C / P3-2：命中 trigger_words 的启用技能会注入 system_prompt（活配件）。"""
     cands = _available_providers(agent_id)
     if not cands:
         return "[分身·离线] 当前该角色未配置可用模型 Key。"
     tool_list = tools if tools is not None else (META_TOOLS if agent_id == META_PID else ROLE_TOOLS)
+    last_text = (history[-1].get("content") or "") if history else ""
+    inject = _match_skill_steps(system_prompt, last_text)
+    if inject:
+        system_prompt = f"{system_prompt}\n\n{inject}"
     last_err = ""
     last_content = ""
     for _round in range(6):
@@ -2623,7 +2762,7 @@ def delete_module(pid: str, mid: str):
     return {"ok": True}
 
 
-# ── 角色系统提示词（自主执行链 v0.27.0）──────────────────────────
+# ── 角色系统提示词（v0.27.0 静态种子；P3-1 起从 roles 表动态加载，此处为兜底默认）──
 ROLE_SYSTEMS = {
     "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
     "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
@@ -2636,6 +2775,49 @@ ROLE_NAMES = {
     "frontend": "前端",
     "tester": "测试",
 }
+# 兜底中文名 → id（roles 表反查失败时用；P3-1 起优先查表，消灭硬编码 ROLE_ID_MAP）
+_ROLE_NAME_FALLBACK = {"后端": "backend", "前端": "frontend", "产品": "architect", "测试": "tester"}
+
+
+def _roles_from_db() -> tuple:
+    """P3-1：从 roles 表动态加载角色 → (systems, names)。
+    静态种子作兜底，数据库记录（id/name/mandate/gate）覆盖或扩展；角色库改动即时生效。"""
+    systems = dict(ROLE_SYSTEMS)
+    names = dict(ROLE_NAMES)
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT id,name,mandate,skills,gate FROM roles").fetchall()
+        conn.close()
+        for r in rows:
+            rid = (r["id"] or "").strip()
+            if not rid:
+                continue
+            rname = (r["name"] or rid).strip()
+            names[rid] = rname
+            mandate = (r["mandate"] or "").strip()
+            if mandate:
+                gate = (r["gate"] or "").strip()
+                systems[rid] = (f"你是{rname}，职责：{mandate}。"
+                                + (f"验收门禁：{gate}。" if gate else "")
+                                + "回答用中文，直接给方案/产出，不废话。")
+    except Exception as e:
+        print(f"[roles-db] 动态加载失败，退回静态种子: {e}")
+    return systems, names
+
+
+def _role_id_by_name(name: str) -> str:
+    """P3-1：按角色中文名反查 id（消灭 ROLE_ID_MAP）。查不到返回 None。"""
+    if not name:
+        return None
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT id FROM roles WHERE name=? LIMIT 1", (name,)).fetchone()
+        conn.close()
+        if row and row["id"]:
+            return row["id"]
+    except Exception:
+        pass
+    return _ROLE_NAME_FALLBACK.get(name)
 
 # ── v4.0：任务状态自动流转（修复「能派」——此前任务建成 todo 后看板永不移动）──
 FAIL_MARKERS = ("这次没有产出", "调用失败", "模型调用失败", "未配置任何可用模型", "provider_error")
@@ -2747,20 +2929,25 @@ async def project_chat(pid: str, req: Request):
     conn.close()
 
     # ── Step 1: 元神分析 → 调度计划（v0.27.0：支持先调工具查状态再调度）──
+    # P3-1：角色从 roles 表动态加载；P3-3：单轮可派动作数按角色数动态（PAD 协议 ≤3 并行由串行执行满足）
+    role_systems, role_names = _roles_from_db()
+    max_actions = max(3, min(6, len(role_systems)))
+    role_enum = "|".join(role_names)
     dispatch_sys = (
         "你是「元神」，在项目群聊中接收用户指令后，需要分析并调度团队执行。\n"
         "根据用户指令和项目当前状态，判断是否需要调度团队执行：\n"
         "- 如果是执行类指令（如\"实现XX\"、\"修复XX\"、\"检查XX\"、\"设计XX\"），输出 JSON 调度计划\n"
         "- 如果是闲聊/提问/汇报，只在 reply 中回答，actions 为空数组\n\n"
         f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
+        f"当前团队角色：{'、'.join(role_names.values())}。\n"
         f"{mod_desc}\n{task_desc}\n\n"
         "【可用工具（v0.27.0）】你可调用 exec_command（执行命令/查看文件/查系统状态）与 browser_action（打开网页/截图/抓取）"
         "获取真实信息后再回复或调度，不要凭空编造。危险命令会被拦截。\n\n"
         "输出格式（必须为合法 JSON）：\n"
         '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
-        '"actions": [{"role": "frontend|backend|architect|tester", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令", '
+        f'"actions": [{{"role": "{role_enum}", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令", '
         '"done_criteria": "该任务完成的、可验证的判定标准（例如：接口返回 200 且通过测试）"}]}\n'
-        "注意：actions 最多 3 个；done_criteria 务必具体、可验证，用于后续自动判定角色产出是否达标。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。"
+        f"注意：actions 最多 {max_actions} 个；done_criteria 务必具体、可验证，用于后续自动判定角色产出是否达标。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。"
     )
     hist = [{"role": "system", "content": dispatch_sys}]
     for r in reversed(rows):
@@ -2799,11 +2986,11 @@ async def project_chat(pid: str, req: Request):
     MAX_ROUNDS = max(1, min(5, int(get_setting("autonomy_max_rounds", "3"))))
     role_results = []
     round_no = 1
-    pending_actions = actions[:3]
+    pending_actions = actions[:max_actions]
     while pending_actions and round_no <= MAX_ROUNDS:
         for act in pending_actions:
             role = act.get("role", "backend")
-            if role not in ROLE_SYSTEMS:
+            if role not in role_systems:
                 role = "backend"
             task_name = act.get("task_name", "未命名任务")[:20]
             detail = act.get("detail", "")
@@ -2835,10 +3022,10 @@ async def project_chat(pid: str, req: Request):
             conn.close()
 
             # v4.0：开工即流转到「进行中」，看板实时可见
-            _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{ROLE_NAMES[role]}，进入进行中")
+            _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
 
             # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
-            role_sys_ctx = ROLE_SYSTEMS[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
+            role_sys_ctx = role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
             if done_criteria:
                 role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
             role_hist = [
@@ -2848,13 +3035,13 @@ async def project_chat(pid: str, req: Request):
             try:
                 role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx)
             except Exception as e:
-                role_reply = f"这次没有产出。{ROLE_NAMES[role]}执行时出错：{e}"
+                role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
 
             # 落库角色回复
             conn = get_db()
             conn.execute(
                 "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-                (pid, f"分身 · {ROLE_NAMES[role]}", "agent", role_reply, "progress", datetime.now().isoformat()),
+                (pid, f"分身 · {role_names.get(role, role)}", "agent", role_reply, "progress", datetime.now().isoformat()),
             )
             conn.commit()
             conn.close()
@@ -2862,7 +3049,7 @@ async def project_chat(pid: str, req: Request):
             # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
             final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
             note = {
-                "done": f"✅ 「{task_name}」已完成（{ROLE_NAMES[role]}）",
+                "done": f"✅ 「{task_name}」已完成（{role_names.get(role, role)}）",
                 "review": f"🔍 「{task_name}」未达标转复核（{judge_reason}）",
                 "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
             }[final]
@@ -2876,7 +3063,7 @@ async def project_chat(pid: str, req: Request):
             break
         round_no += 1
         feedback = "；".join(
-            f"「{r['task_name']}」（{ROLE_NAMES.get(r['role'], r['role'])}）未达标：{r['reason']}" for r in unmet
+            f"「{r['task_name']}」（{role_names.get(r['role'], r['role'])}）未达标：{r['reason']}" for r in unmet
         )
         replan_sys = (
             "你是「元神」。上一轮派单给团队的部分任务未达标，需要你重新规划补充动作。\n"
@@ -2884,9 +3071,9 @@ async def project_chat(pid: str, req: Request):
             f"项目完成标准：{proj['standards'] or '（未填写）'}。\n"
             f"未达标任务反馈：{feedback}\n"
             '输出 JSON：{"reply": "给用户的简短说明（本轮补做计划）", '
-            '"actions": [{"role": "frontend|backend|architect|tester", "task_name": "简短任务名", '
+            f'"actions": [{{"role": "{role_enum}", "task_name": "简短任务名", '
             '"detail": "针对未达标原因的补充执行指令", "done_criteria": "可验证的完成标准"}]}\n'
-            "注意：actions 最多 3 个；若当前产出已尽力、无法继续（缺信息/需用户决策等），actions 输出空数组并说明原因。"
+            f"注意：actions 最多 {max_actions} 个；若当前产出已尽力、无法继续（缺信息/需用户决策等），actions 输出空数组并说明原因。"
         )
         replan_hist = [{"role": "system", "content": replan_sys}]
         replan_reply = await _chat_with_tools(META_PID, replan_hist, replan_sys)
@@ -2894,7 +3081,7 @@ async def project_chat(pid: str, req: Request):
         try:
             if "{" in replan_reply and "}" in replan_reply:
                 j = json.loads(replan_reply[replan_reply.find("{"):replan_reply.rfind("}") + 1])
-                pending_actions = (j.get("actions") or [])[:3]
+                pending_actions = (j.get("actions") or [])[:max_actions]
                 for _a in pending_actions:
                     _a.setdefault("done_criteria", "")
                 extra_reply = str(j.get("reply") or "").strip()
@@ -3049,9 +3236,10 @@ async def topic_chat(tid: str, req: Request):
             continue
         role = "assistant" if r["kind"] != "self" else "user"
         hist.append({"role": role, "content": r["text"]})
-    # 角色：话题绑定模块 → 用模块负责人角色调用（走其模型配置）
-    ROLE_ID_MAP = {"后端": "backend", "前端": "frontend", "产品": "architect", "测试": "tester"}
-    agent_id = ROLE_ID_MAP.get(mod["owner_role"]) if mod else "architect"
+    # 角色：话题绑定模块 → 用模块负责人角色调用（P3-1：按 roles 表反查 id，不再硬编码映射）
+    agent_id = _role_id_by_name(mod["owner_role"]) if mod else "architect"
+    if not agent_id:
+        agent_id = "architect"
     reply = call_llm(agent_id, hist, sys_prompt)
     # 落库 agent 回复（带 topic_id）
     conn = get_db()
@@ -3199,6 +3387,11 @@ async def create_skill(req: Request):
     if not name:
         return {"ok": False, "error": "技能名称不能为空"}
     conn = get_db()
+    # P3-2：可选配件上限 ≤20（内置 12 + 用户自定义 ≤8）
+    total = conn.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
+    if total >= 20:
+        conn.close()
+        return {"ok": False, "error": f"技能配件已达上限（{total}/20，含内置），请先删除或停用不需要的技能"}
     exists = conn.execute("SELECT id FROM skills WHERE name=?", (name,)).fetchone()
     if exists:
         conn.close()
@@ -3964,32 +4157,10 @@ async def meta_chat(req: Request):
 
 # ── 自动后处理 ────────────────────────────────────────────────────
 async def _auto_after_chat():
-    """每次元神对话后，自动检查是否需要提炼记忆/技能或压缩上下文。"""
+    """每次元神对话后，自动检查是否需要提炼记忆或压缩上下文。
+    P3-2：已删除关键词正则自动生成垃圾技能的逻辑（skills 只由预设/用户显式创建），技能改为 trigger 命中注入活配件。"""
     try:
         conn = get_db()
-        # 提炼技能：对话中出现流程性描述（先…然后…/步骤/模板）→ 自动建草稿技能（disabled）
-        flow_keywords = ["先", "然后", "步骤", "流程", "每次", "惯例", "模板", "标准", "做法"]
-        skip_phrases = ["已记下", "收到", "明白了", "好的", "好的，", "没问题", "了解"]
-        rows = conn.execute(
-            "SELECT text FROM messages WHERE project_id=? AND kind='self' ORDER BY id DESC LIMIT 10",
-            (META_PID,),
-        ).fetchall()
-        existing = {r["name"] for r in conn.execute("SELECT name FROM skills").fetchall()}
-        for r in rows:
-            text = (r["text"] or "").strip()
-            if len(text) < 8 or "?" in text:
-                continue
-            if any(sp in text for sp in skip_phrases):
-                continue
-            if any(kw in text for kw in flow_keywords):
-                name = text[:16].rstrip("，。,.")
-                if name and name not in existing:
-                    now = datetime.now().isoformat()
-                    conn.execute(
-                        "INSERT INTO skills (name,category,description,trigger_words,steps,version,enabled,created_at,updated_at) VALUES (?,?,?,?,?,1,0,?,?)",
-                        (name, "auto", text, "", "[]", now, now),
-                    )
-                    existing.add(name)
         # 提炼记忆：每 10 条消息至少提炼 1 条（基于关键词）
         pref_keywords = ["记住", "我喜欢", "我不喜欢", "我习惯", "我总是", "我从来", "注意", "规则", "要", "不要"]
         rows = conn.execute(

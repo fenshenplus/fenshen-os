@@ -280,6 +280,55 @@ def test_batch_b():
     check("批次B：清理测试数据", True)
 
 
+def test_batch_c():
+    """批次 C：预设技能活配件 / 角色动态加载 / 并行上限动态。"""
+    print("\n── 7. 批次 C：技能活配件 / 角色动态加载 / 并行上限 ──")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+    # P3-2 预设技能：GET /api/skills 应有 12 条内置且全部启用
+    code, sk = call("GET", "/api/skills")
+    builtin = [s for s in sk if isinstance(s, dict) and s.get("category") == "builtin"] if isinstance(sk, list) else []
+    check("批次C：12 条内置技能已 seed 且启用",
+          len(builtin) == 12 and all(s.get("enabled") for s in builtin),
+          f"内置 {len(builtin)} / 启用 {sum(1 for s in builtin if s.get('enabled'))}")
+
+    # P3-2 触发注入：_match_skill_steps 命中 trigger → 返回步骤文本
+    try:
+        from backend.main import _match_skill_steps, BUILTIN_SKILLS, _roles_from_db, _role_id_by_name
+        inj = _match_skill_steps("你是后端工程师", "请设计登录接口的 API 方案")
+        check("批次C：技能 trigger 命中注入步骤", "【技能：API 设计】" in inj and "1." in inj, inj[:80].replace("\n", " "))
+        inj_none = _match_skill_steps("你是客服", "今天天气不错，随便聊聊")
+        check("批次C：未命中不注入", inj_none == "", inj_none[:40])
+        check("批次C：BUILTIN_SKILLS 恰 12 种", len(BUILTIN_SKILLS) == 12, str(len(BUILTIN_SKILLS)))
+    except Exception as e:
+        check("批次C：技能注入静态验证", False, str(e)[:80])
+
+    # P3-1 角色动态加载：新增自定义角色 → _roles_from_db 立即包含；_role_id_by_name 反查
+    test_role = "ops"
+    call("POST", "/api/roles", {"id": test_role, "name": "运维", "mandate": "负责部署上线与监控",
+                                "skills": "deploy,ops", "gate": "线上可访问"})
+    try:
+        from backend.main import _roles_from_db, _role_id_by_name
+        systems, names = _roles_from_db()
+        check("批次C：角色表动态加载（含新增运维）",
+              test_role in systems and names.get(test_role) == "运维",
+              f"角色数 {len(systems)} · 运维mandate={'有' if test_role in systems else '无'}")
+        check("批次C：中文名反查 id（消灭 ROLE_ID_MAP）",
+              _role_id_by_name("运维") == "ops" and _role_id_by_name("后端") == "backend",
+              f"运维→{_role_id_by_name('运维')} · 后端→{_role_id_by_name('后端')}")
+    except Exception as e:
+        check("批次C：角色动态加载验证", False, str(e)[:80])
+    # 清场：直接删角色（roles 无 DELETE 接口，用 sqlite 直删）
+    try:
+        conn = __import__("sqlite3").connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "fenshen.db"))
+        conn.execute("DELETE FROM roles WHERE id=?", (test_role,))
+        conn.commit()
+        conn.close()
+        check("批次C：清理测试角色", True)
+    except Exception as e:
+        check("批次C：清理测试角色", False, str(e)[:60])
+
+
 def main():
     global BASE
     ap = argparse.ArgumentParser()
@@ -295,6 +344,7 @@ def main():
     test_task_flow()
     test_standards_board()
     test_batch_b()
+    test_batch_c()
     print(f"\n{'=' * 52}\n通过 {len(PASS)} / 失败 {len(FAIL)}")
     if FAIL:
         print("失败项：\n  - " + "\n  - ".join(FAIL))
