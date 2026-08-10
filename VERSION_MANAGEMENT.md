@@ -17,7 +17,7 @@
 | v3.8 | 2026-08-07 | `2bb9081` | 已签字 | 元神人格蒸馏、演示视频 |
 | v3.9-preaudit | 2026-08-09 | `184fa98` | 基线 | 审查前最后一个 tag |
 | v4.0 | 2026-08-09 | `6c0e1ec`（批次A `c0607fd`） | 已签字 | 全面安全重构 + 诚实性修复 + 能派状态流转 |
-| **v4.1** | 2026-08-10 | 待打 tag | **待签字** | 批次 B：任务完成标准 + 对照标准判定 + 工具分级 + 元神搭建 + autonomy 有界循环 + 护栏收敛 |
+| **v4.1** | 2026-08-10 | 待打 tag | **待签字** | 批次 B：任务完成标准 + 对照标准判定 + 工具分级 + 元神搭建 + autonomy 有界循环 + 护栏收敛；批次 C：角色动态加载 + 预设技能活配件 + 并行上限放开 |
 
 ---
 
@@ -105,6 +105,20 @@
 ### 验证
 - [x] 冒烟回归 `tests/smoke_v40.py`：45 / 45 通过（新增批次 A 用例后基线）
 - [x] 端到端：bootstrap 开场消息落库、任务 done_criteria 透出、角色 write_file 真实产出、LLM 对照标准判定 done、autonomy 单轮达标、approval_mode=danger
+
+---
+
+## v4.1 批次 C 改造清单（2026-08-10，来源：设计改进方案 v1「批次 C：P3-1~3」）
+
+### P3 角色与技能（活配件）
+- [x] P3-1 角色从表动态加载：`_roles_from_db()` 从 roles 表加载 (systems, names)（静态种子兜底，角色库 POST /api/roles 即时生效）；`_role_id_by_name()` 中文名反查 id，消灭 `ROLE_ID_MAP`；project_chat / _bootstrap_project / topic_chat 全部改用动态角色
+- [x] P3-2 预设技能活配件：`BUILTIN_SKILLS` 12 种（需求拆解/技术选型/UI 组件库/API 设计/DB Schema/前端脚手架/后端脚手架/测试用例/代码审查/部署上线/文档生成/Bug 修复）启动 upsert 种入 skills 表；`_match_skill_steps()` 按 trigger_words 命中 enabled 技能 → 注入 steps 到角色 system prompt；删除 `_auto_after_chat` 关键词正则自动生成垃圾技能逻辑（保留记忆提炼）；create_skill 配件上限 ≤20
+- [x] P3-3 团队规模上限放开：`max_actions = max(3, min(6, len(role_systems)))` 按角色数动态（PAD 协议 ≤3 并行由串行执行天然满足）；dispatch / replan 提示词同步动态上限与角色枚举
+
+### 验证
+- [x] 冒烟回归 `tests/smoke_v40.py`：61 / 61 通过（新增批次 C 7 例：12 技能 seed/触发注入/角色动态加载/中文名反查）
+- [x] 端到端：真 LLM 派单 autonomy 循环真实跑到第 2 轮（首轮未达标 → 元神重规划）；P1-3 判定准确识别"产出仅为异常信息未交付文档"；元神调度前用只读工具查目录（P2-1 分级生效）
+- [x] 浏览器验证：技能库页面渲染 12 条内置技能
 
 ---
 
