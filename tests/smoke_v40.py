@@ -329,6 +329,67 @@ def test_batch_c():
         check("批次C：清理测试角色", False, str(e)[:60])
 
 
+def test_batch_d():
+    """批次 D（v4.2 自主闭环）：看板完成度 + 阶段自动流转。"""
+    print("\n── 8. 批次 D：看板完成度 / 阶段自动流转 / autonomy ──")
+    # 隔离：临时关闭自主推进循环（后台派单会并发改状态，干扰确定性断言），测完恢复
+    _, s0 = call("GET", "/api/meta/settings", timeout=20)
+    old_auto = s0.get("autonomy_enabled", "1") if isinstance(s0, dict) else "1"
+    call("POST", "/api/meta/settings", {"autonomy_enabled": False}, timeout=20)
+    # 建项目（带 standards 与 2 模块）
+    code, b = call("POST", "/api/projects",
+                   {"name": "批次D测试", "goal": "闭环验证", "standards": "全部可用",
+                    "roles": ["backend", "frontend"],
+                    "modules": [{"name": "模块A", "owner_role": "后端"},
+                                {"name": "模块B", "owner_role": "前端"}]})
+    pid = b.get("id") if isinstance(b, dict) else None
+    check("批次D：创建项目", code == 200 and bool(pid), str(b)[:80])
+    if not pid:
+        call("POST", "/api/meta/settings", {"autonomy_enabled": old_auto == "1"}, timeout=20)
+        return
+
+    # 每模块建 2 张任务卡
+    code, d = call("GET", f"/api/projects/{pid}")
+    tids = []
+    if isinstance(d, dict):
+        for t in (d.get("topics") or []):
+            for i in range(2):
+                _, r = call("POST", f"/api/topics/{t['id']}/tasks",
+                            {"name": f"任务{i + 1}", "owner_role": "后端", "done_criteria": "可验证"})
+                if isinstance(r, dict) and r.get("task_id"):
+                    tids.append(r["task_id"])
+
+    # 完成度结构
+    code, d2 = call("GET", f"/api/projects/{pid}")
+    c = d2.get("completion", {}) if isinstance(d2, dict) else {}
+    check("批次D：聚合详情含 completion",
+          isinstance(c, dict) and c.get("total") == len(tids) and c.get("percent") == 0,
+          f"done={c.get('done')}/total={c.get('total')}/pct={c.get('percent')}")
+
+    # 阶段：未满 100% 不推进
+    call("POST", f"/api/tasks/{tids[0]}/move", {"to": "done"})
+    code, d3 = call("GET", f"/api/projects/{pid}")
+    check("批次D：未满 100% 阶段不推进", isinstance(d3, dict) and d3.get("phase") == "requirement",
+          f"phase={d3.get('phase')}")
+
+    # 全部 done → 自动进入下一阶段（requirement → ui）
+    for t in tids[1:]:
+        call("POST", f"/api/tasks/{t}/move", {"to": "done"})
+    code, d4 = call("GET", f"/api/projects/{pid}")
+    c4 = d4.get("completion", {}) if isinstance(d4, dict) else {}
+    check("批次D：看板 100% 自动进入下一阶段",
+          isinstance(d4, dict) and d4.get("phase") == "ui" and c4.get("percent") == 100,
+          f"phase={d4.get('phase')} pct={c4.get('percent')}")
+    _, msgs = call("GET", f"/api/messages/{pid}")
+    ok_msg = isinstance(msgs, list) and any("自动进入下一阶段" in (m.get("text") or "") for m in msgs)
+    check("批次D：阶段流转群聊留痕", ok_msg)
+
+    # 清场
+    call("DELETE", f"/api/projects/{pid}")
+    call("POST", "/api/meta/settings", {"autonomy_enabled": old_auto == "1"}, timeout=20)
+    check("批次D：清理测试数据", True)
+
+
 def main():
     global BASE
     ap = argparse.ArgumentParser()
@@ -345,6 +406,7 @@ def main():
     test_standards_board()
     test_batch_b()
     test_batch_c()
+    test_batch_d()
     print(f"\n{'=' * 52}\n通过 {len(PASS)} / 失败 {len(FAIL)}")
     if FAIL:
         print("失败项：\n  - " + "\n  - ".join(FAIL))
