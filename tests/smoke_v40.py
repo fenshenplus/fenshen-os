@@ -230,7 +230,7 @@ def test_batch_b():
     code, h = call("GET", "/api/health")
     check("批次B：approval_mode 默认 danger", isinstance(h, dict) and h.get("approval_mode") == "danger",
           str(h.get("approval_mode")))
-    check("批次B：release 版本 v4.1", isinstance(h, dict) and h.get("release") == "v4.1",
+    check("批次B：release 版本 v4.2", isinstance(h, dict) and h.get("release") == "v4.2",
           str(h.get("release")) + "/" + str(h.get("version")))
 
     # P2-2 元神搭建基础设施：创建项目（带 roles）→ 群聊应有 bootstrap 开场消息
