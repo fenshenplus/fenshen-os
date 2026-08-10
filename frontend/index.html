@@ -1219,7 +1219,8 @@ async function wizardNext(){ if(wStep===1){ if(!document.getElementById('wName')
   else { const name=document.getElementById('wName').value.trim(); const goal=document.getElementById('wGoal').value.trim();
     const standards=document.getElementById('wStandards').value.trim();
     const modules=collectModRows();
-    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal,standards,modules})});
+    const roles=[...document.querySelectorAll('#rolePick .rp.sel')].map(r=>r.dataset.id);
+    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal,standards,modules,roles})});
     await postMsg('NEW','分身 · 元神','meta',`项目「${name}」已成立，团队已拉起，已按 ${modules.length} 个模块建立看板，开始工作。`);
     closeWizard(); await loadRooms();
     // 选中新建项目
@@ -1540,6 +1541,7 @@ function renderBoard(){
       const tks=mTasks.filter(t=>t.status===c[0]);
       const inner=tks.map(t=>`<div style="background:#fff;border:.5px solid var(--gray-200);border-radius:8px;padding:6px 8px;margin-bottom:5px;font-size:11px;cursor:pointer" onclick="openTopicByTask('${jsStr(t.topic_id)}','${jsStr(t.name)}')">
         <div style="font-weight:500">${escapeHtml(t.name)}</div>
+        ${t.done_criteria?`<div style="color:var(--gray-400);font-size:10px;margin-top:2px;line-height:1.35">📌 ${escapeHtml(t.done_criteria)}</div>`:''}
         <div style="display:flex;align-items:center;gap:4px;margin-top:3px;color:var(--gray-400);font-size:10px">
           <span>${escapeHtml(t.owner_role||'')}</span>
           <select style="margin-left:auto;padding:1px 2px;border:.5px solid var(--gray-200);border-radius:4px;font-size:10px;background:#fff" onclick="event.stopPropagation()" onchange="moveTask('${jsStr(t.id)}',this.value)">
