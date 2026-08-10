@@ -384,6 +384,10 @@ def init_db():
     mcols = {r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()}
     if "topic_id" not in mcols:
         cur.execute("ALTER TABLE messages ADD COLUMN topic_id TEXT DEFAULT ''")
+    # ── 兼容迁移：projects 增加 standards 列（完成标准/验收准则）──
+    pcols2 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
+    if "standards" not in pcols2:
+        cur.execute("ALTER TABLE projects ADD COLUMN standards TEXT DEFAULT ''")
     # 角色种子数据
     cur.execute("SELECT COUNT(*) FROM roles")
     if cur.fetchone()[0] == 0:
@@ -991,14 +995,41 @@ def list_projects():
     return [dict(r) for r in rows]
 
 
+@app.get("/api/projects/{pid}")
+def get_project(pid: str):
+    """聚合详情：goal + 完成标准 + 模块 + 任务 + 话题，单次往返供前端看板/群聊联动。"""
+    conn = get_db()
+    p = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not p:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "项目不存在"})
+    # 字段形态必须和 /modules、/topics 单列接口一致：depends_on / agents 在库里是 JSON 文本，
+    # 裸 dict(row) 会把它们当字符串丢给前端，前端一 .map() 就炸。
+    mods = [_module_dict(r) for r in
+            conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort, created_at", (pid,)).fetchall()]
+    tasks = [dict(r) for r in
+             conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()]
+    topics = []
+    for r in conn.execute("SELECT * FROM topics WHERE project_id=? ORDER BY created_at", (pid,)).fetchall():
+        t = dict(r)
+        t["agents"] = json.loads(t.get("agents") or "[]")
+        topics.append(t)
+    conn.close()
+    d = dict(p)
+    d["modules"] = mods
+    d["tasks"] = tasks
+    d["topics"] = topics
+    return d
+
+
 @app.post("/api/projects")
 async def create_project(req: Request):
     data = await req.json()
-    pid = data.get("id") or f"p{int(datetime.now().timestamp())}"
+    pid = data.get("id") or f"p{int(datetime.now().timestamp() * 1000)}"
     conn = get_db()
     conn.execute(
-        "INSERT OR REPLACE INTO projects (id,name,goal,status,created_at,phase,frozen) VALUES (?,?,?,?,?,?,0)",
-        (pid, data.get("name", ""), data.get("goal", ""), "green", datetime.now().isoformat(),
+        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen) VALUES (?,?,?,?,?,?,?,0)",
+        (pid, data.get("name", ""), data.get("goal", ""), data.get("standards", ""), "green", datetime.now().isoformat(),
          data.get("phase", "requirement")),
     )
     # 解构引导：projects.modules 数组 → 批量创建模块（支持一次成立项目即拆模块）
@@ -1013,6 +1044,16 @@ async def create_project(req: Request):
                  json.dumps(m.get("depends_on") or [], ensure_ascii=False), m.get("owner_role", "后端"),
                  m.get("status", "idea"), i, datetime.now().isoformat(), datetime.now().isoformat()),
             )
+    # 批次 A：每个模块自动建一个默认话题，供任务/讨论绑定（修复看板↔群聊断链的根因）
+    _mi = 0
+    for mrow in conn.execute("SELECT id FROM modules WHERE project_id=?", (pid,)).fetchall():
+        _mi += 1
+        tid = f"tp{int(datetime.now().timestamp() * 1000)}_{_mi}"
+        conn.execute(
+            "INSERT OR IGNORE INTO topics (id,project_id,module_id,name,agents,status,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (tid, pid, mrow["id"], "默认讨论", "[]", "open", datetime.now().isoformat()),
+        )
     conn.commit()
     conn.close()
     return {"id": pid, "ok": True, "modules": len(mods)}
@@ -1036,9 +1077,29 @@ async def update_project(pid: str, req: Request):
         conn.execute("UPDATE projects SET goal=? WHERE id=?", (data["desc"], pid))
     if "goal" in data:
         conn.execute("UPDATE projects SET goal=? WHERE id=?", (data["goal"], pid))
+    if "standards" in data:
+        conn.execute("UPDATE projects SET standards=? WHERE id=?", (data["standards"], pid))
     conn.commit()
     conn.close()
     return {"ok": True}
+
+
+@app.delete("/api/projects/{pid}")
+def delete_project(pid: str):
+    """级联删除项目及其模块/话题/任务/消息（用于清理与用户主动删项目）。"""
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "项目不存在"})
+    conn.execute("DELETE FROM messages WHERE project_id=?", (pid,))
+    conn.execute("DELETE FROM tasks WHERE project_id=?", (pid,))
+    conn.execute("DELETE FROM topics WHERE project_id=?", (pid,))
+    conn.execute("DELETE FROM modules WHERE project_id=?", (pid,))
+    conn.execute("DELETE FROM projects WHERE id=?", (pid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "deleted": pid}
 
 
 # ── API：项目模板（v0.27.0 多项目模板沉淀）────────────────────────
@@ -2648,14 +2709,27 @@ async def project_chat(pid: str, req: Request):
         task_name = act.get("task_name", "未命名任务")[:20]
         detail = act.get("detail", "")
 
-        # 建任务卡片（todo 状态，关联第一个模块）
+        # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
         task_id = f"tk{int(datetime.now().timestamp() * 1000)}"
         conn = get_db()
         mod = mods[0] if mods else None
+        mod_id = mod["id"] if mod else ""
+        topic_id = ""
+        if mod_id:
+            trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
+            if trow:
+                topic_id = trow["id"]
+            else:
+                topic_id = f"tp{int(datetime.now().timestamp() * 1000)}_{task_id[-4:]}"
+                conn.execute(
+                    "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
+                )
         conn.execute(
             "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,created_at) "
             "VALUES (?,?,?,?,?,?,?,?)",
-            (task_id, pid, mod["id"] if mod else "", "", task_name, role, "todo", datetime.now().isoformat()),
+            (task_id, pid, mod_id, topic_id, task_name, role, "todo", datetime.now().isoformat()),
         )
         conn.commit()
         conn.close()
@@ -3816,5 +3890,22 @@ except Exception as e:
     async def _auto_distill_user(t): pass
 
 
+class NoCacheStaticFiles(StaticFiles):
+    """本地桌面应用，前端就在同一台机器上，没有 CDN 也没有带宽压力。
+    浏览器缓存旧 index.html 只会让人误以为改动没生效，一律禁掉。"""
+
+    def is_not_modified(self, response_headers, request_headers) -> bool:
+        return False
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        for h in ("etag", "last-modified"):
+            if h in resp.headers:
+                del resp.headers[h]
+        return resp
+
+
 # 静态托管前端（放最后，"/" 兜底）
-app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")
+app.mount("/", NoCacheStaticFiles(directory=FRONTEND, html=True), name="frontend")

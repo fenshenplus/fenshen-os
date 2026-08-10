@@ -237,6 +237,7 @@
       <div class="navitem" data-sec="models"><span class="dotk"></span>模型设置</div>
       <div class="navitem" data-sec="terminal"><span class="dotk"></span>终端</div>
       <div class="navitem" data-sec="browser"><span class="dotk"></span>浏览器</div>
+      <div class="navitem" data-sec="board"><span class="dotk"></span>项目看板</div>
       <div class="navitem" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
       <div class="navitem" data-sec="memory"><span class="dotk"></span>长期记忆</div>
       <div class="navitem" data-sec="skills"><span class="dotk"></span>技能库</div>
@@ -267,11 +268,35 @@
             <button class="btn sm mobile-only" onclick="backToRooms()">← 列表</button>
             <button class="btn ghost sm" id="btnMetaStop" onclick="metaStop()">元神中止</button>
           </div>
+          <div id="chatGoalBar" style="font-size:12px;color:var(--gray-600);padding:4px 14px;border-bottom:.5px solid var(--gray-200);display:none"></div>
           <div class="chat-body" id="chatBody"></div>
           <div class="chat-input">
             <input id="msgInput" placeholder="发消息给团队…（回车发送）" onkeydown="if(event.key==='Enter')sendMsg()">
             <button class="send" id="btnSendMsg" onclick="sendMsg()">↑</button>
           </div>
+        </div>
+      </div>
+
+      <!-- 项目看板（总览图）：与群聊并列的定位入口 -->
+      <div class="section" id="sec-board">
+        <div style="display:flex;flex-direction:column;flex:1;min-height:0;padding:14px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+            <div>
+              <div class="t" id="boardProjTitle" style="font-size:15px;font-weight:500">项目看板</div>
+              <div class="sub" id="boardProjGoal" style="font-size:12px;color:var(--gray-400);margin-top:2px"></div>
+              <div id="boardProjStd" style="font-size:12px;color:var(--meta-700);background:var(--meta-50);border:.5px solid #cfc9ef;border-radius:8px;padding:6px 10px;margin-top:6px;max-width:720px"></div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <input id="newModNameB" placeholder="新模块名，如：消息中心" style="flex:1;min-width:160px;padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px">
+              <select id="newModRoleB" style="padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff">
+                <option>后端</option><option>前端</option><option>产品</option>
+              </select>
+              <button class="btn sm meta" onclick="createMod()">+ 建模块</button>
+              <button class="btn sm" onclick="openTopicDlgNew()">+ 新建话题</button>
+            </div>
+          </div>
+          <div id="boardGridInline" style="flex:1;overflow:auto;min-height:280px"></div>
+          <div id="boardMsgInline" style="font-size:11px;color:var(--gray-400);margin-top:8px"></div>
         </div>
       </div>
 
@@ -578,6 +603,7 @@
       <div id="wz1">
         <div class="field"><label>项目名称</label><input id="wName" placeholder="例如：高考志愿评测平台"></div>
         <div class="field"><label>一句话目标</label><input id="wGoal" placeholder="这个项目要交付什么"></div>
+        <div class="field"><label>完成标准（验收准则）</label><textarea id="wStandards" rows="3" placeholder="例如：微信登录可用 / 课程可浏览下单 / 微信支付回调落单 / 测试覆盖≥80% / 扫码可开。未达标团队继续推进，不反复问你"></textarea></div>
       </div>
       <div id="wz2" style="display:none">
         <label style="font-size:11px;color:var(--gray-400)">为团队选择角色（元神据此拉起 agent）</label>
@@ -658,26 +684,7 @@
   </div>
 </div>
 
-<!-- 模块看板 -->
-<div class="mask" id="boardMask">
-  <div class="modal" style="width:960px;max-width:96vw">
-    <div class="mh">模块看板 <span style="font-size:11px;color:var(--gray-400);font-weight:400">行=功能模块 · 列=阶段 · 卡片=任务（点模块名进话题对话组）</span>
-      <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeBoard()">✕</span></div>
-    <div class="mb">
-      <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
-        <input id="newModName" placeholder="新模块名，如：消息中心" style="flex:1;min-width:160px;padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px">
-        <select id="newModRole" style="padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff">
-          <option>后端</option><option>前端</option><option>产品</option>
-        </select>
-        <button class="btn sm meta" onclick="createMod()">+ 建模块</button>
-        <button class="btn sm" onclick="openTopicDlgNew()">+ 新建话题</button>
-      </div>
-      <div id="boardGrid" style="min-height:280px"></div>
-      <div id="boardMsg" style="font-size:11px;color:var(--gray-400);margin-top:8px"></div>
-    </div>
-    <div class="mf"><button class="btn" onclick="closeBoard()">关闭</button></div>
-  </div>
-</div>
+<!-- 模块看板已升级为「项目看板」section（sec-board，与群聊并列，见 navitem data-sec="board"） -->
 
 <!-- 话题对话组 -->
 <div class="mask" id="topicMask">
@@ -816,6 +823,9 @@ function renderRooms(){ const el=document.getElementById('roomList'); el.innerHT
     d.innerHTML=`<span class="s" style="background:var(--${escapeHtml(st)})"></span><div class="info"><div class="nm">${escapeHtml(r.name)}${fz}</div><div class="ds">${escapeHtml(ph)} · ${escapeHtml(r.goal||'')}</div></div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
 async function loadChat(pid){ const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
   const r=rooms.find(x=>x.id===pid); document.getElementById('chatTitle').textContent=r?r.name:''; document.getElementById('chatSub').textContent=r?STATUS_LABEL[r.status]||'':'';
+  const gb=document.getElementById('chatGoalBar');
+  if(r){ gb.style.display='block'; gb.innerHTML='🎯 '+(escapeHtml(r.goal||'未设目标'))+'　&nbsp;　✅ 完成标准：'+(escapeHtml(r.standards||'未设')); }
+  else gb.style.display='none';
   refreshPhaseUI(r);
   let msgs=[]; try{ const res=await fetch('/api/messages/'+pid); msgs=await res.json(); }catch(e){ console.error(e); }
   renderChat(msgs); }
@@ -1169,7 +1179,7 @@ async function saveCurAsTemplate(){
     const j=await r.json(); if(j.ok){ await loadTemplates(); toast('✅ 已保存为模板（含目标与角色集），可随时套用'); } else toast('❌ '+j.error);
   }catch(e){ toast('保存失败：'+e); }
 }
-function openWizard(){ wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value='';
+function openWizard(){ wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value=''; document.getElementById('wStandards').value='';
   document.getElementById('wz1').style.display=''; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display='none';
   document.getElementById('ws1').classList.add('on'); document.getElementById('ws2').classList.remove('on'); document.getElementById('ws3').classList.remove('on');
   document.getElementById('wNext').textContent='下一步'; document.getElementById('wizardMask').classList.add('show');
@@ -1207,8 +1217,9 @@ async function wizardNext(){ if(wStep===1){ if(!document.getElementById('wName')
     wStep=2; document.getElementById('wz1').style.display='none'; document.getElementById('wz2').style.display=''; document.getElementById('ws2').classList.add('on'); document.getElementById('wNext').textContent='下一步'; }
   else if(wStep===2){ wStep=3; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display=''; document.getElementById('ws3').classList.add('on'); document.getElementById('wNext').textContent='成立团队'; renderModRows(); if(!wTemplates.length) loadTemplates(); }
   else { const name=document.getElementById('wName').value.trim(); const goal=document.getElementById('wGoal').value.trim();
+    const standards=document.getElementById('wStandards').value.trim();
     const modules=collectModRows();
-    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal,modules})});
+    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal,standards,modules})});
     await postMsg('NEW','分身 · 元神','meta',`项目「${name}」已成立，团队已拉起，已按 ${modules.length} 个模块建立看板，开始工作。`);
     closeWizard(); await loadRooms();
     // 选中新建项目
@@ -1220,6 +1231,11 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
   document.querySelectorAll('.navitem').forEach(x=>x.classList.remove('active')); n.classList.add('active');
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.getElementById('sec-'+n.dataset.sec).classList.add('active');
+  // 看板是「当前项目的总览图」，切过来必须带上当前项目的数据，否则是一张空表
+  if(n.dataset.sec==='board'){
+    if(!curRoom){ document.getElementById('boardMsgInline').textContent='还没有选中项目，先去「项目群聊」选一个。'; }
+    else loadBoard();
+  }
 });
 
 /* 标注模式 */
@@ -1494,22 +1510,26 @@ let curTopics=[];
 let curTopicId='';
 async function openBoard(){
   if(!curRoom){ toast('先选择项目'); return; }
-  document.getElementById('boardMask').classList.add('show');
+  document.querySelectorAll('.navitem').forEach(x=>x.classList.remove('active'));
+  document.querySelector('.navitem[data-sec="board"]').classList.add('active');
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.getElementById('sec-board').classList.add('active');
   await loadBoard();
 }
-function closeBoard(){ document.getElementById('boardMask').classList.remove('show'); }
+function closeBoard(){ /* 看板已升级为并列 section（sec-board），无需关闭遮罩 */ }
 async function loadBoard(){
+  if(!curRoom) return;
   try{
-    const [r1,r2]=await Promise.all([
-      fetch('/api/projects/'+curRoom+'/modules'),
-      fetch('/api/projects/'+curRoom+'/tasks'),
-    ]);
-    curMods=await r1.json(); curTasks=await r2.json();
-  }catch(e){ console.error(e); curMods=[]; curTasks=[]; }
+    const j=await (await fetch('/api/projects/'+curRoom)).json();
+    curMods=j.modules||[]; curTasks=j.tasks||[]; curTopics=j.topics||[];
+    document.getElementById('boardProjTitle').textContent=j.name||'项目看板';
+    document.getElementById('boardProjGoal').textContent=j.goal?('🎯 目标：'+j.goal):'';
+    document.getElementById('boardProjStd').textContent=j.standards?('✅ 完成标准：'+j.standards):'（未设完成标准）';
+  }catch(e){ console.error(e); curMods=[]; curTasks=[]; curTopics=[]; }
   renderBoard();
 }
 function renderBoard(){
-  const g=document.getElementById('boardGrid');
+  const g=document.getElementById('boardGridInline');
   if(!curMods.length){ g.innerHTML='<div style="padding:40px;color:var(--gray-400);font-size:13px;width:100%;text-align:center">还没有模块 —— 用上方输入框添加第一个模块，或成立项目时解构</div>'; return; }
   const head=MOD_COLS.map(c=>`<div style="flex:1;min-width:120px;text-align:center;font-size:11px;color:var(--gray-400);padding:4px 0">${c[1]}</div>`).join('');
   let rows='';
@@ -1539,14 +1559,14 @@ function renderBoard(){
     </div>`;
   });
   g.innerHTML=`<div style="display:flex;margin-bottom:8px;padding-left:156px">${head}</div>${rows}`;
-  const msg=document.getElementById('boardMsg');
+  const msg=document.getElementById('boardMsgInline');
   const done=curTasks.filter(t=>t.status==='done').length;
   msg.textContent=`共 ${curMods.length} 个模块 · ${curTasks.length} 个任务 · 已完成 ${done} 个 · 点模块名进话题对话组，讨论后「提炼为任务」自动进待办列`;
 }
 async function createMod(){
-  const name=document.getElementById('newModName').value.trim();
+  const name=document.getElementById('newModNameB').value.trim();
   if(!name){ toast('填写模块名'); return; }
-  const role=document.getElementById('newModRole').value;
+  const role=document.getElementById('newModRoleB').value;
   try{ const r=await fetch('/api/projects/'+curRoom+'/modules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,owner_role:role})});
     const j=await r.json(); if(j.ok){ document.getElementById('newModName').value=''; await loadBoard(); } else toast('❌ '+j.error);
   }catch(e){ toast('请求失败：'+e); }
@@ -1667,7 +1687,19 @@ async function openTopicByTask(tid,taskName){
     document.getElementById('topicHead').textContent='💬 任务「'+taskName+'」的来源话题';
     await loadTopicList(); renderTopicList(); await loadTopicMsgs();
   } else {
-    toast('该任务暂无来源话题（直接创建的任务）');
+    // 兜底：为该任务就地创建话题并跳入（兼容旧库无 topic 的任务）
+    try{
+      const r=await fetch('/api/projects/'+curRoom+'/topics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'任务：'+taskName,module_id:''})});
+      const j=await r.json();
+      if(j.ok&&j.id){ curTopicId=j.id; curTopicModuleId='';
+        document.getElementById('topicMask').classList.add('show');
+        document.getElementById('topicHead').textContent='💬 任务「'+taskName+'」的来源话题';
+        await loadTopicList(); renderTopicList(); await loadTopicMsgs();
+        await loadBoard();
+        return;
+      }
+    }catch(e){}
+    toast('无法为该任务创建话题');
   }
 }
 
