@@ -285,6 +285,15 @@
               <div class="t" id="boardProjTitle" style="font-size:15px;font-weight:500">项目看板</div>
               <div class="sub" id="boardProjGoal" style="font-size:12px;color:var(--gray-400);margin-top:2px"></div>
               <div id="boardProjStd" style="font-size:12px;color:var(--meta-700);background:var(--meta-50);border:.5px solid #cfc9ef;border-radius:8px;padding:6px 10px;margin-top:6px;max-width:720px"></div>
+              <!-- v4.2 自主闭环：看板完成度进度条（100% → 自动进下一阶段） -->
+              <div id="boardProgWrap" style="display:none;max-width:720px;margin-top:6px">
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-400);margin-bottom:3px">
+                  <span id="boardProgLabel">完成度 0%</span><span id="boardPhaseLabel"></span>
+                </div>
+                <div style="height:8px;background:var(--gray-100);border-radius:99px;overflow:hidden;border:.5px solid var(--gray-200)">
+                  <div id="boardProgBar" style="height:100%;width:0%;background:linear-gradient(90deg,#6d5bd0,#34c98e);border-radius:99px;transition:width .5s"></div>
+                </div>
+              </div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <input id="newModNameB" placeholder="新模块名，如：消息中心" style="flex:1;min-width:160px;padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px">
@@ -293,6 +302,11 @@
               </select>
               <button class="btn sm meta" onclick="createMod()">+ 建模块</button>
               <button class="btn sm" onclick="openTopicDlgNew()">+ 新建话题</button>
+            </div>
+            <!-- v4.2 立项自动拆解：沟通内容 → 看板 -->
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;max-width:720px">
+              <input id="planText" placeholder="用一句话描述项目，元神自动拆解成看板（如：做一个带登录和支付的电商小程序）" style="flex:1;min-width:280px;padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px">
+              <button class="btn sm" style="background:#6d5bd0;color:#fff;border:none" onclick="runPlan()">🚀 自动拆解</button>
             </div>
           </div>
           <div id="boardGridInline" style="flex:1;overflow:auto;min-height:280px"></div>
@@ -1526,6 +1540,16 @@ async function loadBoard(){
     document.getElementById('boardProjTitle').textContent=j.name||'项目看板';
     document.getElementById('boardProjGoal').textContent=j.goal?('🎯 目标：'+j.goal):'';
     document.getElementById('boardProjStd').textContent=j.standards?('✅ 完成标准：'+j.standards):'（未设完成标准）';
+    // v4.2 自主闭环：完成度进度条 + 当前阶段
+    const c=j.completion||{};
+    const wrap=document.getElementById('boardProgWrap');
+    if(j.tasks&&j.tasks.length){
+      wrap.style.display='block';
+      const pct=c.percent||0;
+      document.getElementById('boardProgBar').style.width=pct+'%';
+      document.getElementById('boardProgLabel').textContent=`完成度 ${pct}%（${c.done}/${c.total} 卡）${pct>=100?' 🎉 已达 100%，等待进入下一阶段':''}`;
+      document.getElementById('boardPhaseLabel').textContent='阶段：'+(j.phase||'requirement');
+    } else wrap.style.display='none';
   }catch(e){ console.error(e); curMods=[]; curTasks=[]; curTopics=[]; }
   renderBoard();
 }
@@ -1571,6 +1595,18 @@ async function createMod(){
   const role=document.getElementById('newModRoleB').value;
   try{ const r=await fetch('/api/projects/'+curRoom+'/modules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,owner_role:role})});
     const j=await r.json(); if(j.ok){ document.getElementById('newModName').value=''; await loadBoard(); } else toast('❌ '+j.error);
+  }catch(e){ toast('请求失败：'+e); }
+}
+async function runPlan(){
+  const t=document.getElementById('planText').value.trim();
+  if(!t){ toast('先描述项目'); return; }
+  if(!curRoom){ toast('先选择项目'); return; }
+  toast('元神正在拆解看板…');
+  try{
+    const r=await fetch(`/api/projects/${curRoom}/plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
+    const j=await r.json();
+    if(j.ok){ toast(`✅ 看板已建立：${j.modules} 模块 · ${j.tasks} 任务`); document.getElementById('planText').value=''; await loadBoard(); }
+    else toast('❌ '+(j.error||'拆解失败'));
   }catch(e){ toast('请求失败：'+e); }
 }
 async function moveTask(taskId,to){
