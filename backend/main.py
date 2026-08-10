@@ -2738,7 +2738,13 @@ def _auto_advance_phase(conn, pid: str) -> str:
             )
             conn.commit()
             return ""
-        conn.execute("UPDATE projects SET phase=? WHERE id=?", (nxt, pid))
+        conn.execute(
+            "UPDATE projects SET phase=? WHERE id=? AND phase=?",  # 条件更新：并发下只有一个推进成功
+            (nxt, pid, cur),
+        )
+        if conn.execute("SELECT phase FROM projects WHERE id=?", (pid,)).fetchone()["phase"] != nxt:
+            conn.commit()
+            return ""  # 已被其他并发路径推进
         conn.execute(
             "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
             (pid, "系统", "sys",
@@ -3099,75 +3105,86 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
     role_results = []
     round_no = 1
     pending_actions = actions[:max_actions]
+
+    async def _run_one(act):
+        """执行单个 action：建卡 → doing → 角色执行 → 落库 → 对照标准判定。并发安全（各自独立连接）。"""
+        role = act.get("role", "backend")
+        if role not in role_systems:
+            role = "backend"
+        task_name = act.get("task_name", "未命名任务")[:20]
+        detail = act.get("detail", "")
+        done_criteria = (act.get("done_criteria") or "").strip()[:300]
+
+        # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
+        task_id = f"tk{time.time_ns()}"
+        conn = get_db()
+        mod = mods[0] if mods else None
+        mod_id = mod["id"] if mod else ""
+        topic_id = ""
+        if mod_id:
+            trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
+            if trow:
+                topic_id = trow["id"]
+            else:
+                topic_id = f"tp{time.time_ns()}"
+                conn.execute(
+                    "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
+                )
+        conn.execute(
+            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+        # v4.0：开工即流转到「进行中」，看板实时可见
+        _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
+
+        # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
+        role_sys_ctx = role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
+        if done_criteria:
+            role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
+        role_hist = [
+            {"role": "system", "content": role_sys_ctx},
+            {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
+        ]
+        try:
+            role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx)
+        except Exception as e:
+            role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
+
+        # 落库角色回复
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, f"分身 · {role_names.get(role, role)}", "agent", role_reply, "progress", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+        # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
+        final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
+        note = {
+            "done": f"✅ 「{task_name}」已完成（{role_names.get(role, role)}）",
+            "review": f"🔍 「{task_name}」未达标转复核（{judge_reason}）",
+            "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
+        }[final]
+        _task_status(task_id, final, pid, note)
+        return {"role": role, "task_name": task_name, "task_id": task_id,
+                "status": final, "round": round_no, "reason": judge_reason}
+
+    _sem = asyncio.Semaphore(3)  # v4.2 并行化：PAD 协议 ≤3 并发
+
+    async def _limited(act):
+        async with _sem:
+            return await _run_one(act)
+
     while pending_actions and round_no <= MAX_ROUNDS:
-        for act in pending_actions:
-            role = act.get("role", "backend")
-            if role not in role_systems:
-                role = "backend"
-            task_name = act.get("task_name", "未命名任务")[:20]
-            detail = act.get("detail", "")
-            done_criteria = (act.get("done_criteria") or "").strip()[:300]
-
-            # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
-            task_id = f"tk{time.time_ns()}"
-            conn = get_db()
-            mod = mods[0] if mods else None
-            mod_id = mod["id"] if mod else ""
-            topic_id = ""
-            if mod_id:
-                trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
-                if trow:
-                    topic_id = trow["id"]
-                else:
-                    topic_id = f"tp{time.time_ns()}"
-                    conn.execute(
-                        "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
-                        "VALUES (?,?,?,?,?,?,?)",
-                        (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
-                    )
-            conn.execute(
-                "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
-                (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat()),
-            )
-            conn.commit()
-            conn.close()
-
-            # v4.0：开工即流转到「进行中」，看板实时可见
-            _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
-
-            # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
-            role_sys_ctx = role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
-            if done_criteria:
-                role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
-            role_hist = [
-                {"role": "system", "content": role_sys_ctx},
-                {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
-            ]
-            try:
-                role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx)
-            except Exception as e:
-                role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
-
-            # 落库角色回复
-            conn = get_db()
-            conn.execute(
-                "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-                (pid, f"分身 · {role_names.get(role, role)}", "agent", role_reply, "progress", datetime.now().isoformat()),
-            )
-            conn.commit()
-            conn.close()
-
-            # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
-            final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
-            note = {
-                "done": f"✅ 「{task_name}」已完成（{role_names.get(role, role)}）",
-                "review": f"🔍 「{task_name}」未达标转复核（{judge_reason}）",
-                "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
-            }[final]
-            _task_status(task_id, final, pid, note)
-            role_results.append({"role": role, "task_name": task_name, "task_id": task_id,
-                                 "status": final, "round": round_no, "reason": judge_reason})
+        # v4.2 并行化：本轮 actions 并发执行（≤3），多 action 派单显著提速
+        role_results.extend(await asyncio.gather(*[_limited(a) for a in pending_actions]))
 
         # ── 本轮判定：未达标 → 元神重新规划补充动作（autonomy，最多 MAX_ROUNDS 轮）──
         unmet = [r for r in role_results if r["round"] == round_no and r["status"] != "done"]
