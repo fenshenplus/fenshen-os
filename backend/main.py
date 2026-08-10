@@ -630,8 +630,21 @@ def _ollama_alive() -> bool:
     return _OLLAMA_CACHE["alive"]
 
 
+def _is_conn_error(e: Exception) -> bool:
+    """debug v4.1：连接类异常判定——远端断开/连接中止/超时等瞬时故障值得原地重试一次。
+    非连接类错误（鉴权/参数/额度）不重试，直接走降级链。"""
+    if isinstance(e, (ConnectionError, TimeoutError)):
+        return True
+    s = str(e)
+    return any(k in s for k in (
+        "RemoteDisconnected", "Connection aborted", "Connection reset",
+        "Remote end closed", "timed out", "ECONNRESET", "ECONNABORTED", "Read timed out",
+    ))
+
+
 def call_llm(agent_id: str, history: list, system_prompt: str = None):
-    """统一 LLM 调用（Phase 5：埋点 + 降级链）。主模型失败自动尝试其他可用模型。"""
+    """统一 LLM 调用（Phase 5：埋点 + 降级链）。主模型失败自动尝试其他可用模型。
+    debug v4.1：连接类瞬时故障在同一 provider 自动重试一次，再进降级链。"""
     cands = _available_providers(agent_id)
     if not cands:
         _log_usage(agent_id, "none", "", 0, "offline")
@@ -645,6 +658,18 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None):
             _log_usage(agent_id, provider, model, latency, "success")
             return text
         except Exception as e:
+            if _is_conn_error(e):
+                # 连接瞬时故障：原地重试一次再放弃
+                try:
+                    text = _call_single_provider(provider, base, key, model, history, system_prompt)
+                    latency = int((datetime.now() - t0).total_seconds() * 1000)
+                    _log_usage(agent_id, provider, model, latency, "success")
+                    return text
+                except Exception as e2:
+                    latency = int((datetime.now() - t0).total_seconds() * 1000)
+                    _log_usage(agent_id, provider, model, latency, "degraded")
+                    errors.append(f"{provider}: {e2}")
+                    continue
             latency = int((datetime.now() - t0).total_seconds() * 1000)
             _log_usage(agent_id, provider, model, latency, "degraded")
             errors.append(f"{provider}: {e}")
@@ -2190,7 +2215,17 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
         for provider, base, key, model in cands:
             try:
                 t0 = datetime.now()
-                msg = _call_provider_tools(provider, base, key, model, history, system_prompt, tool_list)
+                # debug v4.1：连接类瞬时故障（RemoteDisconnected 等）原地重试一次
+                for _attempt in range(2):
+                    try:
+                        msg = _call_provider_tools(provider, base, key, model, history, system_prompt, tool_list)
+                        break
+                    except Exception as e:
+                        last_err = f"{provider}: {e}"
+                        if _attempt == 0 and _is_conn_error(e):
+                            last_err += "（连接异常，已重试一次）"
+                            continue
+                        raise
                 latency = int((datetime.now() - t0).total_seconds() * 1000)
                 _log_usage(agent_id, provider, model, latency, "success")
                 tool_calls = msg.get("tool_calls")
