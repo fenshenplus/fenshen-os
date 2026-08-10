@@ -64,7 +64,7 @@ META_SYSTEM = """你是「元神」，岳衡（ChooseWiki 选择学习法品牌�
 
 # 支持的模型供应商预设（base_url 可空，由代码补默认）
 PROVIDER_PRESETS = {
-    "deepseek": {"base": "https://api.deepseek.com", "chat": "/chat/completions", "default_model": "deepseek-chat", "auth": "Bearer"},
+    "deepseek": {"base": "https://api.deepseek.com", "chat": "/chat/completions", "default_model": "deepseek-v4-flash", "auth": "Bearer"},
     "openai":   {"base": "https://api.openai.com",   "chat": "/v1/chat/completions", "default_model": "gpt-4o-mini", "auth": "Bearer"},
     "claude":   {"base": "https://api.anthropic.com","chat": "/v1/messages", "default_model": "claude-3-5-sonnet-latest", "auth": "x-api-key"},
     "ollama":   {"base": "http://localhost:11434",   "chat": "/api/chat", "default_model": "qwen2.5:7b", "auth": None},
@@ -72,15 +72,15 @@ PROVIDER_PRESETS = {
 
 # 角色推荐模型（Phase 5 多模型协作：简单任务走廉价模型，复杂任务走强推理）
 ROLE_MODEL_RECS = {
-    META_PID:  {"provider": "deepseek", "model": "deepseek-chat",      "why": "管理者：平衡成本与推理"},
+    META_PID:  {"provider": "deepseek", "model": "deepseek-v4-flash",      "why": "管理者：平衡成本与推理"},
     "architect":{"provider": "claude",   "model": "claude-3-5-sonnet-latest", "why": "架构设计：强推理"},
-    "backend":  {"provider": "deepseek", "model": "deepseek-chat",      "why": "后端编码：高性价比"},
+    "backend":  {"provider": "deepseek", "model": "deepseek-v4-flash",      "why": "后端编码：高性价比"},
     "frontend": {"provider": "openai",   "model": "gpt-4o-mini",        "why": "前端实现：快速迭代"},
     "tester":   {"provider": "openai",   "model": "gpt-4o-mini",        "why": "测试用例：细致稳定"},
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.41.0")
+app = FastAPI(title="分身 v1 后端", version="0.42.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -470,6 +470,8 @@ init_db()
 @app.on_event("startup")
 async def _start_patrol():
     asyncio.create_task(_patrol_loop())
+    # v4.2 自主闭环：团队自主推进看板任务直到 100%
+    asyncio.create_task(_autonomy_loop())
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -493,7 +495,7 @@ def resolve_provider_cfg(agent_id: str):
         return provider, base, cfg["api_key"], model
     # 元神回退：沿用 DeepSeek secret 文件（向后兼容）
     if agent_id == META_PID and DEEPSEEK_KEY:
-        return "deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-chat"
+        return "deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-v4-flash"
     return None
 
 
@@ -549,6 +551,11 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
     else:  # deepseek / openai 兼容 OpenAI 格式
         payload = {"model": model, "messages": _merge_system(history, system_prompt),
                    "temperature": 0.7, "max_tokens": 2000}
+        if provider == "deepseek":
+            # v4.2 关键修复：deepseek-v4-flash 思考模式默认开启（effort=high），
+            # 思考吃光 max_tokens 时 content 返回空；且带 tools 的多轮循环必须回传 reasoning_content 否则 400。
+            # 分身是工具调用/快速产出场景 → 显式关闭 thinking（更快更省，temperature 也恢复生效）。
+            payload["thinking"] = {"type": "disabled"}
         if provider == "openai":
             payload["max_tokens"] = 2000
         resp = requests.post(
@@ -610,7 +617,7 @@ def _available_providers(agent_id: str):
              PROVIDER_PRESETS["ollama"]["default_model"])
 
     # 4) DeepSeek secret 文件兜底（向后兼容）
-    _add("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-chat")
+    _add("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-v4-flash")
     return cands
 
 
@@ -1019,7 +1026,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.41.0", "release": "v4.1", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.42.0", "release": "v4.2", "port": PORT, "llm": llm,
             "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 
@@ -1055,6 +1062,22 @@ def get_project(pid: str):
     d["modules"] = mods
     d["tasks"] = tasks
     d["topics"] = topics
+    # v4.2 自主闭环：看板完成度（模块级 + 项目级），直观显示"接近 100%"
+    total_all = len(tasks)
+    total_done = sum(1 for t in tasks if t["status"] == "done")
+    module_stats = {}
+    for m in mods:
+        mt = [t for t in tasks if t["module_id"] == m["id"]]
+        module_stats[m["id"]] = {
+            "done": sum(1 for t in mt if t["status"] == "done"),
+            "total": len(mt),
+            "done_pct": round(sum(1 for t in mt if t["status"] == "done") * 100 / len(mt)) if mt else 100,
+        }
+    d["completion"] = {
+        "done": total_done, "total": total_all,
+        "percent": round(total_done * 100 / total_all) if total_all else 0,
+        "modules": module_stats,
+    }
     return d
 
 
@@ -1939,6 +1962,10 @@ def _call_provider_tools(provider: str, base: str, key: str, model: str, history
     # 实际后果：write_file 历史 19 次调用失败 18 次，08-08 建落地页连败 18 次只剩空目录。
     payload = {"model": model, "messages": _merge_system(history, system_prompt),
                "temperature": 0.7, "max_tokens": 8192}
+    if provider == "deepseek":
+        # v4.2 关键修复：关闭 v4-flash 思考模式（理由见 _call_single_provider 同款注释；
+        # 带 tools 的多轮循环在思考模式下必须回传 reasoning_content，否则 400）
+        payload["thinking"] = {"type": "disabled"}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -2686,6 +2713,51 @@ def _module_dict(row):
     return d
 
 
+def _auto_advance_phase(conn, pid: str) -> str:
+    """v4.2 自主闭环：看板 100%（全部任务 done 或无任务）→ 自动推进到下一阶段。
+    经 PHASE_GATES 门禁校验；返回新阶段名或 ''（未推进）。看板未满 100% 一律不推进。"""
+    try:
+        proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if not proj or proj["phase"] == "done":
+            return ""
+        tasks = conn.execute("SELECT status FROM tasks WHERE project_id=?", (pid,)).fetchall()
+        if tasks and any(t["status"] != "done" for t in tasks):
+            return ""  # 未达 100%，团队继续自主推进
+        cur = proj["phase"]
+        idx = PHASES.index(cur) if cur in PHASES else 0
+        if idx >= len(PHASES) - 1:
+            return ""
+        nxt = PHASES[idx + 1]
+        ok, why = gate_check(proj, nxt)
+        if not ok:
+            conn.execute(
+                "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                (pid, "系统", "sys",
+                 f"🔒 看板已完成 100%，但进入「{PHASE_NAMES.get(nxt, nxt)}」的门禁未满足：{why}",
+                 "progress", datetime.now().isoformat()),
+            )
+            conn.commit()
+            return ""
+        conn.execute(
+            "UPDATE projects SET phase=? WHERE id=? AND phase=?",  # 条件更新：并发下只有一个推进成功
+            (nxt, pid, cur),
+        )
+        if conn.execute("SELECT phase FROM projects WHERE id=?", (pid,)).fetchone()["phase"] != nxt:
+            conn.commit()
+            return ""  # 已被其他并发路径推进
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, "系统", "sys",
+             f"🚀 看板完成度 100%，团队自动进入下一阶段：{PHASE_NAMES.get(nxt, nxt)}",
+             "progress", datetime.now().isoformat()),
+        )
+        conn.commit()
+        return nxt
+    except Exception as e:
+        print(f"[advance-phase] {pid} 失败: {e}")
+        return ""
+
+
 @app.get("/api/projects/{pid}/modules")
 def list_modules(pid: str):
     conn = get_db()
@@ -2876,6 +2948,9 @@ def _task_status(task_id: str, status: str, pid: str = "", note: str = "") -> No
             row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if row:
                 _settle_task_done(conn, dict(row))
+            # v4.2 自主闭环：看板 100% → 自动推进下一阶段
+            if pid:
+                _auto_advance_phase(conn, pid)
         conn.close()
     except Exception as e:
         print(f"[task-status] {task_id} -> {status} 失败: {e}")
@@ -2925,12 +3000,17 @@ async def _judge_role_output(reply: str, done_criteria: str = "", project_standa
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
-    """项目群聊对话（v0.27.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。
-    流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
+    """项目群聊对话（v0.27.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
     if not user_text:
         return {"ok": False, "error": "消息不能为空"}
+    return await _execute_project_chat(pid, user_text)
+
+
+async def _execute_project_chat(pid: str, user_text: str) -> dict:
+    """v4.2 自主闭环：项目群聊执行链（API 与团队自主推进循环共用）。
+    流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
     conn = get_db()
     proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
     if not proj:
@@ -2976,13 +3056,16 @@ async def project_chat(pid: str, req: Request):
         f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
         f"当前团队角色：{'、'.join(role_names.values())}。\n"
         f"{mod_desc}\n{task_desc}\n\n"
-        "【可用工具（v0.27.0）】你可调用 exec_command（执行命令/查看文件/查系统状态）与 browser_action（打开网页/截图/抓取）"
-        "获取真实信息后再回复或调度，不要凭空编造。危险命令会被拦截。\n\n"
+        "【可用工具（v0.27.0）】调度阶段不要调用任何工具——直接输出 JSON 调度计划；"
+        "需要查真实状态/执行验证，交给被派单的角色在其执行阶段用工具完成。"
+        "（v4.2 修复：元神若在调度阶段调工具，会陷入工具循环导致迟迟不输出计划。）\n\n"
         "输出格式（必须为合法 JSON）：\n"
         '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
         f'"actions": [{{"role": "{role_enum}", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令", '
         '"done_criteria": "该任务完成的、可验证的判定标准（例如：接口返回 200 且通过测试）"}]}\n'
-        f"注意：actions 最多 {max_actions} 个；done_criteria 务必具体、可验证，用于后续自动判定角色产出是否达标。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。"
+        f"注意：actions 最多 {max_actions} 个；done_criteria 务必具体、可验证，用于后续自动判定角色产出是否达标。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。\n"
+        "【自主原则（v4.2）】你是团队的自主调度者：能自己查状态、能自行安排先后顺序、能自行决策，"
+        "不要向用户提问确认（除非缺少关键信息无法继续）。用户要的是你把看板任务推进到 100%。"
     )
     hist = [{"role": "system", "content": dispatch_sys}]
     for r in reversed(rows):
@@ -2991,7 +3074,7 @@ async def project_chat(pid: str, req: Request):
         role = "assistant" if r["kind"] in ("agent", "meta") else "user"
         hist.append({"role": role, "content": r["text"]})
     hist.append({"role": "user", "content": user_text})
-    dispatch_reply = await _chat_with_tools("__meta__", hist, dispatch_sys)
+    dispatch_reply = await _chat_with_tools("__meta__", hist, dispatch_sys, tools=[])  # v4.2: 调度阶段禁用工具
 
     # 解析 JSON（容错：LLM 可能返回非 JSON）
     meta_reply = dispatch_reply
@@ -3022,75 +3105,86 @@ async def project_chat(pid: str, req: Request):
     role_results = []
     round_no = 1
     pending_actions = actions[:max_actions]
+
+    async def _run_one(act):
+        """执行单个 action：建卡 → doing → 角色执行 → 落库 → 对照标准判定。并发安全（各自独立连接）。"""
+        role = act.get("role", "backend")
+        if role not in role_systems:
+            role = "backend"
+        task_name = act.get("task_name", "未命名任务")[:20]
+        detail = act.get("detail", "")
+        done_criteria = (act.get("done_criteria") or "").strip()[:300]
+
+        # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
+        task_id = f"tk{time.time_ns()}"
+        conn = get_db()
+        mod = mods[0] if mods else None
+        mod_id = mod["id"] if mod else ""
+        topic_id = ""
+        if mod_id:
+            trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
+            if trow:
+                topic_id = trow["id"]
+            else:
+                topic_id = f"tp{time.time_ns()}"
+                conn.execute(
+                    "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
+                )
+        conn.execute(
+            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+        # v4.0：开工即流转到「进行中」，看板实时可见
+        _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
+
+        # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
+        role_sys_ctx = role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
+        if done_criteria:
+            role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
+        role_hist = [
+            {"role": "system", "content": role_sys_ctx},
+            {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
+        ]
+        try:
+            role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx)
+        except Exception as e:
+            role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
+
+        # 落库角色回复
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, f"分身 · {role_names.get(role, role)}", "agent", role_reply, "progress", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+        # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
+        final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
+        note = {
+            "done": f"✅ 「{task_name}」已完成（{role_names.get(role, role)}）",
+            "review": f"🔍 「{task_name}」未达标转复核（{judge_reason}）",
+            "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
+        }[final]
+        _task_status(task_id, final, pid, note)
+        return {"role": role, "task_name": task_name, "task_id": task_id,
+                "status": final, "round": round_no, "reason": judge_reason}
+
+    _sem = asyncio.Semaphore(3)  # v4.2 并行化：PAD 协议 ≤3 并发
+
+    async def _limited(act):
+        async with _sem:
+            return await _run_one(act)
+
     while pending_actions and round_no <= MAX_ROUNDS:
-        for act in pending_actions:
-            role = act.get("role", "backend")
-            if role not in role_systems:
-                role = "backend"
-            task_name = act.get("task_name", "未命名任务")[:20]
-            detail = act.get("detail", "")
-            done_criteria = (act.get("done_criteria") or "").strip()[:300]
-
-            # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
-            task_id = f"tk{time.time_ns()}"
-            conn = get_db()
-            mod = mods[0] if mods else None
-            mod_id = mod["id"] if mod else ""
-            topic_id = ""
-            if mod_id:
-                trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
-                if trow:
-                    topic_id = trow["id"]
-                else:
-                    topic_id = f"tp{time.time_ns()}"
-                    conn.execute(
-                        "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
-                        "VALUES (?,?,?,?,?,?,?)",
-                        (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
-                    )
-            conn.execute(
-                "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
-                (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat()),
-            )
-            conn.commit()
-            conn.close()
-
-            # v4.0：开工即流转到「进行中」，看板实时可见
-            _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
-
-            # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
-            role_sys_ctx = role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
-            if done_criteria:
-                role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
-            role_hist = [
-                {"role": "system", "content": role_sys_ctx},
-                {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
-            ]
-            try:
-                role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx)
-            except Exception as e:
-                role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
-
-            # 落库角色回复
-            conn = get_db()
-            conn.execute(
-                "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-                (pid, f"分身 · {role_names.get(role, role)}", "agent", role_reply, "progress", datetime.now().isoformat()),
-            )
-            conn.commit()
-            conn.close()
-
-            # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
-            final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
-            note = {
-                "done": f"✅ 「{task_name}」已完成（{role_names.get(role, role)}）",
-                "review": f"🔍 「{task_name}」未达标转复核（{judge_reason}）",
-                "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
-            }[final]
-            _task_status(task_id, final, pid, note)
-            role_results.append({"role": role, "task_name": task_name, "task_id": task_id,
-                                 "status": final, "round": round_no, "reason": judge_reason})
+        # v4.2 并行化：本轮 actions 并发执行（≤3），多 action 派单显著提速
+        role_results.extend(await asyncio.gather(*[_limited(a) for a in pending_actions]))
 
         # ── 本轮判定：未达标 → 元神重新规划补充动作（autonomy，最多 MAX_ROUNDS 轮）──
         unmet = [r for r in role_results if r["round"] == round_no and r["status"] != "done"]
@@ -3111,7 +3205,7 @@ async def project_chat(pid: str, req: Request):
             f"注意：actions 最多 {max_actions} 个；若当前产出已尽力、无法继续（缺信息/需用户决策等），actions 输出空数组并说明原因。"
         )
         replan_hist = [{"role": "system", "content": replan_sys}]
-        replan_reply = await _chat_with_tools(META_PID, replan_hist, replan_sys)
+        replan_reply = await _chat_with_tools(META_PID, replan_hist, replan_sys, tools=[])  # v4.2: 重规划同样禁用工具
         pending_actions = []
         try:
             if "{" in replan_reply and "}" in replan_reply:
@@ -3136,6 +3230,98 @@ async def project_chat(pid: str, req: Request):
 
     all_done = all(r["status"] == "done" for r in role_results) if role_results else False
     return {"reply": meta_reply, "actions": role_results, "ok": True, "rounds": round_no, "all_done": all_done}
+
+
+# ── v4.2 立项自动拆解：沟通内容 → 看板（模块 + 任务 + 目标/标准）──
+@app.post("/api/projects/{pid}/plan")
+async def plan_project(pid: str, req: Request):
+    """立项即看板：用户用自然语言描述项目 → 元神输出结构化计划
+    {goal, standards, modules:[{name,desc,owner_role,tasks:[{name,done_criteria}]}]}
+    → 更新目标/完成标准 + 建模块与任务卡 + 群聊留痕。全程不问用户。"""
+    data = await req.json()
+    text = (data.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "请描述项目"}
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    conn.close()
+    plan_sys = (
+        "你是「元神」，负责把用户对项目的描述拆解成可执行看板。\n"
+        '输出严格 JSON：{"goal": "项目目标一句话", "standards": "完成标准（可验收，用 / 分隔）", '
+        '"modules": [{"name": "模块名", "desc": "模块说明", "owner_role": "backend|frontend|architect|tester", '
+        '"tasks": [{"name": "任务名", "done_criteria": "该任务可验证的完成标准"}]}]}\n'
+        "要求：模块 2-5 个；每个模块 2-4 个任务；任务按实现顺序排列；done_criteria 必须具体可验证；"
+        "不要输出 JSON 以外的内容。"
+    )
+    hist = [
+        {"role": "system", "content": plan_sys},
+        {"role": "user", "content": f"项目名称：{proj['name']}\n用户描述：\n{text}"},
+    ]
+    reply = await asyncio.to_thread(call_llm, META_PID, hist, plan_sys)
+    try:
+        if "{" in reply and "}" in reply:
+            j = json.loads(reply[reply.find("{"):reply.rfind("}") + 1])
+        else:
+            return {"ok": False, "error": "元神返回非 JSON，请重试", "raw": reply[:200]}
+    except Exception as e:
+        return {"ok": False, "error": f"解析失败：{e}", "raw": reply[:200]}
+    goal = (j.get("goal") or "").strip()[:200]
+    standards = (j.get("standards") or "").strip()[:500]
+    modules = j.get("modules") or []
+    if not modules:
+        return {"ok": False, "error": "未拆出模块，请补充描述", "raw": reply[:200]}
+    conn = get_db()
+    if goal and not (proj["goal"] or "").strip():
+        conn.execute("UPDATE projects SET goal=? WHERE id=?", (goal, pid))
+    if standards:
+        conn.execute("UPDATE projects SET standards=? WHERE id=?", (standards, pid))
+    existing_mods = {m["name"] for m in conn.execute("SELECT name FROM modules WHERE project_id=?", (pid,)).fetchall()}
+    mod_count = 0
+    task_count = 0
+    for i, m in enumerate(modules):
+        mname = (m.get("name") or "").strip()
+        if not mname or mname in existing_mods:
+            continue
+        owner = (m.get("owner_role") or "后端").strip()
+        mid = f"{pid}-m{int(time.time() * 1000)}{i}"
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT INTO modules (id,project_id,name,desc,depends_on,owner_role,status,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (mid, pid, mname, (m.get("desc") or "").strip()[:200], "[]", owner, "idea",
+             i, now, now),
+        )
+        mod_count += 1
+        existing_mods.add(mname)
+        tid = f"tp{time.time_ns()}"
+        conn.execute(
+            "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) VALUES (?,?,?,?,?,?,?)",
+            (tid, pid, mid, "默认讨论", "[]", "open", now),
+        )
+        for t in (m.get("tasks") or []):
+            tname = (t.get("name") or "").strip()
+            if not tname:
+                continue
+            conn.execute(
+                "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"tk{time.time_ns()}", pid, mid, tid, tname[:60], owner, "todo",
+                 (t.get("done_criteria") or "").strip()[:300], now),
+            )
+            task_count += 1
+    conn.commit()
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+        (pid, "分身 · 元神", "meta",
+         f"🗂️ 已根据你的描述建立看板：{mod_count} 个模块 · {task_count} 个任务。\n"
+         f"🎯 目标：{goal or '（沿用）'}\n✅ 完成标准：{standards or '（未设）'}\n"
+         "团队将按看板顺序自主推进，直到 100% 再自动进入下一阶段。",
+         "progress", datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "goal": goal, "standards": standards, "modules": mod_count, "tasks": task_count}
 
 
 @app.get("/api/projects/{pid}/topics")
@@ -3342,10 +3528,13 @@ async def move_task(task_id: str, req: Request):
     conn.commit()
     # Phase D：任务完成 → 自动沉淀（经验 + 技能草稿 + 模块摘要更新）
     settled = False
+    advanced = ""
     if to == "done":
         settled = _settle_task_done(conn, dict(row))
+        # v4.2 自主闭环：看板 100% → 自动推进下一阶段
+        advanced = _auto_advance_phase(conn, row["project_id"])
     conn.close()
-    return {"ok": True, "status": to, "settled": settled}
+    return {"ok": True, "status": to, "settled": settled, "advanced_phase": advanced}
 
 
 def _settle_task_done(conn, task: dict) -> bool:
@@ -4014,6 +4203,17 @@ async def meta_settings_set(req: Request):
         set_setting("watch_paths", json.dumps(paths, ensure_ascii=False))
         # 路径变化 → 重置快照，下次巡检全量对比
         set_setting("watch_snapshot", "{}")
+    # v4.2 自主闭环：团队自主推进循环可配置（默认开启）
+    if "autonomy_enabled" in data:
+        set_setting("autonomy_enabled", "1" if data["autonomy_enabled"] else "0")
+    if "autonomy_interval" in data:
+        try:
+            ai = int(data["autonomy_interval"])
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "autonomy_interval 必须是整数秒"}
+        if not 10 <= ai <= 600:
+            return {"ok": False, "error": "autonomy_interval 需在 10~600 秒之间"}
+        set_setting("autonomy_interval", str(ai))
     # v4.0：审批策略可调（默认最严 all；关成 off 需用户自己负责）
     if "approval_mode" in data:
         md = data["approval_mode"]
@@ -4147,6 +4347,56 @@ async def _patrol_loop():
             conn.close()
         except Exception:
             pass
+
+
+async def _autonomy_loop():
+    """v4.2 自主闭环：团队自主推进——后台循环按看板顺序派单执行，直到看板 100% 再自动进下一阶段。
+    - 扫描 phase != done 的项目；每轮最多推进 1 张卡（限速防抖，autonomy_interval 秒）
+    - 按 created_at 顺序取 todo 任务（"按顺序先后完成"）；已有 doing 任务则等它完成
+    - 复用 _execute_project_chat 执行链（元神自主调度，不问用户）
+    - autonomy_enabled 默认开启；任务全部 done 后由 _auto_advance_phase 自动流转阶段"""
+    while True:
+        try:
+            await asyncio.sleep(max(15, int(get_setting("autonomy_interval", "25"))))
+            if get_setting("autonomy_enabled", "1") != "1":
+                continue
+            conn = get_db()
+            projects = conn.execute(
+                "SELECT * FROM projects WHERE phase != 'done' ORDER BY created_at DESC"
+            ).fetchall()
+            conn.close()
+            for p in projects:
+                if p["id"] == META_PID:
+                    continue
+                # 跳过占位种子项目（goal 是状态描述而非真实目标，如"完成 · 首页已上线"）
+                _g = (p["goal"] or "").strip()
+                if not (p["standards"] or "").strip() and (
+                    not _g or _g.startswith(("完成 ·", "运行中 ·", "阻塞 ·", "暂停 ·"))
+                ):
+                    continue
+                conn = get_db()
+                doing = conn.execute(
+                    "SELECT id FROM tasks WHERE project_id=? AND status='doing' LIMIT 1", (p["id"],)
+                ).fetchone()
+                t = conn.execute(
+                    "SELECT id,name,done_criteria FROM tasks WHERE project_id=? AND status='todo' ORDER BY created_at LIMIT 1",
+                    (p["id"],),
+                ).fetchone()
+                conn.close()
+                if doing or not t:
+                    continue
+                criteria = (t["done_criteria"] or "").strip()
+                prompt = (f"团队自主推进：请按看板顺序执行任务「{t['name']}」。"
+                          + (f"完成标准：{criteria}。" if criteria else "")
+                          + "自主决策安排执行，不要向用户提问；完成后汇报结果。")
+                try:
+                    await _execute_project_chat(p["id"], prompt)
+                except Exception as e:
+                    print(f"[autonomy] {p['id']} 派单失败: {e}")
+                break  # 每轮只推进 1 张卡，避免长时间占用事件循环
+        except Exception as e:
+            print(f"[autonomy] 循环异常: {e}")
+            await asyncio.sleep(5)
 
 
 # ── API：元神对话（改用多模型 call_llm）──────────────────────────

@@ -141,6 +141,9 @@
 | 2026-08-10 | 批次 A/B/C 全部落地（设计改进方案 v1 三批次） | `backend/main.py`, `frontend/index.html`, `tests/smoke_v40.py` | git `c0607fd` → `ef2b09a` → `48c418b`；冒烟 61/0 |
 | 2026-08-10 | debug：LLM 连接中断自动重试（`_is_conn_error`） | `backend/main.py` | 连接类瞬时故障原地重试一次 |
 | 2026-08-10 | 安装包重建 v4.1 + 官网推送 | `dist-stage/分身-v1/*`, `site/分身-v4.1-macOS.zip`, `site/index.html` | 线上备份 `/var/www/fenshen-backup-20260810-1720`；旧 v4.0 包下架；S4 HTTP 200 |
+| 2026-08-10 | v4.2 自主闭环 + DeepSeek v4-flash 迁移 | `backend/main.py`, `frontend/index.html`, `tests/smoke_v40.py` | git `8e2d2e9`；冒烟 67/0 |
+| 2026-08-10 | 派单并行化（PAD≤3 并发） | `backend/main.py` | git `86e57c1`；单任务派单 21-52s |
+| 2026-08-10 | 安装包重建 v4.2 + 官网推送 | `dist-stage/分身-v1/*`, `site/分身-v4.2-macOS.zip`, `site/index.html`, `deliverables/gstack/v4.2-signoff.md` | 线上备份 `/var/www/fenshen-backup-20260810-1958`；v4.1 包下架（404）；v4.2 包 200 完整 |
 
 ---
 
