@@ -2,10 +2,10 @@
 
 > 产品：分身 · 群聊形态 AI 团队总管（桌面端引擎 + H5/LAN 终端）
 > 工作区：`/Users/a13401098230/WorkBuddy/fenshen-v1/`
-> 当前版本：**v4.0**（`0.40.0` / release `v4.0`）
-> 基于：`v3.9-preaudit`（git `184fa98`）
+> 当前版本：**v4.1**（`0.41.0` / release `v4.1`）
+> 基于：`v4.0`（git `c0607fd`，含批次 A 审计修复）
 > 分支：`fix/v4.0-audit`
-> 最后更新：2026-08-09
+> 最后更新：2026-08-10
 
 ---
 
@@ -16,7 +16,8 @@
 | v1.0 → v2.0 → v3.0 → v3.5 → v3.6 → v3.7 | — | — | 已归档 | 基础架构、元神对话、看板 |
 | v3.8 | 2026-08-07 | `2bb9081` | 已签字 | 元神人格蒸馏、演示视频 |
 | v3.9-preaudit | 2026-08-09 | `184fa98` | 基线 | 审查前最后一个 tag |
-| **v4.0** | 2026-08-09 | 待打 tag | **待签字** | 全面安全重构 + 诚实性修复 + 能派状态流转 + 版本确认 |
+| v4.0 | 2026-08-09 | `6c0e1ec`（批次A `c0607fd`） | 已签字 | 全面安全重构 + 诚实性修复 + 能派状态流转 |
+| **v4.1** | 2026-08-10 | 待打 tag | **待签字** | 批次 B：任务完成标准 + 对照标准判定 + 工具分级 + 元神搭建 + autonomy 有界循环 + 护栏收敛 |
 
 ---
 
@@ -43,7 +44,7 @@
 | 鉴权 | Token（Cookie + Header） | 无 Token 返回 401；Token 由服务端生成 |
 | DNS Rebinding 防护 | Host 白名单 | 伪造 Host → 403 |
 | CSRF 防护 | Origin/Referer 校验 | 跨站请求 → 403 |
-| AI 执行确认 | `approval_mode = all` | `all`（每次确认）/ `danger`（仅危险）/ `off`（关闭） |
+| AI 执行确认 | `approval_mode = danger`（v4.1 起默认） | `all`（每次确认）/ `danger`（仅危险命令）/ `off`（关闭） |
 | 确认超时 | 90 秒 | 超时 fail-closed，按拒绝处理 |
 | 危险命令 | 黑名单 + 敏感路径正则 | 服务端弹 `osascript` 系统对话框，客户端 confirm 无效 |
 
@@ -85,6 +86,25 @@
 ### 仍遗留 / 需用户决策
 - [ ] 官网安装包下架（审查 P0-1，dist 目录在 S4 `/var/www/fenshen/`；S4 当前 SSH 无法登录）
 - [ ] 数据恢复：审查中误删的 `long_term_memory` / `messages`，备份文件 `fenshen.db.leadbackup-20260809-105950` 仍保留在 `data/`
+
+---
+
+## v4.1 批次 B 改造清单（2026-08-10，来源：设计改进方案 v1「批次 B：P1-1~3 / P2-1~4」）
+
+### P1 目标与标准（完成判定可对照）
+- [x] P1-1 `tasks` 表新增 `done_criteria` 列 + 老库兼容迁移；dispatch / 话题提炼均落任务级完成标准；聚合接口与看板卡片透出
+- [x] P1-2 向导完成标准输入（批次 A 已落地 `wStandards` → 项目级 `standards`，沿用）
+- [x] P1-3 `_judge_role_output` 由长度启发式改为对照标准 LLM 判定：任务 done_criteria → 项目 standards → 无标准时退回保守长度启发式；返回 (status, reason)，未达标原因进群聊与看板
+
+### P2 元神职责收敛 + autonomy 循环
+- [x] P2-1 工具分级：`META_TOOLS`（元神只读+搭建，无 write_file）/ `ROLE_TOOLS`（角色含 write_file 可动手产出）；`_chat_with_tools` 按 agent_id 默认分级
+- [x] P2-2 `_bootstrap_project(pid, goal, standards, roles)`：项目成立即由元神搭建基础设施——群聊开场消息定格目标/完成标准/团队/模块看板
+- [x] P2-3 autonomy 有界循环：执行 → 对照完成标准判定 → 未达标由元神重新规划补充动作 → 最多 `autonomy_max_rounds`（默认 3）轮；响应返回 `rounds` / `all_done`
+- [x] P2-4 护栏收敛：`approval_mode` 默认 `all` → `danger`（普通命令不再弹窗，危险命令仍 fail-closed）；`write_file` 纳入确认框架（`all` 模式拦截，`danger` 不拦但始终 file_log 审计）
+
+### 验证
+- [x] 冒烟回归 `tests/smoke_v40.py`：45 / 45 通过（新增批次 A 用例后基线）
+- [x] 端到端：bootstrap 开场消息落库、任务 done_criteria 透出、角色 write_file 真实产出、LLM 对照标准判定 done、autonomy 单轮达标、approval_mode=danger
 
 ---
 

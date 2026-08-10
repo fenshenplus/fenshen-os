@@ -80,7 +80,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.40.0")
+app = FastAPI(title="分身 v1 后端", version="0.41.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -348,6 +348,7 @@ def init_db():
             name TEXT NOT NULL,
             owner_role TEXT DEFAULT '后端',
             status TEXT DEFAULT 'todo',
+            done_criteria TEXT DEFAULT '',
             created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS meta_settings (
@@ -388,6 +389,10 @@ def init_db():
     pcols2 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
     if "standards" not in pcols2:
         cur.execute("ALTER TABLE projects ADD COLUMN standards TEXT DEFAULT ''")
+    # ── 兼容迁移：tasks 增加 done_criteria 列（任务级完成标准，批次 B / P1-1）──
+    tcols = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "done_criteria" not in tcols:
+        cur.execute("ALTER TABLE tasks ADD COLUMN done_criteria TEXT DEFAULT ''")
     # 角色种子数据
     cur.execute("SELECT COUNT(*) FROM roles")
     if cur.fetchone()[0] == 0:
@@ -963,9 +968,9 @@ async def human_approve(title: str, detail: str, timeout: int = 0):
 
 
 def approval_mode() -> str:
-    """AI 发起系统操作时的确认策略：all（每次确认，默认）/ danger（仅危险命令）/ off（关闭）。"""
-    mode = get_setting("approval_mode", "all")
-    return mode if mode in {"all", "danger", "off"} else "all"
+    """AI 发起系统操作时的确认策略：all（每次确认）/ danger（仅危险命令，v4.0 起默认）/ off（关闭）。"""
+    mode = get_setting("approval_mode", "danger")
+    return mode if mode in {"all", "danger", "off"} else "danger"
 
 
 def needs_approval(command: str) -> bool:
@@ -978,12 +983,18 @@ def needs_approval(command: str) -> bool:
     return bool(DANGER_RE.search(command) or SENSITIVE_PATH_RE.search(command))
 
 
+def needs_file_approval() -> bool:
+    """批次 B / P2-4：写文件是否纳入真人确认——all（严格模式）拦截；
+    danger（默认）不拦截以保留自主执行权，但文件操作始终落 file_log 审计。"""
+    return approval_mode() == "all"
+
+
 # ── API：基础 ────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.40.0", "release": "v4.0", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.41.0", "release": "v4.1", "port": PORT, "llm": llm,
             "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 
@@ -1056,6 +1067,9 @@ async def create_project(req: Request):
         )
     conn.commit()
     conn.close()
+    # 批次 B / P2-2：元神搭建基础设施（开场消息定格目标/标准/团队/看板）
+    _bootstrap_project(pid, goal=data.get("goal", ""), standards=data.get("standards", ""),
+                       roles=data.get("roles") or [])
     return {"id": pid, "ok": True, "modules": len(mods)}
 
 
@@ -1100,6 +1114,39 @@ def delete_project(pid: str):
     conn.commit()
     conn.close()
     return {"ok": True, "deleted": pid}
+
+
+def _bootstrap_project(pid: str, goal: str = "", standards: str = "", roles: list = None) -> None:
+    """批次 B / P2-2：项目创建后元神搭建基础设施 —— 群聊开场消息
+    （目标 / 完成标准 / 团队阵容 / 模块看板说明），让看板=项目总览图的第一帧就有内容。
+    角色实例化与技能装配由 P3（动态角色 + BUILTIN_SKILLS）进一步落地，此处先定格团队名单。"""
+    try:
+        conn = get_db()
+        proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if not proj:
+            conn.close()
+            return
+        mods = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort", (pid,)).fetchall()
+        mod_names = "、".join(m["name"] for m in mods) if mods else "（未拆分模块，可在看板补充分解）"
+        team = [ROLE_NAMES.get(r, r) for r in (roles or ROLE_NAMES)]
+        team_text = "、".join(team)
+        lines = [
+            "🏗️ 元神已为项目搭建好基础设施：",
+            f"🎯 目标：{goal or '（未填写）'}",
+            f"✅ 完成标准：{standards or '（未填写，可随时在项目设置里补充）'}",
+            f"👥 团队：{team_text}",
+            f"🗂️ 模块（看板纵轴）：{mod_names}",
+            "📋 看板已就绪：每个模块一个泳道，任务按 待办 → 进行中 → 复核 → 完成 流转。",
+            "告诉我第一个任务，我就安排团队开工；完成标准会自动作为验收依据。",
+        ]
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, "分身 · 元神", "meta", "\n".join(lines), "progress", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[bootstrap] {pid} 失败: {e}")
 
 
 # ── API：项目模板（v0.27.0 多项目模板沉淀）────────────────────────
@@ -1701,21 +1748,6 @@ META_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "write_file",
-            "description": "在用户电脑上写入文本文件（覆盖已有内容）。路径限制在用户主目录下，禁止写入敏感目录。文件内容上限 50KB。当用户要求创建/修改文档、代码、配置时使用。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文件绝对路径，例如 ~/Desktop/报告.md"},
-                    "content": {"type": "string", "description": "要写入的完整文本内容"}
-                },
-                "required": ["path", "content"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "list_files",
             "description": "列出用户电脑上某个目录下的文件和文件夹（一层，不递归）。路径限制在用户主目录下。当用户要求查看目录结构、找文件时使用。",
             "parameters": {
@@ -1744,6 +1776,23 @@ META_TOOLS = [
         }
     }
 ]
+# 批次 B / P2-1：工具分级——元神只搭基础设施（只读 + 搭建，不直接写文件），角色才动手（含写文件）。
+WRITE_FILE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "write_file",
+        "description": "在用户电脑上写入文本文件（覆盖已有内容）。路径限制在用户主目录下，禁止写入敏感目录。文件内容上限 50KB。当用户要求创建/修改文档、代码、配置时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "文件绝对路径，例如 ~/Desktop/报告.md"},
+                "content": {"type": "string", "description": "要写入的完整文本内容"}
+            },
+            "required": ["path", "content"]
+        }
+    }
+}
+ROLE_TOOLS = META_TOOLS + [WRITE_FILE_TOOL]  # 角色工具集（可写文件）
 
 
 def _call_provider_tools(provider: str, base: str, key: str, model: str, history: list, system_prompt: str, tools: list):
@@ -1837,6 +1886,15 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
                 return f"[截图成功] {res.get('title','')} · {res.get('size',0)}B · URL: {res.get('url')}（图片可在浏览器面板查看）"
             return json.dumps(res, ensure_ascii=False)[:2000]
         elif name in ("read_file", "write_file", "list_files", "search_files"):
+            # 批次 B / P2-4：write_file 纳入真人确认（严格模式 all 下拦截；danger/off 不拦但始终审计）
+            if name == "write_file" and needs_file_approval():
+                ok_approved, why = await human_approve(
+                    "分身想在你电脑上写入文件",
+                    f"发起者：{agent_id}（AI 自主调用）\n路径：{args.get('path', '')}\n"
+                    f"内容大小：约 {len(args.get('content') or '')} 字符\n\n允许写入吗？",
+                )
+                if not ok_approved:
+                    return f"⛔ 未获授权，文件未写入：{why}"
             return await _run_file_tool(name, args, agent_id)
         return f"❌ 未知工具 {name}"
     except subprocess.TimeoutExpired:
@@ -1979,18 +2037,21 @@ async def _run_file_tool(name: str, args: dict, agent_id: str) -> str:
     return out
 
 
-async def _chat_with_tools(agent_id: str, history: list, system_prompt: str) -> str:
-    """通用工具对话循环（元神/群聊共用，v0.27.0）：最多 6 轮（支持多步工具操作）。"""
+async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, tools: list = None) -> str:
+    """通用工具对话循环（元神/群聊共用，v0.27.0）：最多 6 轮（支持多步工具操作）。
+    批次 B / P2-1：tools 参数控制工具集——元神默认 META_TOOLS（只读+搭建，无写文件），
+    角色默认 ROLE_TOOLS（含 write_file 可动手产出）。"""
     cands = _available_providers(agent_id)
     if not cands:
         return "[分身·离线] 当前该角色未配置可用模型 Key。"
+    tool_list = tools if tools is not None else (META_TOOLS if agent_id == META_PID else ROLE_TOOLS)
     last_err = ""
     last_content = ""
     for _round in range(6):
         for provider, base, key, model in cands:
             try:
                 t0 = datetime.now()
-                msg = _call_provider_tools(provider, base, key, model, history, system_prompt, META_TOOLS)
+                msg = _call_provider_tools(provider, base, key, model, history, system_prompt, tool_list)
                 latency = int((datetime.now() - t0).total_seconds() * 1000)
                 _log_usage(agent_id, provider, model, latency, "success")
                 tool_calls = msg.get("tool_calls")
@@ -2603,16 +2664,45 @@ def _task_status(task_id: str, status: str, pid: str = "", note: str = "") -> No
         print(f"[task-status] {task_id} -> {status} 失败: {e}")
 
 
-def _judge_role_output(reply: str) -> str:
-    """判定角色产出：done（有实质产出）/ review（产出可疑需人工看）/ todo（失败退回）。"""
+async def _judge_role_output(reply: str, done_criteria: str = "", project_standards: str = "",
+                             role: str = "backend") -> tuple:
+    """判定角色产出是否达标（批次 B / P1-3：对照标准 LLM 判定，替换 v4.0 的纯长度启发式）。
+    判定优先级：任务 done_criteria → 项目 standards → 无标准时退回保守长度启发式。
+    返回 (status, reason)。status: done（达标）/ review（未达标或产出存疑，需人工看）/ todo（无产出退回）。"""
     text = (reply or "").strip()
     if not text:
-        return "todo"
+        return "todo", "角色无产出（空回复）"
     if any(m in text[:120] for m in FAIL_MARKERS):
-        return "todo"
+        return "todo", "产出含失败标记，判定未产出"
+    criteria = (done_criteria or "").strip() or (project_standards or "").strip()
+    if not criteria:
+        # 无标准可对照：退回保守长度启发式（v4.0 旧行为）
+        if len(text) < 40:
+            return "review", "无完成标准且产出较短，转人工复核"
+        return "done", "无完成标准，产出长度正常"
+    judge_sys = (
+        "你是严格的验收官。根据「完成标准」判定角色产出是否达标。\n"
+        '只输出 JSON：{"pass": true 或 false, "reason": "一句话理由（中文）"}。\n'
+        "产出必须直接满足标准才算 pass；若产出只是计划/思路而没有实际交付物，或明显未达标准，判 fail。"
+    )
+    judge_hist = [
+        {"role": "system", "content": judge_sys},
+        {"role": "user", "content": f"【完成标准】\n{criteria}\n\n【角色产出】\n{text[:1500]}"},
+    ]
+    try:
+        jr = await asyncio.to_thread(call_llm, role, judge_hist, judge_sys)
+        if "{" in jr and "}" in jr:
+            j = json.loads(jr[jr.find("{"):jr.rfind("}") + 1])
+            reason = str(j.get("reason") or "对照完成标准判定").strip()[:80]
+            if j.get("pass") is True:
+                return "done", f"达标：{reason}"
+            return "review", f"未达标：{reason}"
+    except Exception:
+        pass
+    # LLM 判定失败 → 保守退回长度启发式（不因判定故障而误杀产出）
     if len(text) < 40:
-        return "review"
-    return "done"
+        return "review", "标准判定调用异常且产出较短，转人工复核"
+    return "done", "标准判定调用异常，按产出长度保守通过"
 
 
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
@@ -2668,8 +2758,9 @@ async def project_chat(pid: str, req: Request):
         "获取真实信息后再回复或调度，不要凭空编造。危险命令会被拦截。\n\n"
         "输出格式（必须为合法 JSON）：\n"
         '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
-        '"actions": [{"role": "frontend|backend|architect|tester", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令"}]}\n'
-        "注意：actions 最多 3 个。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。"
+        '"actions": [{"role": "frontend|backend|architect|tester", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令", '
+        '"done_criteria": "该任务完成的、可验证的判定标准（例如：接口返回 200 且通过测试）"}]}\n'
+        "注意：actions 最多 3 个；done_criteria 务必具体、可验证，用于后续自动判定角色产出是否达标。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。"
     )
     hist = [{"role": "system", "content": dispatch_sys}]
     for r in reversed(rows):
@@ -2688,6 +2779,9 @@ async def project_chat(pid: str, req: Request):
             j = json.loads(dispatch_reply[dispatch_reply.find("{"):dispatch_reply.rfind("}") + 1])
             meta_reply = j.get("reply", dispatch_reply)
             actions = j.get("actions", [])
+            # 每个 action 补默认空完成标准（批次 B / P1-1）
+            for _a in actions:
+                _a.setdefault("done_criteria", "")
     except Exception:
         pass  # 非 JSON，当作纯文本回复
 
@@ -2700,74 +2794,126 @@ async def project_chat(pid: str, req: Request):
     conn.commit()
     conn.close()
 
-    # ── Step 2: 角色执行（逐个调度）──
+    # ── Step 2: 角色执行（批次 B / P2-3：autonomy 有界循环）──
+    # 执行 → 对照完成标准判定 → 未达标由元神重新规划补充动作 → 最多 MAX_ROUNDS 轮
+    MAX_ROUNDS = max(1, min(5, int(get_setting("autonomy_max_rounds", "3"))))
     role_results = []
-    for act in actions[:3]:
-        role = act.get("role", "backend")
-        if role not in ROLE_SYSTEMS:
-            role = "backend"
-        task_name = act.get("task_name", "未命名任务")[:20]
-        detail = act.get("detail", "")
+    round_no = 1
+    pending_actions = actions[:3]
+    while pending_actions and round_no <= MAX_ROUNDS:
+        for act in pending_actions:
+            role = act.get("role", "backend")
+            if role not in ROLE_SYSTEMS:
+                role = "backend"
+            task_name = act.get("task_name", "未命名任务")[:20]
+            detail = act.get("detail", "")
+            done_criteria = (act.get("done_criteria") or "").strip()[:300]
 
-        # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
-        task_id = f"tk{int(datetime.now().timestamp() * 1000)}"
-        conn = get_db()
-        mod = mods[0] if mods else None
-        mod_id = mod["id"] if mod else ""
-        topic_id = ""
-        if mod_id:
-            trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
-            if trow:
-                topic_id = trow["id"]
-            else:
-                topic_id = f"tp{int(datetime.now().timestamp() * 1000)}_{task_id[-4:]}"
-                conn.execute(
-                    "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
-                )
-        conn.execute(
-            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (task_id, pid, mod_id, topic_id, task_name, role, "todo", datetime.now().isoformat()),
+            # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
+            task_id = f"tk{time.time_ns()}"
+            conn = get_db()
+            mod = mods[0] if mods else None
+            mod_id = mod["id"] if mod else ""
+            topic_id = ""
+            if mod_id:
+                trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
+                if trow:
+                    topic_id = trow["id"]
+                else:
+                    topic_id = f"tp{time.time_ns()}"
+                    conn.execute(
+                        "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
+                    )
+            conn.execute(
+                "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat()),
+            )
+            conn.commit()
+            conn.close()
+
+            # v4.0：开工即流转到「进行中」，看板实时可见
+            _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{ROLE_NAMES[role]}，进入进行中")
+
+            # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
+            role_sys_ctx = ROLE_SYSTEMS[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
+            if done_criteria:
+                role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
+            role_hist = [
+                {"role": "system", "content": role_sys_ctx},
+                {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
+            ]
+            try:
+                role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx)
+            except Exception as e:
+                role_reply = f"这次没有产出。{ROLE_NAMES[role]}执行时出错：{e}"
+
+            # 落库角色回复
+            conn = get_db()
+            conn.execute(
+                "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                (pid, f"分身 · {ROLE_NAMES[role]}", "agent", role_reply, "progress", datetime.now().isoformat()),
+            )
+            conn.commit()
+            conn.close()
+
+            # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
+            final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
+            note = {
+                "done": f"✅ 「{task_name}」已完成（{ROLE_NAMES[role]}）",
+                "review": f"🔍 「{task_name}」未达标转复核（{judge_reason}）",
+                "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
+            }[final]
+            _task_status(task_id, final, pid, note)
+            role_results.append({"role": role, "task_name": task_name, "task_id": task_id,
+                                 "status": final, "round": round_no, "reason": judge_reason})
+
+        # ── 本轮判定：未达标 → 元神重新规划补充动作（autonomy，最多 MAX_ROUNDS 轮）──
+        unmet = [r for r in role_results if r["round"] == round_no and r["status"] != "done"]
+        if not unmet or round_no >= MAX_ROUNDS:
+            break
+        round_no += 1
+        feedback = "；".join(
+            f"「{r['task_name']}」（{ROLE_NAMES.get(r['role'], r['role'])}）未达标：{r['reason']}" for r in unmet
         )
-        conn.commit()
-        conn.close()
-
-        # v4.0：开工即流转到「进行中」，看板实时可见
-        _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{ROLE_NAMES[role]}，进入进行中")
-
-        # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
-        role_sys = ROLE_SYSTEMS[role]
-        role_hist = [
-            {"role": "system", "content": role_sys + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"},
-            {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
-        ]
+        replan_sys = (
+            "你是「元神」。上一轮派单给团队的部分任务未达标，需要你重新规划补充动作。\n"
+            f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。"
+            f"项目完成标准：{proj['standards'] or '（未填写）'}。\n"
+            f"未达标任务反馈：{feedback}\n"
+            '输出 JSON：{"reply": "给用户的简短说明（本轮补做计划）", '
+            '"actions": [{"role": "frontend|backend|architect|tester", "task_name": "简短任务名", '
+            '"detail": "针对未达标原因的补充执行指令", "done_criteria": "可验证的完成标准"}]}\n'
+            "注意：actions 最多 3 个；若当前产出已尽力、无法继续（缺信息/需用户决策等），actions 输出空数组并说明原因。"
+        )
+        replan_hist = [{"role": "system", "content": replan_sys}]
+        replan_reply = await _chat_with_tools(META_PID, replan_hist, replan_sys)
+        pending_actions = []
         try:
-            role_reply = await _chat_with_tools(role, role_hist, role_sys)
-        except Exception as e:
-            role_reply = f"这次没有产出。{ROLE_NAMES[role]}执行时出错：{e}"
+            if "{" in replan_reply and "}" in replan_reply:
+                j = json.loads(replan_reply[replan_reply.find("{"):replan_reply.rfind("}") + 1])
+                pending_actions = (j.get("actions") or [])[:3]
+                for _a in pending_actions:
+                    _a.setdefault("done_criteria", "")
+                extra_reply = str(j.get("reply") or "").strip()
+                if extra_reply:
+                    conn = get_db()
+                    conn.execute(
+                        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                        (pid, "分身 · 元神", "meta", f"🔄 第 {round_no} 轮补做：{extra_reply}", "progress",
+                         datetime.now().isoformat()),
+                    )
+                    conn.commit()
+                    conn.close()
+        except Exception:
+            pending_actions = []
+        if not pending_actions:
+            break
 
-        # 落库角色回复
-        conn = get_db()
-        conn.execute(
-            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-            (pid, f"分身 · {ROLE_NAMES[role]}", "agent", role_reply, "progress", datetime.now().isoformat()),
-        )
-        conn.commit()
-        conn.close()
-
-        # v4.0：按真实产出判定终态（done/review/todo），不再一律停在 todo
-        final = _judge_role_output(role_reply)
-        note = {
-            "done": f"✅ 「{task_name}」已完成（{ROLE_NAMES[role]}）",
-            "review": f"🔍 「{task_name}」产出较少，转待复核",
-            "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
-        }[final]
-        _task_status(task_id, final, pid, note)
-        role_results.append({"role": role, "task_name": task_name, "task_id": task_id, "status": final})
-
-    return {"reply": meta_reply, "actions": role_results, "ok": True}
+    all_done = all(r["status"] == "done" for r in role_results) if role_results else False
+    return {"reply": meta_reply, "actions": role_results, "ok": True, "rounds": round_no, "all_done": all_done}
 
 
 @app.get("/api/projects/{pid}/topics")
@@ -2940,10 +3086,11 @@ async def distill_task(tid: str, req: Request):
         conn.close()
         return {"ok": False, "error": "话题不存在"}
     tid2 = f"tk{int(datetime.now().timestamp() * 1000)}"
+    done_criteria = (data.get("done_criteria") or "").strip()[:300]
     conn.execute(
-        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
         (tid2, topic["project_id"], topic["module_id"], tid, name,
-         data.get("owner_role", "后端"), "todo", datetime.now().isoformat()),
+         data.get("owner_role", "后端"), "todo", done_criteria, datetime.now().isoformat()),
     )
     # 同步：话题内落一条系统消息
     conn.execute(

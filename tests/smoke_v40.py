@@ -223,6 +223,63 @@ def test_standards_board():
     check("批次A：清理测试数据", True)
 
 
+def test_batch_b():
+    """批次 B：任务完成标准 / 元神搭建开场 / 工具分级 / 护栏默认值。"""
+    print("\n── 6. 批次 B：done_criteria / bootstrap / 工具分级 / 护栏 ──")
+    # P2-4 护栏默认值（v4.1：approval_mode 默认 danger）
+    code, h = call("GET", "/api/health")
+    check("批次B：approval_mode 默认 danger", isinstance(h, dict) and h.get("approval_mode") == "danger",
+          str(h.get("approval_mode")))
+    check("批次B：release 版本 v4.1", isinstance(h, dict) and h.get("release") == "v4.1",
+          str(h.get("release")) + "/" + str(h.get("version")))
+
+    # P2-2 元神搭建基础设施：创建项目（带 roles）→ 群聊应有 bootstrap 开场消息
+    code, b = call("POST", "/api/projects",
+                   {"name": "批次B测试", "goal": "登录+支付 MVP", "standards": "登录可用",
+                    "roles": ["architect", "backend"],
+                    "modules": [{"name": "登录", "owner_role": "后端"}]})
+    pid = b.get("id") if isinstance(b, dict) else None
+    check("批次B：创建项目（含 roles）", code == 200 and bool(pid), str(b)[:100])
+    if not pid:
+        return
+    code, msgs = call("GET", f"/api/messages/{pid}")
+    ok = code == 200 and any("元神已为项目搭建好基础设施" in (m.get("text") or "") for m in (msgs or []))
+    check("批次B：元神 bootstrap 开场消息落库", ok, f"HTTP {code} / 消息 {len(msgs) if isinstance(msgs, list) else 0} 条")
+
+    # P1-1 任务级完成标准：话题提炼任务时写入 done_criteria
+    code, d = call("GET", f"/api/projects/{pid}")
+    tid = (d.get("topics") or [{}])[0].get("id") if isinstance(d, dict) else None
+    code, b2 = call("POST", f"/api/topics/{tid}/tasks",
+                    {"name": "写登录接口", "owner_role": "backend",
+                     "done_criteria": "登录接口返回 200 且校验密码"})
+    tk = b2.get("task_id") if isinstance(b2, dict) else None
+    check("批次B：提炼任务带完成标准", code == 200 and bool(tk), str(b2)[:100])
+    if tk:
+        code, d2 = call("GET", f"/api/projects/{pid}")
+        t = next((x for x in (d2.get("tasks") or []) if x["id"] == tk), None)
+        check("批次B：done_criteria 已落库并透出",
+              bool(t) and (t.get("done_criteria") or "").startswith("登录接口返回 200"),
+              str(t.get("done_criteria"))[:50] if t else "task not found")
+
+    # P2-1 工具分级：元神工具集无写文件、角色工具集含写文件（静态 import 验证）
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        from backend.main import META_TOOLS, ROLE_TOOLS
+        meta_names = {t["function"]["name"] for t in META_TOOLS}
+        role_names = {t["function"]["name"] for t in ROLE_TOOLS}
+        check("批次B：元神工具集不含 write_file（只读+搭建）",
+              "write_file" not in meta_names, "meta=" + ",".join(sorted(meta_names)))
+        check("批次B：角色工具集含 write_file（可动手产出）",
+              "write_file" in role_names and meta_names <= role_names,
+              "role=" + ",".join(sorted(role_names)))
+    except Exception as e:
+        check("批次B：工具分级静态验证", False, str(e)[:80])
+
+    # 清场
+    call("DELETE", f"/api/projects/{pid}")
+    check("批次B：清理测试数据", True)
+
+
 def main():
     global BASE
     ap = argparse.ArgumentParser()
@@ -230,13 +287,14 @@ def main():
     ap.add_argument("--skip-exec", action="store_true", help="跳过需人工确认弹窗的 exec 测试")
     a = ap.parse_args()
     BASE = a.base
-    print(f"分身 v4.0 回归冒烟 → {BASE}  (token={'有' if TOK else '无'})")
+    print(f"分身 v4.1 回归冒烟 → {BASE}  (token={'有' if TOK else '无'})")
     test_gets()
     test_security()
     if not a.skip_exec:
         test_exec()
     test_task_flow()
     test_standards_board()
+    test_batch_b()
     print(f"\n{'=' * 52}\n通过 {len(PASS)} / 失败 {len(FAIL)}")
     if FAIL:
         print("失败项：\n  - " + "\n  - ".join(FAIL))
