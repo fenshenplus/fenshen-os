@@ -64,7 +64,7 @@ META_SYSTEM = """你是「元神」，岳衡（ChooseWiki 选择学习法品牌�
 
 # 支持的模型供应商预设（base_url 可空，由代码补默认）
 PROVIDER_PRESETS = {
-    "deepseek": {"base": "https://api.deepseek.com", "chat": "/chat/completions", "default_model": "deepseek-chat", "auth": "Bearer"},
+    "deepseek": {"base": "https://api.deepseek.com", "chat": "/chat/completions", "default_model": "deepseek-v4-flash", "auth": "Bearer"},
     "openai":   {"base": "https://api.openai.com",   "chat": "/v1/chat/completions", "default_model": "gpt-4o-mini", "auth": "Bearer"},
     "claude":   {"base": "https://api.anthropic.com","chat": "/v1/messages", "default_model": "claude-3-5-sonnet-latest", "auth": "x-api-key"},
     "ollama":   {"base": "http://localhost:11434",   "chat": "/api/chat", "default_model": "qwen2.5:7b", "auth": None},
@@ -72,9 +72,9 @@ PROVIDER_PRESETS = {
 
 # 角色推荐模型（Phase 5 多模型协作：简单任务走廉价模型，复杂任务走强推理）
 ROLE_MODEL_RECS = {
-    META_PID:  {"provider": "deepseek", "model": "deepseek-chat",      "why": "管理者：平衡成本与推理"},
+    META_PID:  {"provider": "deepseek", "model": "deepseek-v4-flash",      "why": "管理者：平衡成本与推理"},
     "architect":{"provider": "claude",   "model": "claude-3-5-sonnet-latest", "why": "架构设计：强推理"},
-    "backend":  {"provider": "deepseek", "model": "deepseek-chat",      "why": "后端编码：高性价比"},
+    "backend":  {"provider": "deepseek", "model": "deepseek-v4-flash",      "why": "后端编码：高性价比"},
     "frontend": {"provider": "openai",   "model": "gpt-4o-mini",        "why": "前端实现：快速迭代"},
     "tester":   {"provider": "openai",   "model": "gpt-4o-mini",        "why": "测试用例：细致稳定"},
 }
@@ -493,7 +493,7 @@ def resolve_provider_cfg(agent_id: str):
         return provider, base, cfg["api_key"], model
     # 元神回退：沿用 DeepSeek secret 文件（向后兼容）
     if agent_id == META_PID and DEEPSEEK_KEY:
-        return "deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-chat"
+        return "deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-v4-flash"
     return None
 
 
@@ -610,7 +610,7 @@ def _available_providers(agent_id: str):
              PROVIDER_PRESETS["ollama"]["default_model"])
 
     # 4) DeepSeek secret 文件兜底（向后兼容）
-    _add("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-chat")
+    _add("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-v4-flash")
     return cands
 
 
