@@ -81,7 +81,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.50.0")
+app = FastAPI(title="分身 v1 后端", version="0.51.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -995,6 +995,10 @@ def _human_approve_sync(title: str, detail: str, timeout: int = 90):
 
     返回 (是否放行, 说明)。任何异常一律 fail-closed（拒绝），不给"出错就放过"的口子。
     """
+    # v5.1：超时 ≤3s 直接拒绝（不弹窗）——3 秒内不可能完成真人确认，直接按拒绝处理；
+    # 同时让回归测试可无打扰、确定性地验证危险命令拦截（approval_timeout=2 即命中）。
+    if timeout <= 3:
+        return False, f"审批超时过短（{timeout}s），已按最安全策略直接拒绝。"
     if sys.platform != "darwin":
         return False, "当前系统不支持系统级确认框，已按最安全策略拒绝执行。"
     text = (detail or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", " / ")[:900]
@@ -1057,7 +1061,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.50.0", "release": "v5.0", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.51.0", "release": "v5.1", "port": PORT, "llm": llm,
             "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 
@@ -4541,8 +4545,8 @@ async def meta_settings_set(req: Request):
             tv = int(data["approval_timeout"])
         except (TypeError, ValueError):
             return {"ok": False, "error": "approval_timeout 必须是整数秒"}
-        if not 5 <= tv <= 300:
-            return {"ok": False, "error": "approval_timeout 需在 5~300 秒之间"}
+        if not 1 <= tv <= 300:
+            return {"ok": False, "error": "approval_timeout 需在 1~300 秒之间（≤3 秒按直接拒绝处理，不弹窗）"}
         set_setting("approval_timeout", str(tv))
     return {"ok": True, "settings": meta_settings_get()}
 

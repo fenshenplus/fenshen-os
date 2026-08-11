@@ -126,10 +126,10 @@ def test_exec():
     check("exec 失败命令 ok=false（修复恒真）", ok, str(b)[:120])
 
     # 危险命令：客户端自带 confirm 也不得放行（服务端弹窗，超时 fail-closed）
-    # 弹窗默认等 90 秒真人点击，会拖垮回归。这里临时把确认超时压到 5 秒，跑完恢复原值。
+    # v5.1：approval_timeout≤3 时服务端直接拒绝（不弹窗），测试确定且无打扰。
     _, cur = call("GET", "/api/meta/settings", timeout=20)
     old_to = cur.get("approval_timeout", 90) if isinstance(cur, dict) else 90
-    call("POST", "/api/meta/settings", {"approval_timeout": 5}, timeout=20)
+    call("POST", "/api/meta/settings", {"approval_timeout": 2}, timeout=20)
     try:
         code, b = call("POST", "/api/exec",
                        {"command": "rm -rf /tmp/fenshen-smoke-target", "confirm": True}, timeout=60)
@@ -230,7 +230,7 @@ def test_batch_b():
     code, h = call("GET", "/api/health")
     check("批次B：approval_mode 默认 danger", isinstance(h, dict) and h.get("approval_mode") == "danger",
           str(h.get("approval_mode")))
-    check("批次B：release 版本 v5.0", isinstance(h, dict) and h.get("release") == "v5.0",
+    check("批次B：release 版本 v5.1", isinstance(h, dict) and h.get("release") == "v5.1",
           str(h.get("release")) + "/" + str(h.get("version")))
 
     # P2-2 元神搭建基础设施：创建项目（带 roles）→ 群聊应有 bootstrap 开场消息

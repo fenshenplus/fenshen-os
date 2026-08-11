@@ -196,6 +196,10 @@
     .sidenav .navitem { flex:1; justify-content:center; padding:9px 2px; font-size:11px; gap:4px; min-height:44px; }
     .sidenav .navitem .dotk { display:none; }
     .sidenav .foot { display:none; }
+    /* v5.0 移动端底部导航：仅 4 主项 + 更多；其余收进抽屉 */
+    .sidenav .m-more { display:none !important; }
+    .sidenav .m-more-btn { display:flex !important; }
+    .sidenav .m-main { display:flex !important; }
     .body { flex-direction:column; }
     .rooms { width:100%; border-right:none; }
     .room { padding:13px 14px; min-height:46px; }
@@ -231,6 +235,21 @@
   @media (max-width:768px){ html { -webkit-tap-highlight-color:transparent; } }
   /* v5.0 移动端：看板卡片快捷操作按钮（触控友好） */
   @media (max-width:768px){ .mv-actions{ display:flex !important; } }
+  /* v5.0 移动端：桌面隐藏「更多」按钮，抽屉网格触控友好 */
+  .sidenav .m-more-btn { display:none; }
+  @media (max-width:768px){
+    .sidenav .m-more-btn { display:flex !important; }
+    #mobileMoreGrid > div { min-height:52px; display:flex; align-items:center; justify-content:center; }
+    /* 群聊目标条：默认单行可折叠 */
+    #chatGoalBar { cursor:pointer; max-height:22px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    #chatGoalBar.goal-open { max-height:none; white-space:normal; }
+    /* 看板移动卡片加大触控 */
+    #boardGrid [style*="cursor:pointer"] { font-size:12px; }
+    #boardGrid .mv-actions button { min-height:38px !important; }
+    /* 看板头部三按钮：手机两行 */
+    #boardProgWrap [onclick] { min-height:34px; }
+    #boardProgWrap > div:last-of-type { flex-wrap:wrap; }
+  }
 </style>
 </head>
 <body>
@@ -247,19 +266,22 @@
 
   <div class="body">
     <div class="sidenav">
-      <div class="navitem meta active" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
-      <div class="navitem" data-sec="chat"><span class="dotk"></span>项目群聊</div>
-      <div class="navitem" data-sec="roles"><span class="dotk"></span>角色库</div>
-      <div class="navitem" data-sec="resources"><span class="dotk"></span>公共资源库</div>
-      <div class="navitem" data-sec="models"><span class="dotk"></span>模型设置</div>
-      <div class="navitem" data-sec="terminal"><span class="dotk"></span>终端</div>
-      <div class="navitem" data-sec="browser"><span class="dotk"></span>浏览器</div>
-      <div class="navitem" data-sec="board"><span class="dotk"></span>项目看板</div>
-      <div class="navitem" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
-      <div class="navitem" data-sec="memory"><span class="dotk"></span>长期记忆</div>
-      <div class="navitem" data-sec="skills"><span class="dotk"></span>技能库</div>
-      <div class="navitem" data-sec="experiences"><span class="dotk"></span>经验库</div>
-      <div class="navitem" data-sec="evolution"><span class="dotk"></span>进化中心</div>
+      <div class="navitem meta active m-main" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
+      <div class="navitem m-main" data-sec="chat"><span class="dotk"></span>项目群聊</div>
+      <div class="navitem m-more" data-sec="roles"><span class="dotk"></span>角色库</div>
+      <div class="navitem m-more" data-sec="resources"><span class="dotk"></span>公共资源库</div>
+      <div class="navitem m-more" data-sec="models"><span class="dotk"></span>模型设置</div>
+      <div class="navitem m-more" data-sec="terminal"><span class="dotk"></span>终端</div>
+      <div class="navitem m-more" data-sec="browser"><span class="dotk"></span>浏览器</div>
+      <div class="navitem m-main" data-sec="board"><span class="dotk"></span>项目看板</div>
+      <div class="navitem m-more" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
+      <div class="navitem m-more" data-sec="memory"><span class="dotk"></span>长期记忆</div>
+      <div class="navitem m-more" data-sec="skills"><span class="dotk"></span>技能库</div>
+      <div class="navitem m-more" data-sec="experiences"><span class="dotk"></span>经验库</div>
+      <div class="navitem m-more" data-sec="evolution"><span class="dotk"></span>进化中心</div>
+      <div class="navitem m-more" data-sec="market"><span class="dotk"></span>应用市场</div>
+      <!-- v5.0 移动端：更多抽屉入口（手机底部第 4 项） -->
+      <div class="navitem m-more-btn" id="navMore" onclick="openMobileMore()"><span class="dotk"></span>更多</div>
       <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
     </div>
 
@@ -313,6 +335,8 @@
                 <!-- v4.2 项目级自主推进开关 -->
                 <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
                   <button class="btn sm" id="boardAutoBtn" onclick="toggleBoardAutonomy()" style="font-size:10px;padding:2px 10px"></button>
+                  <!-- v5.0 移动端深化：一键继续推进 -->
+                  <button class="btn sm" onclick="continueBoard()" style="font-size:10px;padding:2px 10px;background:#6d5bd0;color:#fff;border:none">🚀 继续推进</button>
                 </div>
               </div>
             </div>
@@ -522,6 +546,16 @@
             <button class="btn sm ghost" onclick="doCleanup('memory',this)">清空记忆</button>
           </div>
           <div id="memList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- v5.0 移动端：更多抽屉（收纳非主导航工具页） -->
+          <div class="mask" id="mobileMoreMask" style="display:none" onclick="if(event.target===this)closeMobileMore()">
+            <div class="modal" style="max-width:420px;padding:18px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <span style="font-size:14px;font-weight:600">更多工具</span>
+                <button class="btn sm ghost" onclick="closeMobileMore()">收起</button>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px" id="mobileMoreGrid"></div>
+            </div>
+          </div>
           <!-- 添加记忆弹窗 -->
           <div class="mask" id="memAddMask" style="display:none">
             <div class="modal" style="max-width:420px">
@@ -623,6 +657,28 @@
               <div class="mf">
                 <button class="btn" onclick="closeReviewEdit()">取消</button>
                 <button class="btn primary" onclick="saveReview()">保存复盘</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- v5.1 应用市场：一键上架 + 产品列表 + 访问统计 -->
+      <div class="section" id="sec-market">
+        <div style="padding:16px 20px;flex:1;overflow-y:auto">
+          <div class="grid-head"><span class="t">应用市场</span><span class="rl" style="font-size:11px;color:var(--gray-400)">已完成项目一键上架 · 生成产品页与二维码 · 访问统计（自建市场，预留第三方对接）</span></div>
+          <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+            <button class="btn sm meta" onclick="openMarketPublish()">➕ 一键上架</button>
+            <button class="btn sm" onclick="loadMarket()">刷新列表</button>
+          </div>
+          <div id="marketList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- v5.1 应用市场：一键上架弹窗 -->
+          <div class="mask" id="marketPublishMask" style="display:none">
+            <div class="modal" style="max-width:440px">
+              <div class="mh">一键上架 · 分身应用市场 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeMarketPublish()">✕</span></div>
+              <div class="mb">
+                <p style="font-size:12px;color:var(--gray-500);margin:0 0 8px">选择一个已完成项目上架（自动识别产物 + 生成介绍 + 访问链接）。</p>
+                <div id="mktPublishList" style="max-height:260px;overflow:auto;font-size:12px"></div>
               </div>
             </div>
           </div>
@@ -863,11 +919,21 @@ function renderRooms(){ const el=document.getElementById('roomList'); el.innerHT
     const st=r.status||'green';
     const ph=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
     const fz=r.frozen?' 🔒':'';
-    d.innerHTML=`<span class="s" style="background:var(--${escapeHtml(st)})"></span><div class="info"><div class="nm">${escapeHtml(r.name)}${fz}</div><div class="ds">${escapeHtml(ph)} · ${escapeHtml(r.goal||'')}</div></div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
+    // v5.0 移动端深化：完成度小条（项目列表一屏看进度）
+    const c=r.completion||{};
+    const pct=c.percent||0;
+    const bar=`<div style="height:3px;background:var(--gray-200);border-radius:99px;margin-top:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct>=100?'#34c98e':'var(--meta-700)'};border-radius:99px"></div></div>`;
+    // v5.0 移动端深化：最后消息摘要 + 时间（微信式列表）
+    const lm=r.last_msg?`<div style="font-size:11px;color:var(--gray-400);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.last_msg)}</div>`:'';
+    const lt=r.last_ts?`<span style="font-size:10px;color:var(--gray-400)">${escapeHtml(r.last_ts.slice(5))}</span>`:'';
+    d.innerHTML=`<span class="s" style="background:var(--${escapeHtml(st)})"></span><div class="info"><div class="nm">${escapeHtml(r.name)}${fz}</div><div class="ds">${escapeHtml(ph)} · 完成度 ${pct}%${bar}</div>${lm}</div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
 async function loadChat(pid){ const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
   const r=rooms.find(x=>x.id===pid); document.getElementById('chatTitle').textContent=r?r.name:''; document.getElementById('chatSub').textContent=r?STATUS_LABEL[r.status]||'':'';
   const gb=document.getElementById('chatGoalBar');
-  if(r){ gb.style.display='block'; gb.innerHTML='🎯 '+(escapeHtml(r.goal||'未设目标'))+'　&nbsp;　✅ 完成标准：'+(escapeHtml(r.standards||'未设')); }
+  if(r){ gb.style.display='block'; gb.innerHTML='🎯 '+(escapeHtml(r.goal||'未设目标'))+'　&nbsp;　✅ 完成标准：'+(escapeHtml(r.standards||'未设'));
+    // v5.0 移动端：目标条点击展开/折叠
+    gb.onclick=()=>gb.classList.toggle('goal-open');
+  }
   else gb.style.display='none';
   refreshPhaseUI(r);
   let msgs=[]; try{ const res=await fetch('/api/messages/'+pid); msgs=await res.json(); }catch(e){ console.error(e); }
@@ -917,23 +983,41 @@ async function sendMsg(){
     if(j.job_id) jobId=j.job_id;
   }catch(e){ toast('发送失败：'+errText(e),'err'); inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; return; }
   if(!jobId){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; await loadChat(curRoom); return; }
-  // 轮询 job 进度（每 3s，最多 8 分钟；输入框可随时继续发别的）
+  await pollJob(jobId,()=>{
+    inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false;
+    loadChat(curRoom);
+  });
+}
+/* v5.0：共享的派单进度轮询（sendMsg / continueBoard 复用）*/
+async function pollJob(jobId,onDone,onRunning){
   const t0=Date.now();
   const poll=async()=>{
-    if(Date.now()-t0 > 480000){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; await loadChat(curRoom); return; }
+    if(Date.now()-t0 > 480000){ if(onDone) onDone(); return; }
     let st=null;
     try{ st=await apiJson('/api/jobs/'+jobId); }catch(e){}
     if(!st){ setTimeout(poll,3000); return; }
     if(st.status==='running'||st.status==='queued'){
-      inp.placeholder=(st.progress||'团队执行中…')+'（自动刷新）';
+      if(onRunning) onRunning(st.progress||'团队执行中…');
       setTimeout(poll,3000); return;
     }
-    inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false;
     if(st.status==='failed') toast('执行失败：'+(st.error||'未知错误'),'err');
     else if(st.status==='done') toast('✅ 团队执行完成','ok');
-    await loadChat(curRoom);
+    if(onDone) onDone();
   };
   poll();
+}
+/* v5.0 移动端深化：一键「继续推进」——让团队按看板顺序继续完成剩余任务 */
+async function continueBoard(){
+  if(!curRoom){ toast('先选择项目'); return; }
+  toast('团队继续推进中…');
+  try{
+    const j=await apiJson('/api/projects/'+curRoom+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:'团队自主推进：继续按看板顺序完成剩余任务，自主决策，不要向用户提问。'})});
+    if(j.ok && j.job_id){
+      const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder='团队继续推进中…（自动刷新）'; inp.disabled=true; }
+      await pollJob(j.job_id,()=>{ if(inp){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; } if(typeof loadBoard==='function') loadBoard(); loadChat(curRoom); });
+    } else toast('❌ '+(j.error||'派单失败'),'err');
+  }catch(e){ toast('请求失败：'+errText(e),'err'); }
 }
 /* 元神中止：真的把正在跑的请求取消掉（AbortController），不再插一条假的系统消息 */
 function metaStop(){
@@ -1341,10 +1425,55 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
     if(!curRoom){ document.getElementById('boardMsgInline').textContent='还没有选中项目，先去「项目群聊」选一个。'; }
     else loadBoard();
   }
+  // v5.1 应用市场：切过来加载上架产品列表
+  if(n.dataset.sec==='market'){ loadMarket(); }
 });
 
 // v5.0 移动端首页：手机默认进「项目群聊」（最常用），桌面保持元神窗
 if(innerWidth<768 && document.querySelector('.navitem[data-sec="chat"]')){ document.querySelector('.navitem[data-sec="chat"]').click(); }
+
+/* v5.0 移动端：更多抽屉（收纳非主导航工具页） */
+const MOBILE_MORE_ITEMS = [
+  ['roles','角色库'],['skills','技能库'],['resources','公共资源库'],['models','模型设置'],
+  ['terminal','终端'],['browser','浏览器'],['cleanup','清理中心'],['memory','长期记忆'],
+  ['experiences','经验库'],['evolution','进化中心'],['market','应用市场'],
+];
+function openMobileMore(){
+  const grid=document.getElementById('mobileMoreGrid');
+  grid.innerHTML=MOBILE_MORE_ITEMS.map(([sec,label])=>{
+    const nav=document.querySelector('.navitem[data-sec="'+sec+'"]');
+    const active=nav?nav.classList.contains('active'):false;
+    return `<div style="background:${active?'#EEEDFE':'var(--gray-50)'};border:.5px solid var(--gray-200);border-radius:10px;padding:10px 6px;text-align:center;font-size:13px;color:${active?'#3C3489':'var(--gray-600)'};cursor:pointer" onclick="gotoMobileMore('${sec}')">${label}</div>`;
+  }).join('');
+  document.getElementById('mobileMoreMask').style.display='flex';
+}
+function closeMobileMore(){ document.getElementById('mobileMoreMask').style.display='none'; }
+function gotoMobileMore(sec){
+  closeMobileMore();
+  const nav=document.querySelector('.navitem[data-sec="'+sec+'"]');
+  if(nav) nav.click();
+}
+
+/* v5.0 移动端深化：下拉刷新（项目列表 / 群聊消息，触控习惯） */
+function attachPullRefresh(el,fn){
+  if(!el) return;
+  let sy=0, pulling=false;
+  el.addEventListener('touchstart',e=>{ if(el.scrollTop<=0){ sy=e.touches[0].clientY; pulling=true; } },{passive:true});
+  el.addEventListener('touchmove',e=>{ if(!pulling) return; const dy=e.touches[0].clientY-sy; if(dy>60){ pulling=false; fn&&fn(); } },{passive:true});
+  el.addEventListener('touchend',()=>{ pulling=false; },{passive:true});
+}
+setTimeout(()=>{
+  attachPullRefresh(document.getElementById('roomList'),()=>loadRooms());
+  attachPullRefresh(document.getElementById('chatBody'),()=>{ if(curRoom) loadChat(curRoom); });
+},800);
+
+/* v5.0 PWA：SW 更新提示（新版本就绪 → 提示刷新） */
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    toast('🔄 分身已更新到新版本，点击重新加载以生效');
+    setTimeout(()=>location.reload(),2500);
+  });
+}
 
 /* 标注模式 */
 let annotating=false, pendX=0, pendY=0;document.getElementById('btnAnnot').onclick=()=>{ annotating=!annotating; document.body.classList.toggle('annotating',annotating);
@@ -2131,6 +2260,69 @@ async function loadContextBadge(){
 /* init */
 loadRooms(); renderRoles(); renderResources(); loadMeta(); renderModels();
 loadCleanupPreview(); loadMemory(); loadContextBadge(); loadSkills();
+
+/* ── v5.1 应用市场：上架 / 列表 / 详情 / 访问统计 ── */
+async function loadMarket(){
+  const el=document.getElementById('marketList'); if(!el)return;
+  try{
+    const r=await fetch('/api/market'); const list=await r.json();
+    if(!list.length){ el.innerHTML='<div style="color:var(--gray-400)">还没有上架产品。开发完成的项目（阶段=完成）可一键上架到分身应用市场。</div>'; return; }
+    el.innerHTML=list.map(p=>`
+      <div style="background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:30px;height:30px;border-radius:8px;background:var(--meta-700);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px">${escapeHtml((p.name||'品')[0])}</div>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:500">${escapeHtml(p.name)} <span style="font-size:10px;color:var(--gray-400)">${escapeHtml(p.target||'market')} · ${escapeHtml((p.publish_ts||'').slice(0,16).replace('T',' '))}</span></div>
+            <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${escapeHtml(p.desc||p.goal||'')}</div>
+            ${p.artifacts&&p.artifacts.length?`<div style="font-size:10px;color:var(--gray-400);margin-top:3px">产物：${p.artifacts.map(a=>escapeHtml(a.path.split('/').pop())+'('+a.kinds.join('/')+')').join(' · ')}</div>`:''}
+          </div>
+          <div style="text-align:right;font-size:10px;color:var(--gray-400)">访问 ${p.visit_count||0}</div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn sm" onclick="marketOpen('${p.id}')">打开产品</button>
+          <button class="btn sm" onclick="marketCopyLink('${p.id}')">复制链接</button>
+          <button class="btn sm ghost" onclick="marketUnpublish('${p.id}')">下架</button>
+        </div>
+      </div>`).join('');
+  }catch(e){ el.textContent='加载失败：'+errText(e); }
+}
+function marketOpen(pid){ window.open('/p/'+pid,'_blank'); fetch('/api/market/visit/'+pid,{method:'POST'}); loadMarket(); }
+function marketCopyLink(pid){
+  const url=location.origin+'/p/'+pid;
+  (navigator.clipboard?navigator.clipboard.writeText(url):Promise.reject()).then(()=>toast('已复制产品链接','ok'))
+    .catch(()=>{ prompt('产品链接（复制到浏览器）：', url); });
+  fetch('/api/market/visit/'+pid,{method:'POST'});
+}
+async function marketUnpublish(pid){
+  if(!confirm('确认下架该产品？')) return;
+  try{ const r=await fetch('/api/projects/'+pid+'/unpublish',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json(); if(j.ok){ toast('已下架','ok'); loadMarket(); } else toast('❌ '+j.error);
+  }catch(e){ toast('请求失败：'+errText(e)); }
+}
+async function openMarketPublish(){
+  try{
+    const r=await fetch('/api/projects'); const all=await r.json();
+    const done=all.filter(p=>p.phase==='done');
+    const el=document.getElementById('mktPublishList');
+    if(!done.length){ el.innerHTML='<div style="color:var(--gray-400);padding:10px 0">还没有已完成项目。项目阶段达到「完成」后可一键上架。</div>'; }
+    else el.innerHTML=done.map(p=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:.5px solid var(--gray-200)">
+        <div style="flex:1;font-size:12px">${escapeHtml(p.name)} ${p.published?`<span style="font-size:10px;color:#0F6E56">(已上架)</span>`:''}</div>
+        <button class="btn sm" style="background:${p.published?'var(--gray-200)':'var(--meta-700)'};color:${p.published?'var(--gray-500)':'#fff'};border:none" onclick="doPublish('${p.id}','${escapeJs(p.name)}',this)" ${p.published?'disabled':''}>上架</button>
+      </div>`).join('');
+    document.getElementById('marketPublishMask').style.display='flex';
+  }catch(e){ toast('加载失败：'+errText(e)); }
+}
+function closeMarketPublish(){ document.getElementById('marketPublishMask').style.display='none'; }
+async function doPublish(pid,name,btn){
+  btn.disabled=true; btn.textContent='生成中…';
+  try{
+    const r=await fetch('/api/projects/'+pid+'/publish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:'market'})});
+    const j=await r.json();
+    if(j.ok){ toast(`✅ 「${name}」已上架`); closeMarketPublish(); loadMarket(); }
+    else { toast('❌ '+(j.error||'上架失败'),'err'); btn.disabled=false; btn.textContent='上架'; }
+  }catch(e){ toast('请求失败：'+errText(e)); btn.disabled=false; btn.textContent='上架'; }
+}
 loadExperiences(''); loadReviews('pending'); initCrossCheck(); loadUsage();
 setInterval(loadContextBadge, 30000); // 每30秒刷新上下文状态
 </script>
