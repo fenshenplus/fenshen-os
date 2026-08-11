@@ -8,6 +8,7 @@
 """
 import asyncio
 import hashlib
+import html
 import json
 import os
 import re
@@ -23,7 +24,7 @@ from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -389,6 +390,15 @@ def init_db():
     # ── 兼容迁移：projects 增加 autonomy_paused 列（项目级自主推进暂停开关，v4.2）──
     if "autonomy_paused" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN autonomy_paused INTEGER DEFAULT 0")
+    # ── 兼容迁移：应用市场上架字段（v5.1：publish 状态 + 产品元数据 + 访问统计）──
+    if "published" not in cols:
+        cur.execute("ALTER TABLE projects ADD COLUMN published INTEGER DEFAULT 0")
+    if "publish_ts" not in cols:
+        cur.execute("ALTER TABLE projects ADD COLUMN publish_ts TEXT DEFAULT ''")
+    if "product_meta" not in cols:
+        cur.execute("ALTER TABLE projects ADD COLUMN product_meta TEXT DEFAULT ''")
+    if "visit_count" not in cols:
+        cur.execute("ALTER TABLE projects ADD COLUMN visit_count INTEGER DEFAULT 0")
     # ── 兼容迁移：dispatch_jobs 表（异步派单 + 进度轮询，v4.2 新）──
     cur.execute(
         """CREATE TABLE IF NOT EXISTS dispatch_jobs (
@@ -1139,6 +1149,184 @@ async def set_project_autonomy(pid: str, req: Request):
     conn.commit()
     conn.close()
     return {"ok": True, "paused": bool(paused)}
+
+
+# ── v5.1 应用市场：一键上架 / 下架 / 列表 / 访问统计 ──────────────
+# 上架目标枚举（本期实现 market；wechat/appstore/android 预留第三方对接）
+PUBLISH_TARGETS = ["market", "wechat-miniprogram", "appstore", "android"]
+
+
+def _detect_artifacts(pid: str) -> list:
+    """自动识别项目产物：扫描常见产物目录（site/dist/build/out + 项目 workdir）。"""
+    candidates = []
+    base = os.path.expanduser("~/Desktop")
+    # 项目名匹配的目录（分身项目产物通常落在 ~/Desktop/<项目名>）
+    conn = get_db()
+    row = conn.execute("SELECT name FROM projects WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    proj_name = row["name"] if row else ""
+    dirs = [base, os.path.expanduser("~/WorkBuddy")]
+    if proj_name:
+        for d in dirs:
+            candidates.append(os.path.join(d, proj_name))
+    for sub in ["site", "dist", "build", "out"]:
+        for d in dirs:
+            candidates.append(os.path.join(d, sub))
+    found = []
+    for c in candidates:
+        if os.path.isdir(c):
+            kinds = []
+            if os.path.isfile(os.path.join(c, "index.html")):
+                kinds.append("web")
+            if any(f.endswith((".apk", ".app", ".zip")) for f in os.listdir(c) if os.path.isfile(os.path.join(c, f))):
+                kinds.append("app")
+            if any(d in ("pages", "app.json") for d in os.listdir(c)):
+                kinds.append("miniprogram")
+            if kinds:
+                found.append({"path": c, "kinds": kinds})
+    return found[:3]
+
+
+@app.post("/api/projects/{pid}/publish")
+async def publish_project(pid: str, req: Request):
+    """一键上架：校验项目存在 → 识别产物 → LLM 生成介绍 → 标记 published。target 本期仅 market。"""
+    data = await req.json()
+    target = (data.get("target") or "market").strip()
+    if target not in PUBLISH_TARGETS:
+        return {"ok": False, "error": f"不支持的发布目标：{target}"}
+    conn = get_db()
+    row = conn.execute("SELECT id,name,goal,standards,phase FROM projects WHERE id=?", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    if target == "market" and row["phase"] != "done":
+        conn.close()
+        return {"ok": False, "error": f"仅已完成项目可上架（当前阶段：{row['phase']}）"}
+    artifacts = _detect_artifacts(pid)
+    # LLM 生成产品介绍（1-2 句，基于 goal/standards）
+    desc = ""
+    try:
+        goal = (row["goal"] or row["name"] or "").strip()
+        raw = (await _chat_with_tools(
+            META_PID,
+            [{"role": "system", "content": "你是产品文案。根据项目信息生成一句吸引人的产品介绍（≤60 字，突出价值，不要夸夸其谈）。"},
+             {"role": "user", "content": f"产品：{row['name']}；目标：{goal}；完成标准：{(row['standards'] or '')[:100]}"}],
+            "你是产品文案。", tools=[])) or ""
+        # 清洗：去 markdown 符号，取第一个有意义的句子
+        for line in raw.splitlines():
+            t = line.strip().lstrip("#*-> ").strip()
+            if t and len(t) >= 6:
+                desc = t[:80]
+                break
+    except Exception:
+        desc = (row["goal"] or "")[:80]
+    if not desc:
+        desc = (row["goal"] or row["name"] or "")[:80]
+    meta = {"desc": desc, "target": target, "artifacts": artifacts, "generated_at": datetime.now().isoformat()}
+    conn.execute("UPDATE projects SET published=1, publish_ts=?, product_meta=? WHERE id=?",
+                 (datetime.now().isoformat(), json.dumps(meta, ensure_ascii=False), pid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "target": target, "product_url": f"/p/{pid}",
+            "desc": desc, "artifacts": artifacts}
+
+
+@app.post("/api/projects/{pid}/unpublish")
+async def unpublish_project(pid: str, req: Request):
+    data = await req.json()
+    conn = get_db()
+    row = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    conn.execute("UPDATE projects SET published=0, product_meta='' WHERE id=?", (pid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/market")
+def market_list():
+    """已上架产品列表（含访问统计）。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id,name,goal,published,publish_ts,product_meta,visit_count,phase FROM projects "
+        "WHERE published=1 ORDER BY publish_ts DESC").fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            meta = json.loads(d.pop("product_meta") or "{}")
+            d["desc"] = meta.get("desc", "")
+            d["target"] = meta.get("target", "market")
+            d["artifacts"] = meta.get("artifacts", [])
+        except Exception:
+            d["desc"], d["target"], d["artifacts"] = "", "market", []
+        d["product_url"] = f"/p/{r['id']}"
+        out.append(d)
+    return out
+
+
+@app.post("/api/market/visit/{pid}")
+async def market_visit(pid: str):
+    """访问计数（市场链接被打开时调用）。"""
+    conn = get_db()
+    conn.execute("UPDATE projects SET visit_count=visit_count+1 WHERE id=? AND published=1", (pid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.get("/p/{pid}")
+async def public_product_page(pid: str):
+    """公开产品页（v5.1 应用市场）：无需 token，供扫码/链接访问；每次访问计数。"""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT name,goal,product_meta,visit_count FROM projects WHERE id=? AND published=1",
+        (pid,)).fetchone()
+    conn.close()
+    if not row:
+        return HTMLResponse("<html><body style='font-family:sans-serif;padding:40px;text-align:center'><h3>产品不存在或已下架</h3></body></html>", status_code=404)
+    meta = {}
+    try:
+        meta = json.loads(row["product_meta"] or "{}")
+    except Exception:
+        pass
+    desc = meta.get("desc", "") or (row["goal"] or "")
+    artifacts = meta.get("artifacts", [])
+    conn = get_db()
+    conn.execute("UPDATE projects SET visit_count=visit_count+1 WHERE id=?", (pid,))
+    conn.commit()
+    conn.close()
+    name = html.escape(str(row["name"] or "未命名产品"))
+    dsc = html.escape(desc)
+    art = "".join(
+        f'<div style="background:#f5f5f7;border:.5px solid #e5e5ea;border-radius:8px;padding:8px 12px;margin:6px 0;font-size:13px">📦 {html.escape(a.get("path",""))}（{html.escape("/".join(a.get("kinds",[])))}）</div>'
+        for a in artifacts) if artifacts else '<div style="font-size:12px;color:#8e8e93">未识别到可下载产物（源码在电脑端项目目录）</div>'
+    page_html = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{name} · 分身应用市场</title></head>
+<body style="font-family:-apple-system,'PingFang SC',sans-serif;background:#f6f5fb;margin:0;padding:0">
+<div style="max-width:560px;margin:0 auto;padding:32px 20px">
+  <div style="background:#fff;border-radius:16px;border:.5px solid #e5e5ea;padding:24px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <div style="width:48px;height:48px;border-radius:12px;background:#6d5bd0;color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px">{html.escape((name or "品")[0])}</div>
+      <div>
+        <div style="font-size:18px;font-weight:600">{name}</div>
+        <div style="font-size:12px;color:#8e8e93">分身应用市场 · 由分身团队开发</div>
+      </div>
+    </div>
+    <p style="font-size:14px;line-height:1.7;color:#3c3c43;margin:0 0 16px">{dsc}</p>
+    <div style="font-size:12px;color:#8e8e93;margin-bottom:6px">产物</div>{art}
+    <div style="background:#f5f5f7;border-radius:10px;padding:14px;text-align:center;margin-top:16px">
+      <div style="font-size:12px;color:#8e8e93;margin-bottom:6px">手机扫码访问（桌面端数据来源）</div>
+      <div style="font-size:11px;color:#6d5bd0">[ 二维码生成接入点 ]</div>
+    </div>
+  </div>
+  <p style="text-align:center;font-size:11px;color:#8e8e93;margin-top:16px">由「分身」生成 · 数据本地化 · 访问次数 {(row["visit_count"] or 0)+1}</p>
+</div></body></html>"""
+    return HTMLResponse(page_html)
 
 
 @app.post("/api/projects")

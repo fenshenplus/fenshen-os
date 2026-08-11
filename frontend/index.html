@@ -279,6 +279,7 @@
       <div class="navitem m-more" data-sec="skills"><span class="dotk"></span>技能库</div>
       <div class="navitem m-more" data-sec="experiences"><span class="dotk"></span>经验库</div>
       <div class="navitem m-more" data-sec="evolution"><span class="dotk"></span>进化中心</div>
+      <div class="navitem m-more" data-sec="market"><span class="dotk"></span>应用市场</div>
       <!-- v5.0 移动端：更多抽屉入口（手机底部第 4 项） -->
       <div class="navitem m-more-btn" id="navMore" onclick="openMobileMore()"><span class="dotk"></span>更多</div>
       <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
@@ -656,6 +657,28 @@
               <div class="mf">
                 <button class="btn" onclick="closeReviewEdit()">取消</button>
                 <button class="btn primary" onclick="saveReview()">保存复盘</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- v5.1 应用市场：一键上架 + 产品列表 + 访问统计 -->
+      <div class="section" id="sec-market">
+        <div style="padding:16px 20px;flex:1;overflow-y:auto">
+          <div class="grid-head"><span class="t">应用市场</span><span class="rl" style="font-size:11px;color:var(--gray-400)">已完成项目一键上架 · 生成产品页与二维码 · 访问统计（自建市场，预留第三方对接）</span></div>
+          <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+            <button class="btn sm meta" onclick="openMarketPublish()">➕ 一键上架</button>
+            <button class="btn sm" onclick="loadMarket()">刷新列表</button>
+          </div>
+          <div id="marketList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- v5.1 应用市场：一键上架弹窗 -->
+          <div class="mask" id="marketPublishMask" style="display:none">
+            <div class="modal" style="max-width:440px">
+              <div class="mh">一键上架 · 分身应用市场 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeMarketPublish()">✕</span></div>
+              <div class="mb">
+                <p style="font-size:12px;color:var(--gray-500);margin:0 0 8px">选择一个已完成项目上架（自动识别产物 + 生成介绍 + 访问链接）。</p>
+                <div id="mktPublishList" style="max-height:260px;overflow:auto;font-size:12px"></div>
               </div>
             </div>
           </div>
@@ -1402,6 +1425,8 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
     if(!curRoom){ document.getElementById('boardMsgInline').textContent='还没有选中项目，先去「项目群聊」选一个。'; }
     else loadBoard();
   }
+  // v5.1 应用市场：切过来加载上架产品列表
+  if(n.dataset.sec==='market'){ loadMarket(); }
 });
 
 // v5.0 移动端首页：手机默认进「项目群聊」（最常用），桌面保持元神窗
@@ -1411,7 +1436,7 @@ if(innerWidth<768 && document.querySelector('.navitem[data-sec="chat"]')){ docum
 const MOBILE_MORE_ITEMS = [
   ['roles','角色库'],['skills','技能库'],['resources','公共资源库'],['models','模型设置'],
   ['terminal','终端'],['browser','浏览器'],['cleanup','清理中心'],['memory','长期记忆'],
-  ['experiences','经验库'],['evolution','进化中心'],
+  ['experiences','经验库'],['evolution','进化中心'],['market','应用市场'],
 ];
 function openMobileMore(){
   const grid=document.getElementById('mobileMoreGrid');
@@ -2235,6 +2260,69 @@ async function loadContextBadge(){
 /* init */
 loadRooms(); renderRoles(); renderResources(); loadMeta(); renderModels();
 loadCleanupPreview(); loadMemory(); loadContextBadge(); loadSkills();
+
+/* ── v5.1 应用市场：上架 / 列表 / 详情 / 访问统计 ── */
+async function loadMarket(){
+  const el=document.getElementById('marketList'); if(!el)return;
+  try{
+    const r=await fetch('/api/market'); const list=await r.json();
+    if(!list.length){ el.innerHTML='<div style="color:var(--gray-400)">还没有上架产品。开发完成的项目（阶段=完成）可一键上架到分身应用市场。</div>'; return; }
+    el.innerHTML=list.map(p=>`
+      <div style="background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:30px;height:30px;border-radius:8px;background:var(--meta-700);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px">${escapeHtml((p.name||'品')[0])}</div>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:500">${escapeHtml(p.name)} <span style="font-size:10px;color:var(--gray-400)">${escapeHtml(p.target||'market')} · ${escapeHtml((p.publish_ts||'').slice(0,16).replace('T',' '))}</span></div>
+            <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${escapeHtml(p.desc||p.goal||'')}</div>
+            ${p.artifacts&&p.artifacts.length?`<div style="font-size:10px;color:var(--gray-400);margin-top:3px">产物：${p.artifacts.map(a=>escapeHtml(a.path.split('/').pop())+'('+a.kinds.join('/')+')').join(' · ')}</div>`:''}
+          </div>
+          <div style="text-align:right;font-size:10px;color:var(--gray-400)">访问 ${p.visit_count||0}</div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn sm" onclick="marketOpen('${p.id}')">打开产品</button>
+          <button class="btn sm" onclick="marketCopyLink('${p.id}')">复制链接</button>
+          <button class="btn sm ghost" onclick="marketUnpublish('${p.id}')">下架</button>
+        </div>
+      </div>`).join('');
+  }catch(e){ el.textContent='加载失败：'+errText(e); }
+}
+function marketOpen(pid){ window.open('/p/'+pid,'_blank'); fetch('/api/market/visit/'+pid,{method:'POST'}); loadMarket(); }
+function marketCopyLink(pid){
+  const url=location.origin+'/p/'+pid;
+  (navigator.clipboard?navigator.clipboard.writeText(url):Promise.reject()).then(()=>toast('已复制产品链接','ok'))
+    .catch(()=>{ prompt('产品链接（复制到浏览器）：', url); });
+  fetch('/api/market/visit/'+pid,{method:'POST'});
+}
+async function marketUnpublish(pid){
+  if(!confirm('确认下架该产品？')) return;
+  try{ const r=await fetch('/api/projects/'+pid+'/unpublish',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json(); if(j.ok){ toast('已下架','ok'); loadMarket(); } else toast('❌ '+j.error);
+  }catch(e){ toast('请求失败：'+errText(e)); }
+}
+async function openMarketPublish(){
+  try{
+    const r=await fetch('/api/projects'); const all=await r.json();
+    const done=all.filter(p=>p.phase==='done');
+    const el=document.getElementById('mktPublishList');
+    if(!done.length){ el.innerHTML='<div style="color:var(--gray-400);padding:10px 0">还没有已完成项目。项目阶段达到「完成」后可一键上架。</div>'; }
+    else el.innerHTML=done.map(p=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:.5px solid var(--gray-200)">
+        <div style="flex:1;font-size:12px">${escapeHtml(p.name)} ${p.published?`<span style="font-size:10px;color:#0F6E56">(已上架)</span>`:''}</div>
+        <button class="btn sm" style="background:${p.published?'var(--gray-200)':'var(--meta-700)'};color:${p.published?'var(--gray-500)':'#fff'};border:none" onclick="doPublish('${p.id}','${escapeJs(p.name)}',this)" ${p.published?'disabled':''}>上架</button>
+      </div>`).join('');
+    document.getElementById('marketPublishMask').style.display='flex';
+  }catch(e){ toast('加载失败：'+errText(e)); }
+}
+function closeMarketPublish(){ document.getElementById('marketPublishMask').style.display='none'; }
+async function doPublish(pid,name,btn){
+  btn.disabled=true; btn.textContent='生成中…';
+  try{
+    const r=await fetch('/api/projects/'+pid+'/publish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:'market'})});
+    const j=await r.json();
+    if(j.ok){ toast(`✅ 「${name}」已上架`); closeMarketPublish(); loadMarket(); }
+    else { toast('❌ '+(j.error||'上架失败'),'err'); btn.disabled=false; btn.textContent='上架'; }
+  }catch(e){ toast('请求失败：'+errText(e)); btn.disabled=false; btn.textContent='上架'; }
+}
 loadExperiences(''); loadReviews('pending'); initCrossCheck(); loadUsage();
 setInterval(loadContextBadge, 30000); // 每30秒刷新上下文状态
 </script>
