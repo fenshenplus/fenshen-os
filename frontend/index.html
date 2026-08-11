@@ -357,6 +357,14 @@
             <div style="padding:14px;overflow:auto;height:calc(100% - 44px)">
               <div id="pvNarrative" style="font-size:13px;line-height:1.7"></div>
               <div id="pvBars" style="margin-top:12px"></div>
+              <!-- v4.2 蒸馏二期：镜像校验（预测→反馈闭环） -->
+              <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                  <span style="font-size:13px;font-weight:600">🧪 镜像校验 · 像不像你？</span>
+                  <button class="btn sm meta" id="mvGenBtn" onclick="mirrorGenerate(this)">生成预测</button>
+                </div>
+                <div id="pvMirror" style="font-size:12px;color:var(--gray-400)">元神会基于画像预测你在具体情境下的做法，你点「对/不对」——对则强化画像，不对可纠正。画像是这样越用越像的。</div>
+              </div>
               <div id="pvFacts" style="margin-top:12px"></div>
             </div>
           </div>
@@ -1037,12 +1045,60 @@ async function submitInterview(btn){ const a=document.getElementById('ivAnswer')
 async function showProfile(){ try{ const d=await apiJson('/api/meta/profile');
   document.getElementById('pvNarrative').innerHTML='<div>'+ escapeBr(d.narrative||'') +'</div>';
   const dims={fact:'身份',personality:'人格',preference:'偏好',knowledge:'知识',workflow:'工作流',relationship:'关系',secret:'私密',expectation:'期望'};
-  let h='<div style="font-size:12px;color:var(--gray-400);margin-bottom:6px">维度置信度（越满越懂你）</div>';
+  const suff=d.dim_sufficiency||{};
+  let h='<div style="font-size:12px;color:var(--gray-400);margin-bottom:6px">维度充足度（条数·置信度，达标=了解充分）</div>';
   for(const k in dims){ const c=d.dim_confidence? (d.dim_confidence[k]||0):0;
-    h+='<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px"><div style="width:42px">'+dims[k]+'</div><div style="flex:1;height:8px;background:var(--gray-200);border-radius:4px"><div style="width:'+Math.round(c*100)+'%;height:100%;background:var(--meta-700);border-radius:4px"></div></div><div style="width:34px;text-align:right">'+Math.round(c*100)+'%</div></div>'; }
+    const s=suff[k]||{count:0,avg:0,sufficient:false};
+    const ok=s.sufficient?'<span style="color:#34c98e;font-size:10px">✓充足</span>':`<span style="color:var(--gray-400);font-size:10px">${s.count}条</span>`;
+    h+='<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px"><div style="width:42px">'+dims[k]+'</div><div style="flex:1;height:8px;background:var(--gray-200);border-radius:4px"><div style="width:'+Math.round(c*100)+'%;height:100%;background:'+(s.sufficient?'#34c98e':'var(--meta-700)')+';border-radius:4px"></div></div><div style="width:64px;text-align:right">'+Math.round(c*100)+'% '+ok+'</div></div>'; }
+  h+='<div style="font-size:11px;color:var(--gray-400);margin-top:4px">已了解 '+escapeHtml(d.sufficient_dims||0)+' / '+escapeHtml(d.total_dims||8)+' 个维度'+(d.completeness?(' · 总体 '+Math.round(d.completeness*100)+'%'):'')+'</div>';
   document.getElementById('pvBars').innerHTML=h;
   document.getElementById('pvFacts').innerHTML='<div style="font-size:12px;color:var(--gray-400);margin:10px 0 4px">已蒸馏 '+escapeHtml(d.total)+' 条关于你的事实</div>'+(d.facts||[]).map(f=>'<div style="font-size:12px;margin:3px 0"><b>'+escapeHtml(f.field)+'</b>：'+escapeHtml(f.value)+'</div>').join('');
 }catch(e){ toast('画像加载失败：'+errText(e),'err'); } }
+
+/* ── 蒸馏二期：镜像校验（预测→反馈闭环） ── */
+async function mirrorGenerate(btn){
+  await withBusy(btn,'元神推测中…',async()=>{
+    const d=await apiJson('/api/meta/mirror/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"count":3}'});
+    if(!d.ok){ document.getElementById('pvMirror').innerHTML='<span style="color:var(--err, #e05656)">'+escapeHtml(d.error||'生成失败')+'</span>'; return; }
+    const el=document.getElementById('pvMirror');
+    el.innerHTML='';
+    (d.items||[]).forEach((it,i)=>{
+      const div=document.createElement('div');
+      div.style.cssText='margin:8px 0;padding:10px;background:var(--bg-2);border:.5px solid var(--line);border-radius:8px';
+      div.innerHTML='<div style="font-size:12px;color:var(--gray-400);margin-bottom:4px">情境'+(i+1)+'：'+escapeHtml(it.scenario||'')+'</div>'+
+        '<div style="font-size:13px;margin-bottom:8px">预测你：'+escapeHtml(it.prediction||'')+'</div>'+
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
+        '<button class="btn sm" style="background:#34c98e;color:#fff;border:none" onclick="mirrorJudge(this,\''+escapeJs(it.prediction||'')+'\',true)">✓ 对，就是这样</button>'+
+        '<button class="btn sm" style="background:var(--gray-200);border:none" onclick="mirrorCorrect(this,\''+escapeJs(it.prediction||'')+'\')">✗ 不对</button>'+
+        '</div><div class="mvCorr" style="display:none;margin-top:6px"><input placeholder="那你实际会怎么做？" style="flex:1;min-width:180px;padding:5px 8px;border:.5px solid var(--gray-200);border-radius:6px;font-size:12px"><button class="btn sm" onclick="mirrorJudge(this,null,false)">提交纠正</button></div>';
+      el.appendChild(div);
+    });
+  });
+}
+function escapeJs(s){ return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,' '); }
+function mirrorCorrect(btn, pred){
+  const card=btn.closest('.mvCorr')?btn.closest('div'):null;
+  const corrBox=btn.parentElement.parentElement.querySelector('.mvCorr');
+  corrBox.style.display=corrBox.style.display==='none'?'flex':'none';
+  corrBox.dataset.pred=pred;
+}
+async function mirrorJudge(btn, pred, agree){
+  const card=btn.closest('div');
+  let correction='';
+  if(!agree){
+    const box=card.querySelector('.mvCorr');
+    correction=(box? box.querySelector('input').value.trim():'');
+    if(!correction){ toast('先写上你实际会怎么做'); return; }
+    pred=box.dataset.pred||pred;
+  }
+  const body=JSON.stringify({prediction:pred,agree:agree,correction:correction});
+  await withBusy(btn, agree?'强化中…':'记录中…',async()=>{
+    const d=await apiJson('/api/meta/mirror/judge',{method:'POST',headers:{'Content-Type':'application/json'},body});
+    toast(d.ok? ('✅ '+d.result):('❌ '+(d.error||'反馈失败')));
+    if(d.ok) showProfile();
+  });
+}
 
 /* ── 元神总看板（v3.5 元神睁眼） ── */
 let metaBoardVisible=false;
