@@ -890,20 +890,33 @@ let activeChatAbort=null;
 async function sendMsg(){
   const inp=document.getElementById('msgInput');
   const v=inp.value.trim(); if(!v||!curRoom)return; inp.value=''; window.__LAST_SENT__=true;
-  // v0.27.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊
-  // 不再前端 postMsg（后端 project_chat 统一落库，避免消息重复）
+  // v4.2：异步派单——后端立即返回 job_id，这里轮询进度，不再阻塞等 100-200s
   inp.placeholder='元神分析中…'; inp.disabled=true;
-  activeChatAbort=new AbortController();
-  await withBusy('btnSendMsg','…',async()=>{
-    try{
-      const j=await apiJson('/api/projects/'+curRoom+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({text:v}), signal:activeChatAbort.signal});
-      if(!j.ok && j.error) toast('元神没能处理这条消息：'+j.error,'err');
-      else if(j.actions && j.actions.length>0) inp.placeholder='角色执行中…';
-    } finally { activeChatAbort=null; }
-  });
-  inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false;
-  await loadChat(curRoom);
+  let jobId=null;
+  try{
+    const j=await apiJson('/api/projects/'+curRoom+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:v})});
+    if(!j.ok && j.error){ toast('元神没能处理这条消息：'+j.error,'err'); inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; return; }
+    if(j.job_id) jobId=j.job_id;
+  }catch(e){ toast('发送失败：'+errText(e),'err'); inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; return; }
+  if(!jobId){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; await loadChat(curRoom); return; }
+  // 轮询 job 进度（每 3s，最多 8 分钟；输入框可随时继续发别的）
+  const t0=Date.now();
+  const poll=async()=>{
+    if(Date.now()-t0 > 480000){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; await loadChat(curRoom); return; }
+    let st=null;
+    try{ st=await apiJson('/api/jobs/'+jobId); }catch(e){}
+    if(!st){ setTimeout(poll,3000); return; }
+    if(st.status==='running'||st.status==='queued'){
+      inp.placeholder=(st.progress||'团队执行中…')+'（自动刷新）';
+      setTimeout(poll,3000); return;
+    }
+    inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false;
+    if(st.status==='failed') toast('执行失败：'+(st.error||'未知错误'),'err');
+    else if(st.status==='done') toast('✅ 团队执行完成','ok');
+    await loadChat(curRoom);
+  };
+  poll();
 }
 /* 元神中止：真的把正在跑的请求取消掉（AbortController），不再插一条假的系统消息 */
 function metaStop(){
