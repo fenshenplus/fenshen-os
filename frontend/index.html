@@ -266,14 +266,14 @@
 
   <div class="body">
     <div class="sidenav">
-      <div class="navitem meta active m-main" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
+      <div class="navitem meta active m-more" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
       <div class="navitem m-main" data-sec="chat"><span class="dotk"></span>项目群聊</div>
       <div class="navitem m-more" data-sec="roles"><span class="dotk"></span>角色库</div>
       <div class="navitem m-more" data-sec="resources"><span class="dotk"></span>公共资源库</div>
       <div class="navitem m-more" data-sec="models"><span class="dotk"></span>模型设置</div>
       <div class="navitem m-more" data-sec="terminal"><span class="dotk"></span>终端</div>
       <div class="navitem m-more" data-sec="browser"><span class="dotk"></span>浏览器</div>
-      <div class="navitem m-main" data-sec="board"><span class="dotk"></span>项目看板</div>
+      <div class="navitem m-more" data-sec="board"><span class="dotk"></span>项目看板</div>
       <div class="navitem m-more" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
       <div class="navitem m-more" data-sec="memory"><span class="dotk"></span>长期记忆</div>
       <div class="navitem m-more" data-sec="skills"><span class="dotk"></span>技能库</div>
@@ -310,6 +310,7 @@
           <div id="chatGoalBar" style="font-size:12px;color:var(--gray-600);padding:4px 14px;border-bottom:.5px solid var(--gray-200);display:none"></div>
           <div class="chat-body" id="chatBody"></div>
           <div class="chat-input">
+            <button class="send" id="btnVoice" onclick="toggleVoiceInput()" title="语音转文字" style="background:#1D9E75">🎙</button>
             <input id="msgInput" placeholder="发消息给团队…（回车发送）" onkeydown="if(event.key==='Enter')sendMsg()">
             <button class="send" id="btnSendMsg" onclick="sendMsg()">↑</button>
           </div>
@@ -932,7 +933,18 @@ async function loadRooms(){ try{ const r=await fetch('/api/projects'); rooms=awa
   if(!curRoom && rooms.length) curRoom=rooms[0].id;
   renderRooms(); if(curRoom) await loadChat(curRoom); }
 function renderRooms(){ const el=document.getElementById('roomList'); el.innerHTML='';
+  // v5.1 移动端信息架构：元神置顶聊天卡（点我培养画像 → 元神配置/炼制页）
+  const metaCard=document.createElement('div');
+  metaCard.style.cssText='background:var(--meta-50);border:.5px solid #cfc9ef;border-radius:10px;padding:9px 12px;margin-bottom:8px;display:flex;align-items:center;gap:9px;cursor:pointer';
+  metaCard.onclick=()=>{ const nav=document.querySelector('.navitem[data-sec="meta"]'); if(nav) nav.click(); };
+  metaCard.innerHTML=`<span style="width:34px;height:34px;border-radius:50%;background:var(--meta-700);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px">元</span>
+    <div style="flex:1"><div style="font-size:13px;font-weight:500;color:#3C3489">元神 · 我的分身</div>
+    <div style="font-size:10px;color:var(--gray-400);margin-top:1px">点我培养画像 · 持续了解你</div></div>
+    <span style="font-size:10px;color:var(--gray-400)">置顶</span>`;
+  el.appendChild(metaCard);
   rooms.forEach(r=>{ const d=document.createElement('div'); d.className='room'+(r.id===curRoom?' active':''); d.onclick=()=>selectRoom(r.id);
+    // v5.1 移动端：房间卡左滑 → 该项目看板
+    attachRoomSwipe(d,r.id);
     const st=r.status||'green';
     const ph=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
     const fz=r.frozen?' 🔒':'';
@@ -1474,7 +1486,44 @@ function gotoMobileMore(sec){
   if(nav) nav.click();
 }
 
-/* v5.0 移动端深化：下拉刷新（项目列表 / 群聊消息，触控习惯） */
+/* v5.1 移动端信息架构：手势导航（左滑进看板 / 右滑返回对话） */
+let swipeX=null;
+function attachSwipe(el,onLeft,onRight){
+  if(!el) return;
+  el.addEventListener('touchstart',e=>{ swipeX=e.touches[0].clientX; },{passive:true});
+  el.addEventListener('touchend',e=>{
+    if(swipeX===null) return;
+    const dx=e.changedTouches[0].clientX-swipeX;
+    swipeX=null;
+    if(Math.abs(dx)<60) return;
+    if(dx<0 && onLeft) onLeft();      // 左滑
+    else if(dx>0 && onRight) onRight(); // 右滑
+  },{passive:true});
+}
+function gotoBoardOf(pid){
+  curRoom=pid||curRoom;
+  const nav=document.querySelector('.navitem[data-sec="board"]');
+  if(nav) nav.click();
+}
+setTimeout(()=>{
+  // 群聊列表：左滑某项目 → 该项目看板（房间卡级；左滑后 500ms 抑制点击防误开对话）
+  const roomList=document.getElementById('roomList');
+  if(roomList){
+    roomList.addEventListener('click',(e)=>{
+      if(Date.now()-(window.__swipeAt__||0)<500){ e.preventDefault(); e.stopPropagation(); }
+    },true);
+  }
+  // 对话页：左滑 → 当前项目看板
+  const chatBody=document.getElementById('chatBody');
+  if(chatBody) attachSwipe(chatBody, ()=>gotoBoardOf(curRoom), null);
+  // 看板页：右滑 → 返回对话
+  const boardGrid=document.getElementById('boardGridInline');
+  if(boardGrid) attachSwipe(boardGrid, null, ()=>{ document.querySelector('.navitem[data-sec="chat"]').click(); });
+},1200);
+/* 房间卡级左滑：renderRooms 里对每个 room 卡调用 */
+function attachRoomSwipe(card,pid){
+  attachSwipe(card,()=>{ window.__swipeAt__=Date.now(); gotoBoardOf(pid); },null);
+}
 function attachPullRefresh(el,fn){
   if(!el) return;
   let sy=0, pulling=false;
@@ -2340,6 +2389,23 @@ function onbGo(target){
   toast('培养元神中…（完成后回来点「完成引导」即可解锁）');
 }
 setTimeout(checkOnboarding, 1500);
+
+/* v5.1 移动端信息架构：语音输入（Web Speech → 文字 → 与打字同链路发送） */
+let __recog=null, __listening=false;
+function toggleVoiceInput(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){ toast('当前浏览器不支持语音识别（需 Safari/Chrome）'); return; }
+  const inp=document.getElementById('msgInput'); if(!inp) return;
+  if(__listening){ __recog&&__recog.stop(); __listening=false; inp.placeholder='发消息给团队…（回车发送）'; return; }
+  try{
+    __recog=new SR(); __recog.lang='zh-CN'; __recog.interimResults=false; __recog.maxAlternatives=1;
+    __recog.onresult=(e)=>{ const txt=e.results[0][0].transcript; inp.value=txt; inp.focus(); };
+    __recog.onerror=()=>{ __listening=false; inp.placeholder='发消息给团队…（回车发送）'; toast('语音识别未成功，可重试'); };
+    __recog.onend=()=>{ __listening=false; };
+    __recog.start(); __listening=true;
+    inp.placeholder='🎙 正在听…（识别后自动填入，可编辑再发送）';
+  }catch(e){ toast('语音识别启动失败：'+e.message); }
+}
 
 /* ── v5.1 应用市场：上架 / 列表 / 详情 / 访问统计 ── */
 async function loadMarket(){
