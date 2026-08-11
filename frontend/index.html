@@ -338,6 +338,8 @@
                   <button class="btn sm" id="boardAutoBtn" onclick="toggleBoardAutonomy()" style="font-size:10px;padding:2px 10px"></button>
                   <!-- v5.0 移动端深化：一键继续推进 -->
                   <button class="btn sm" onclick="continueBoard()" style="font-size:10px;padding:2px 10px;background:#6d5bd0;color:#fff;border:none">🚀 继续推进</button>
+                  <!-- v5.2 部署一键化 -->
+                  <button class="btn sm" onclick="openDeployDlg()" style="font-size:10px;padding:2px 10px">🚀 部署</button>
                 </div>
               </div>
             </div>
@@ -411,6 +413,7 @@
             </div>
           </div>
           <div class="chat-input" id="metaInputBar">
+            <button class="send" id="btnVoiceMeta" onclick="toggleMetaVoice()" title="语音转文字" style="background:#1D9E75">🎙</button>
             <input id="metaInput" placeholder="和元神说点什么…（回车发送）" onkeydown="if(event.key==='Enter')sendMeta()">
             <button class="send" id="btnSendMeta" onclick="sendMeta()">↑</button>
             <button class="btn ghost sm" id="btnMetaStop2" onclick="metaStop()">中止</button>
@@ -443,6 +446,15 @@
         <div class="grid-wrap">
           <div class="grid-head"><span class="t">模型设置（元神 + 角色级）</span><span class="rl" style="font-size:11px;color:var(--gray-400)">为元神与每个角色指定大模型与 Key · 可交叉验证与用量统计</span></div>
           <div class="grid" id="modelGrid"></div>
+          <!-- v5.2 监控自动兜底：服务监控配置 -->
+          <div class="card" style="margin-top:14px">
+            <div class="grid-head"><span class="t" style="font-size:13px">🛡 服务监控 · 自动兜底</span><span class="rl" style="font-size:11px;color:var(--gray-400)">端口无响应自动执行重启命令并私聊留痕（30 秒防重复）</span></div>
+            <div class="field" style="margin:8px 0"><textarea id="svcCfg" rows="3" placeholder='[{ "name": "分身后端", "port": 8002, "restart_cmd": "cd ~/WorkBuddy/fenshen-v1 && nohup python3 -m uvicorn backend.main:app --port 8002 &" }]'></textarea></div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="btn sm meta" onclick="saveServices(this)">保存监控配置</button>
+              <span id="svcStatus" style="font-size:11px;color:var(--gray-400)"></span>
+            </div>
+          </div>
           <div class="card" style="margin-top:14px">
             <div class="grid-head"><span class="t" style="font-size:13px">🔀 交叉验证（多模型协作）</span><span class="rl" style="font-size:11px;color:var(--gray-400)">同一任务交给两个不同模型独立作答，对比结果</span></div>
             <div class="field" style="margin:8px 0"><textarea id="ccText" rows="2" placeholder="输入要交叉验证的任务/内容…"></textarea></div>
@@ -697,6 +709,23 @@
               <div class="mb">
                 <p style="font-size:12px;color:var(--gray-500);margin:0 0 8px">选择一个已完成项目上架（自动识别产物 + 生成介绍 + 访问链接）。</p>
                 <div id="mktPublishList" style="max-height:260px;overflow:auto;font-size:12px"></div>
+              </div>
+            </div>
+          </div>
+          <!-- v5.2 部署一键化弹窗 -->
+          <div class="mask" id="deployMask" style="display:none">
+            <div class="modal" style="max-width:440px">
+              <div class="mh">🚀 一键部署 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeDeployDlg()">✕</span></div>
+              <div class="mb">
+                <p style="font-size:12px;color:var(--gray-500);margin:0 0 8px">配置服务器 → 自动识别产物 → ssh 备份旧目录 → scp 上线。</p>
+                <div class="field" style="margin:6px 0"><input id="dpHost" placeholder="服务器地址，如 39.105.6.135"></div>
+                <div style="display:flex;gap:8px"><div class="field" style="flex:1;margin:6px 0"><input id="dpUser" placeholder="用户（默认 root）"></div><div class="field" style="flex:1;margin:6px 0"><input id="dpPwd" type="password" placeholder="密码"></div></div>
+                <div class="field" style="margin:6px 0"><input id="dpPath" placeholder="部署目录，如 /var/www/fenshen"></div>
+                <div style="display:flex;gap:8px;margin-top:10px">
+                  <button class="btn sm" style="flex:1" onclick="saveDeployConf(this)">保存配置</button>
+                  <button class="btn sm" style="flex:2;background:#6d5bd0;color:#fff;border:none" onclick="doDeploy(this)">🚀 立即部署</button>
+                </div>
+                <div id="deployLog" style="font-size:11px;color:var(--gray-400);margin-top:10px;white-space:pre-wrap"></div>
               </div>
             </div>
           </div>
@@ -1516,9 +1545,13 @@ setTimeout(()=>{
   // 对话页：左滑 → 当前项目看板
   const chatBody=document.getElementById('chatBody');
   if(chatBody) attachSwipe(chatBody, ()=>gotoBoardOf(curRoom), null);
-  // 看板页：右滑 → 返回对话
+  // 看板页：右滑 → 返回对话（仅当泳道滚到最左时响应，避免横滚误触发）
   const boardGrid=document.getElementById('boardGridInline');
-  if(boardGrid) attachSwipe(boardGrid, null, ()=>{ document.querySelector('.navitem[data-sec="chat"]').click(); });
+  if(boardGrid) attachSwipe(boardGrid, null, ()=>{
+    const sc=document.getElementById('boardGrid');
+    if(sc && sc.scrollLeft>5) return; // 泳道未滚回最左 → 视为滚动，不返回
+    document.querySelector('.navitem[data-sec="chat"]').click();
+  });
 },1200);
 /* 房间卡级左滑：renderRooms 里对每个 room 卡调用 */
 function attachRoomSwipe(card,pid){
@@ -2391,20 +2424,67 @@ function onbGo(target){
 setTimeout(checkOnboarding, 1500);
 
 /* v5.1 移动端信息架构：语音输入（Web Speech → 文字 → 与打字同链路发送） */
-let __recog=null, __listening=false;
-function toggleVoiceInput(){
+function startVoiceInto(inpId, btnId){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){ toast('当前浏览器不支持语音识别（需 Safari/Chrome）'); return; }
-  const inp=document.getElementById('msgInput'); if(!inp) return;
-  if(__listening){ __recog&&__recog.stop(); __listening=false; inp.placeholder='发消息给团队…（回车发送）'; return; }
+  const inp=document.getElementById(inpId), btn=document.getElementById(btnId); if(!inp) return;
+  if(window.__listening__){ window.__recog__&&window.__recog__.stop(); window.__listening__=false; inp.placeholder='和元神说点什么…（回车发送）'; return; }
   try{
-    __recog=new SR(); __recog.lang='zh-CN'; __recog.interimResults=false; __recog.maxAlternatives=1;
-    __recog.onresult=(e)=>{ const txt=e.results[0][0].transcript; inp.value=txt; inp.focus(); };
-    __recog.onerror=()=>{ __listening=false; inp.placeholder='发消息给团队…（回车发送）'; toast('语音识别未成功，可重试'); };
-    __recog.onend=()=>{ __listening=false; };
-    __recog.start(); __listening=true;
+    window.__recog__=new SR(); window.__recog__.lang='zh-CN'; window.__recog__.interimResults=false; window.__recog__.maxAlternatives=1;
+    window.__recog__.onresult=(e)=>{ inp.value=e.results[0][0].transcript; inp.focus(); };
+    window.__recog__.onerror=()=>{ window.__listening__=false; inp.placeholder='和元神说点什么…（回车发送）'; toast('语音识别未成功，可重试'); };
+    window.__recog__.onend=()=>{ window.__listening__=false; };
+    window.__recog__.start(); window.__listening__=true;
     inp.placeholder='🎙 正在听…（识别后自动填入，可编辑再发送）';
   }catch(e){ toast('语音识别启动失败：'+e.message); }
+}
+function toggleVoiceInput(){ startVoiceInto('msgInput','btnVoice'); }
+function toggleMetaVoice(){ startVoiceInto('metaInput','btnVoiceMeta'); }
+
+/* v5.2 部署一键化 + 服务监控自动兜底 */
+function openDeployDlg(){
+  if(!curRoom){ toast('先选择项目'); return; }
+  document.getElementById('deployLog').textContent='';
+  document.getElementById('deployMask').style.display='flex';
+  // 预填已有配置（从项目详情拿不到，保持空，用户填）
+}
+function closeDeployDlg(){ document.getElementById('deployMask').style.display='none'; }
+async function saveDeployConf(btn){
+  const body=JSON.stringify({host:document.getElementById('dpHost').value.trim(),
+    user:document.getElementById('dpUser').value.trim()||'root',
+    password:document.getElementById('dpPwd').value, path:document.getElementById('dpPath').value.trim()});
+  try{
+    const r=await fetch('/api/projects/'+curRoom+'/deploy/conf',{method:'POST',headers:{'Content-Type':'application/json'},body});
+    const j=await r.json();
+    if(j.ok){ toast('✅ 部署配置已保存','ok'); document.getElementById('deployLog').textContent='已保存：'+JSON.stringify(j.conf); }
+    else toast('❌ '+(j.error||'保存失败'),'err');
+  }catch(e){ toast('请求失败：'+errText(e)); }
+}
+async function doDeploy(btn){
+  btn.disabled=true; btn.textContent='部署中…（可能 1-3 分钟）';
+  document.getElementById('deployLog').textContent='正在保存配置并部署…';
+  const conf={host:document.getElementById('dpHost').value.trim(),
+    user:document.getElementById('dpUser').value.trim()||'root',
+    password:document.getElementById('dpPwd').value, path:document.getElementById('dpPath').value.trim()};
+  try{
+    await fetch('/api/projects/'+curRoom+'/deploy/conf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(conf)});
+    const r=await fetch('/api/projects/'+curRoom+'/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json();
+    if(j.ok){ toast('✅ 部署完成','ok'); document.getElementById('deployLog').textContent='✅ '+j.detail; }
+    else { toast('❌ '+(j.error||'部署失败'),'err'); document.getElementById('deployLog').textContent='❌ '+(j.error||''); }
+  }catch(e){ toast('部署异常：'+errText(e)); document.getElementById('deployLog').textContent='❌ '+(errText(e)); }
+  btn.disabled=false; btn.textContent='🚀 立即部署';
+}
+async function saveServices(btn){
+  let list=[];
+  try{ list=JSON.parse(document.getElementById('svcCfg').value||'[]'); }
+  catch(e){ toast('JSON 格式错误','err'); return; }
+  try{
+    const r=await fetch('/api/meta/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({services:list})});
+    const j=await r.json();
+    if(j.ok&&!j.error){ toast('✅ 服务监控已保存（'+list.length+' 个服务）','ok'); document.getElementById('svcStatus').textContent='已保存'; }
+    else toast('❌ '+(j.error||'保存失败'),'err');
+  }catch(e){ toast('请求失败：'+errText(e)); }
 }
 
 /* ── v5.1 应用市场：上架 / 列表 / 详情 / 访问统计 ── */
