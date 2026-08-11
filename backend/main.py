@@ -1282,6 +1282,48 @@ async def market_visit(pid: str):
     return {"ok": True}
 
 
+# ── v5.1 首次使用引导：元神软门槛（3 步引导 → 解锁建项目，可跳过）──
+@app.get("/api/meta/onboarding")
+def onboarding_status():
+    """首登引导状态：done（已完成）/ skipped（跳过）/ pending（待引导）。
+    软门槛条件：画像事实 ≥3 条 或 访谈已答 ≥3 题 → 视为基础完成。"""
+    flag = get_setting("meta_onboarded", "")
+    if flag == "1":
+        return {"status": "done", "facts": 0, "interview_done": 0, "skippable": True}
+    if flag == "skip":
+        return {"status": "skipped", "facts": 0, "interview_done": 0, "skippable": True}
+    conn = get_db()
+    facts, iv = 0, 0
+    try:
+        facts = conn.execute("SELECT COUNT(*) c FROM user_model").fetchone()["c"] or 0
+    except Exception:
+        pass
+    try:
+        # meta_interview 无 answer 列：答案存于 answers JSON；非空即视为已答过
+        iv = conn.execute(
+            "SELECT COUNT(*) c FROM meta_interview WHERE answers IS NOT NULL AND answers != '{}' AND answers != ''"
+        ).fetchone()["c"] or 0
+    except Exception:
+        pass
+    conn.close()
+    if facts >= 3 or iv >= 3:
+        return {"status": "done", "facts": facts, "interview_done": iv, "skippable": True}
+    return {"status": "pending", "facts": facts, "interview_done": iv, "skippable": True}
+
+
+@app.post("/api/meta/onboarding")
+async def onboarding_set(req: Request):
+    data = await req.json()
+    action = (data.get("action") or "").strip()
+    if action == "skip":
+        set_setting("meta_onboarded", "skip")
+        return {"ok": True, "status": "skipped"}
+    if action == "done":
+        set_setting("meta_onboarded", "1")
+        return {"ok": True, "status": "done"}
+    return {"ok": False, "error": "action 必须是 done 或 skip"}
+
+
 @app.get("/p/{pid}")
 async def public_product_page(pid: str):
     """公开产品页（v5.1 应用市场）：无需 token，供扫码/链接访问；每次访问计数。"""
