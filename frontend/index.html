@@ -556,6 +556,23 @@
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px" id="mobileMoreGrid"></div>
             </div>
           </div>
+          <!-- v5.1 首次使用引导：元神软门槛（3 步，可跳过） -->
+          <div class="mask" id="onboardMask" style="display:none;z-index:90">
+            <div class="modal" style="max-width:420px;padding:22px">
+              <div style="text-align:center;margin-bottom:14px">
+                <span style="width:46px;height:46px;border-radius:50%;background:var(--meta-700);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:17px">分</span>
+                <p style="font-size:15px;font-weight:600;margin:10px 0 4px">先培养你的元神，再开始干活</p>
+                <p style="font-size:12px;color:var(--gray-400);margin:0;line-height:1.6">元神越了解你，团队越像你本人。三步即可解锁建项目，之后随时可继续养成。</p>
+              </div>
+              <div style="display:flex;gap:4px;margin-bottom:14px" id="onbSteps"><div style="flex:1;height:3px;background:var(--gray-200);border-radius:99px"></div><div style="flex:1;height:3px;background:var(--gray-200);border-radius:99px"></div><div style="flex:1;height:3px;background:var(--gray-200);border-radius:99px"></div></div>
+              <div id="onbBody"></div>
+              <div style="display:flex;gap:8px;margin-top:14px">
+                <button class="btn sm ghost" style="flex:1" onclick="skipOnboarding()">跳过，直接用</button>
+                <button class="btn sm" id="onbNext" style="flex:2;background:var(--meta-700);color:#fff;border:none" onclick="onbNext()">下一步</button>
+              </div>
+              <p style="font-size:10px;color:var(--gray-400);text-align:center;margin:10px 0 0">本地处理 · 数据不出电脑 · 可随时清空重炼</p>
+            </div>
+          </div>
           <!-- 添加记忆弹窗 -->
           <div class="mask" id="memAddMask" style="display:none">
             <div class="modal" style="max-width:420px">
@@ -1367,7 +1384,10 @@ async function saveCurAsTemplate(){
     const j=await r.json(); if(j.ok){ await loadTemplates(); toast('✅ 已保存为模板（含目标与角色集），可随时套用'); } else toast('❌ '+j.error);
   }catch(e){ toast('保存失败：'+e); }
 }
-function openWizard(){ wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value=''; document.getElementById('wStandards').value='';
+function openWizard(){ 
+  // v5.1 软门槛：元神引导未完成时，先引导培养元神
+  if(window.__ONB_PENDING__){ checkOnboarding(); toast('先完成元神培养（3 步），即可解锁建项目'); return; }
+  wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value=''; document.getElementById('wStandards').value='';
   document.getElementById('wz1').style.display=''; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display='none';
   document.getElementById('ws1').classList.add('on'); document.getElementById('ws2').classList.remove('on'); document.getElementById('ws3').classList.remove('on');
   document.getElementById('wNext').textContent='下一步'; document.getElementById('wizardMask').classList.add('show');
@@ -2260,6 +2280,66 @@ async function loadContextBadge(){
 /* init */
 loadRooms(); renderRoles(); renderResources(); loadMeta(); renderModels();
 loadCleanupPreview(); loadMemory(); loadContextBadge(); loadSkills();
+
+/* ── v5.1 首次使用引导：元神软门槛（3 步，可跳过）── */
+let onbStep=0;
+const ONB_STEPS=[
+  {t:'1 · 了解元神', body:`<div style="font-size:13px;line-height:1.8;color:var(--gray-600)">元神是你的数字分身：它代表你和团队沟通、按你的风格做决策、盯着每个项目的看板直到完成。<br><br>手机端更容易养成它——用聊天的方式说话，它都在听、在记、在变像你。</div>`},
+  {t:'2 · 让元神更懂你', body:`<div style="font-size:12px;color:var(--gray-600);margin-bottom:8px">给元神一点原料（至少 3 条关于你的事实）：</div>
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <div style="flex:1;background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer" onclick="onbGo('interview')"><div style="font-size:12px">回答访谈</div><div style="font-size:9px;color:var(--gray-400)">最省事</div></div>
+      <div style="flex:1;background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer" onclick="onbGo('ingest')"><div style="font-size:12px">上传资料</div><div style="font-size:9px;color:var(--gray-400)">聊天记录/笔记</div></div>
+      <div style="flex:1;background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer" onclick="onbGo('talk')"><div style="font-size:12px">和元神说话</div><div style="font-size:9px;color:var(--gray-400)">闲聊几句</div></div>
+    </div>
+    <div id="onbFacts" style="font-size:12px;color:var(--gray-400)"></div>`},
+  {t:'3 · 完成基础画像', body:`<div style="font-size:13px;line-height:1.8;color:var(--gray-600)">完成以上任意一步后，点「完成，开始建项目」——元神基础画像就绪，可以解锁建项目了。<br><br>以后随时可以在元神头像里继续访谈、上传资料、镜像校验，让它越来越像你。</div>`},
+];
+async function checkOnboarding(){
+  try{
+    const d=await apiJson('/api/meta/onboarding');
+    if(d.status==='pending'){ window.__ONB_PENDING__=true; openOnboarding(d); }
+    else window.__ONB_PENDING__=false;
+  }catch(e){}
+}
+function openOnboarding(d){
+  onbStep=0; renderOnb(d);
+  document.getElementById('onboardMask').style.display='flex';
+}
+function renderOnb(d){
+  const st=ONB_STEPS[onbStep];
+  document.getElementById('onbBody').innerHTML=`<p style="font-size:12px;font-weight:500;margin:0 0 8px">${st.t}</p>${st.body}`;
+  const steps=[...document.querySelectorAll('#onbSteps > div')];
+  steps.forEach((el,i)=>el.style.background=i<=onbStep?'var(--meta-700)':'var(--gray-200)');
+  const nb=document.getElementById('onbNext');
+  nb.textContent=onbStep<2?'下一步':(d&&d.facts>=3||d&&d.interview_done>=3?'完成，开始建项目':'完成引导');
+  document.getElementById('onbFacts').textContent=d?`已蒸馏 ${d.facts} 条事实 · 已答 ${d.interview_done} 题`:'';
+  document.getElementById('onbFacts').style.display=(onbStep===1 && d)?'block':'none';
+}
+async function onbNext(){
+  if(onbStep<2){ onbStep++; renderOnb(window.__ONB_DATA__||{}); }
+  else finishOnboarding();
+}
+async function finishOnboarding(){
+  try{ await apiJson('/api/meta/onboarding',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"action":"done"}'}); }catch(e){}
+  document.getElementById('onboardMask').style.display='none';
+  window.__ONB_PENDING__=false;
+  toast('✅ 元神基础画像已就绪，可以建项目了','ok');
+}
+async function skipOnboarding(){
+  try{ await apiJson('/api/meta/onboarding',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"action":"skip"}'}); }catch(e){}
+  document.getElementById('onboardMask').style.display='none';
+  window.__ONB_PENDING__=false;
+  toast('已跳过引导，随时可在元神头像里培养');
+}
+function onbGo(target){
+  // 跳转到对应功能区（访谈/上传/元神对话）
+  document.getElementById('onboardMask').style.display='none';
+  if(target==='interview'){ showMetaPane('interview'); }
+  else if(target==='ingest'){ showMetaPane('chat'); }
+  else { showMetaPane('chat'); }
+  toast('培养元神中…（完成后回来点「完成引导」即可解锁）');
+}
+setTimeout(checkOnboarding, 1500);
 
 /* ── v5.1 应用市场：上架 / 列表 / 详情 / 访问统计 ── */
 async function loadMarket(){
