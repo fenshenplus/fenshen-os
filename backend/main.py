@@ -1055,8 +1055,21 @@ def health():
 def list_projects():
     conn = get_db()
     rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        # v5.0 移动端深化：列表带轻量完成度（room 卡片进度条）
+        try:
+            t = conn.execute("SELECT COUNT(*) c, SUM(status='done') d FROM tasks WHERE project_id=?", (r["id"],)).fetchone()
+            total = t["c"] or 0
+            done = t["d"] or 0
+            d["completion"] = {"total": total, "done": done,
+                               "percent": round(done * 100 / total) if total else 0}
+        except Exception:
+            d["completion"] = {"total": 0, "done": 0, "percent": 0}
+        out.append(d)
     conn.close()
-    return [dict(r) for r in rows]
+    return out
 
 
 @app.get("/api/projects/{pid}")
