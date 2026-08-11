@@ -313,6 +313,8 @@
                 <!-- v4.2 项目级自主推进开关 -->
                 <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
                   <button class="btn sm" id="boardAutoBtn" onclick="toggleBoardAutonomy()" style="font-size:10px;padding:2px 10px"></button>
+                  <!-- v5.0 移动端深化：一键继续推进 -->
+                  <button class="btn sm" onclick="continueBoard()" style="font-size:10px;padding:2px 10px;background:#6d5bd0;color:#fff;border:none">🚀 继续推进</button>
                 </div>
               </div>
             </div>
@@ -863,7 +865,11 @@ function renderRooms(){ const el=document.getElementById('roomList'); el.innerHT
     const st=r.status||'green';
     const ph=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
     const fz=r.frozen?' 🔒':'';
-    d.innerHTML=`<span class="s" style="background:var(--${escapeHtml(st)})"></span><div class="info"><div class="nm">${escapeHtml(r.name)}${fz}</div><div class="ds">${escapeHtml(ph)} · ${escapeHtml(r.goal||'')}</div></div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
+    // v5.0 移动端深化：完成度小条（项目列表一屏看进度）
+    const c=r.completion||{};
+    const pct=c.percent||0;
+    const bar=`<div style="height:3px;background:var(--gray-200);border-radius:99px;margin-top:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct>=100?'#34c98e':'var(--meta-700)'};border-radius:99px"></div></div>`;
+    d.innerHTML=`<span class="s" style="background:var(--${escapeHtml(st)})"></span><div class="info"><div class="nm">${escapeHtml(r.name)}${fz}</div><div class="ds">${escapeHtml(ph)} · 完成度 ${pct}%${bar}</div></div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
 async function loadChat(pid){ const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
   const r=rooms.find(x=>x.id===pid); document.getElementById('chatTitle').textContent=r?r.name:''; document.getElementById('chatSub').textContent=r?STATUS_LABEL[r.status]||'':'';
   const gb=document.getElementById('chatGoalBar');
@@ -917,23 +923,41 @@ async function sendMsg(){
     if(j.job_id) jobId=j.job_id;
   }catch(e){ toast('发送失败：'+errText(e),'err'); inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; return; }
   if(!jobId){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; await loadChat(curRoom); return; }
-  // 轮询 job 进度（每 3s，最多 8 分钟；输入框可随时继续发别的）
+  await pollJob(jobId,()=>{
+    inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false;
+    loadChat(curRoom);
+  });
+}
+/* v5.0：共享的派单进度轮询（sendMsg / continueBoard 复用）*/
+async function pollJob(jobId,onDone,onRunning){
   const t0=Date.now();
   const poll=async()=>{
-    if(Date.now()-t0 > 480000){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; await loadChat(curRoom); return; }
+    if(Date.now()-t0 > 480000){ if(onDone) onDone(); return; }
     let st=null;
     try{ st=await apiJson('/api/jobs/'+jobId); }catch(e){}
     if(!st){ setTimeout(poll,3000); return; }
     if(st.status==='running'||st.status==='queued'){
-      inp.placeholder=(st.progress||'团队执行中…')+'（自动刷新）';
+      if(onRunning) onRunning(st.progress||'团队执行中…');
       setTimeout(poll,3000); return;
     }
-    inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false;
     if(st.status==='failed') toast('执行失败：'+(st.error||'未知错误'),'err');
     else if(st.status==='done') toast('✅ 团队执行完成','ok');
-    await loadChat(curRoom);
+    if(onDone) onDone();
   };
   poll();
+}
+/* v5.0 移动端深化：一键「继续推进」——让团队按看板顺序继续完成剩余任务 */
+async function continueBoard(){
+  if(!curRoom){ toast('先选择项目'); return; }
+  toast('团队继续推进中…');
+  try{
+    const j=await apiJson('/api/projects/'+curRoom+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:'团队自主推进：继续按看板顺序完成剩余任务，自主决策，不要向用户提问。'})});
+    if(j.ok && j.job_id){
+      const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder='团队继续推进中…（自动刷新）'; inp.disabled=true; }
+      await pollJob(j.job_id,()=>{ if(inp){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; } if(typeof loadBoard==='function') loadBoard(); loadChat(curRoom); });
+    } else toast('❌ '+(j.error||'派单失败'),'err');
+  }catch(e){ toast('请求失败：'+errText(e),'err'); }
 }
 /* 元神中止：真的把正在跑的请求取消掉（AbortController），不再插一条假的系统消息 */
 function metaStop(){
@@ -1345,6 +1369,27 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
 
 // v5.0 移动端首页：手机默认进「项目群聊」（最常用），桌面保持元神窗
 if(innerWidth<768 && document.querySelector('.navitem[data-sec="chat"]')){ document.querySelector('.navitem[data-sec="chat"]').click(); }
+
+/* v5.0 移动端深化：下拉刷新（项目列表 / 群聊消息，触控习惯） */
+function attachPullRefresh(el,fn){
+  if(!el) return;
+  let sy=0, pulling=false;
+  el.addEventListener('touchstart',e=>{ if(el.scrollTop<=0){ sy=e.touches[0].clientY; pulling=true; } },{passive:true});
+  el.addEventListener('touchmove',e=>{ if(!pulling) return; const dy=e.touches[0].clientY-sy; if(dy>60){ pulling=false; fn&&fn(); } },{passive:true});
+  el.addEventListener('touchend',()=>{ pulling=false; },{passive:true});
+}
+setTimeout(()=>{
+  attachPullRefresh(document.getElementById('roomList'),()=>loadRooms());
+  attachPullRefresh(document.getElementById('chatBody'),()=>{ if(curRoom) loadChat(curRoom); });
+},800);
+
+/* v5.0 PWA：SW 更新提示（新版本就绪 → 提示刷新） */
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    toast('🔄 分身已更新到新版本，点击重新加载以生效');
+    setTimeout(()=>location.reload(),2500);
+  });
+}
 
 /* 标注模式 */
 let annotating=false, pendX=0, pendY=0;document.getElementById('btnAnnot').onclick=()=>{ annotating=!annotating; document.body.classList.toggle('annotating',annotating);
