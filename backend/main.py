@@ -80,7 +80,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.42.0")
+app = FastAPI(title="分身 v1 后端", version="0.50.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -181,8 +181,13 @@ async def _unhandled_handler(request: Request, exc):
 
 def get_db():
     os.makedirs(os.path.dirname(DB), exist_ok=True)
-    conn = sqlite3.connect(DB)
+    # v5.0：异步派单后台任务 + autonomy 循环会并发写库 → WAL + 10s busy timeout 防锁冲突
+    conn = sqlite3.connect(DB, timeout=10)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
     return conn
 
 
@@ -1042,7 +1047,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.42.0", "release": "v4.2", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.50.0", "release": "v5.0", "port": PORT, "llm": llm,
             "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 

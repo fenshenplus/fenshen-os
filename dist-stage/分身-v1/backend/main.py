@@ -80,7 +80,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.42.0")
+app = FastAPI(title="分身 v1 后端", version="0.50.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -181,8 +181,13 @@ async def _unhandled_handler(request: Request, exc):
 
 def get_db():
     os.makedirs(os.path.dirname(DB), exist_ok=True)
-    conn = sqlite3.connect(DB)
+    # v5.0：异步派单后台任务 + autonomy 循环会并发写库 → WAL + 10s busy timeout 防锁冲突
+    conn = sqlite3.connect(DB, timeout=10)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
     return conn
 
 
@@ -381,6 +386,22 @@ def init_db():
         cur.execute("ALTER TABLE projects ADD COLUMN phase TEXT DEFAULT 'requirement'")
     if "frozen" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN frozen INTEGER DEFAULT 0")
+    # ── 兼容迁移：projects 增加 autonomy_paused 列（项目级自主推进暂停开关，v4.2）──
+    if "autonomy_paused" not in cols:
+        cur.execute("ALTER TABLE projects ADD COLUMN autonomy_paused INTEGER DEFAULT 0")
+    # ── 兼容迁移：dispatch_jobs 表（异步派单 + 进度轮询，v4.2 新）──
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS dispatch_jobs (
+            id TEXT PRIMARY KEY,
+            project_id TEXT,
+            status TEXT DEFAULT 'queued',
+            progress TEXT DEFAULT '',
+            result TEXT DEFAULT '',
+            error TEXT DEFAULT '',
+            created_at TEXT,
+            updated_at TEXT
+        )"""
+    )
     # ── 兼容迁移：messages 增加 topic_id 列（话题消息，空 = 项目群聊）──
     mcols = {r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()}
     if "topic_id" not in mcols:
@@ -1026,7 +1047,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.42.0", "release": "v4.2", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.50.0", "release": "v5.0", "port": PORT, "llm": llm,
             "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 
@@ -1079,6 +1100,22 @@ def get_project(pid: str):
         "modules": module_stats,
     }
     return d
+
+
+@app.post("/api/projects/{pid}/autonomy")
+async def set_project_autonomy(pid: str, req: Request):
+    """v4.2：项目级自主推进暂停/恢复开关。paused=true → 自主循环跳过该项目（该项目的看板任务交由人工推进）。"""
+    data = await req.json()
+    paused = 1 if data.get("paused") else 0
+    conn = get_db()
+    row = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    conn.execute("UPDATE projects SET autonomy_paused=? WHERE id=?", (paused, pid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "paused": bool(paused)}
 
 
 @app.post("/api/projects")
@@ -3000,12 +3037,80 @@ async def _judge_role_output(reply: str, done_criteria: str = "", project_standa
 # ── API：话题（v3 Phase B 三层模型：对话/话题/任务）──────────────
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
-    """项目群聊对话（v0.27.0：自主执行链——元神分析→调度角色→角色执行→汇报群聊）。"""
+    """项目群聊对话（v4.2：异步派单——落库用户消息后立即返回 job_id，后台执行，前端轮询进度）。
+    单条消息 → 一个 dispatch_job；不再阻塞发送方 100-200s。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
     if not user_text:
         return {"ok": False, "error": "消息不能为空"}
-    return await _execute_project_chat(pid, user_text)
+    conn = get_db()
+    proj = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    conn.close()
+    job_id = f"job{time.time_ns()}"
+    now = datetime.now().isoformat()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO dispatch_jobs (id,project_id,status,progress,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+        (job_id, pid, "queued", "排队中…", now, now),
+    )
+    conn.commit()
+    conn.close()
+    # 后台执行（事件循环任务，不阻塞响应）。
+    # 注意：必须持有 task 引用，否则 asyncio 可能 GC 掉 pending 任务导致永不执行。
+    _t = asyncio.create_task(_run_dispatch_job(job_id, pid, user_text))
+    _DISPATCH_TASKS.add(_t)
+    _t.add_done_callback(_DISPATCH_TASKS.discard)
+    return {"ok": True, "job_id": job_id, "queued": True, "message": "已派单，团队执行中"}
+
+
+# 异步派单任务引用集合（防 GC 吞掉 pending 任务）
+_DISPATCH_TASKS = set()
+
+
+async def _run_dispatch_job(job_id: str, pid: str, user_text: str):
+    """异步执行一条派单：更新 job 状态 → 跑执行链 → 写结果。异常记录 error，不中断其他任务。"""
+    def _set(status, progress="", result="", error=""):
+        try:
+            conn = get_db()
+            conn.execute(
+                "UPDATE dispatch_jobs SET status=?, progress=?, result=?, error=?, updated_at=? WHERE id=?",
+                (status, progress, result, error, datetime.now().isoformat(), job_id),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    try:
+        _set("running", "元神分析中…")
+        r = await _execute_project_chat(pid, user_text)
+        _set("done", "执行完成", json.dumps(r, ensure_ascii=False)[:20000])
+    except Exception as e:
+        _set("failed", "", "", f"{e}")
+        print(f"[dispatch-job] {job_id} 失败: {e}")
+
+
+@app.get("/api/jobs/{job_id}")
+def get_dispatch_job(job_id: str):
+    """进度轮询：返回派单任务当前状态（queued/running/done/failed）+ 进度摘要。"""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT id,project_id,status,progress,result,error,updated_at FROM dispatch_jobs WHERE id=?",
+        (job_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return JSONResponse(status_code=404, content={"error": "任务不存在"})
+    d = dict(row)
+    if d.get("result"):
+        try:
+            d["result"] = json.loads(d["result"])
+        except Exception:
+            pass
+    return d
 
 
 async def _execute_project_chat(pid: str, user_text: str) -> dict:
@@ -4367,6 +4472,9 @@ async def _autonomy_loop():
             conn.close()
             for p in projects:
                 if p["id"] == META_PID:
+                    continue
+                # v4.2：项目级自主推进暂停开关（autonomy_paused=1 → 该项目的看板任务交由人工推进）
+                if p.get("autonomy_paused"):
                     continue
                 # 跳过占位种子项目（goal 是状态描述而非真实目标，如"完成 · 首页已上线"）
                 _g = (p["goal"] or "").strip()
