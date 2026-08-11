@@ -399,6 +399,8 @@ def init_db():
         cur.execute("ALTER TABLE projects ADD COLUMN product_meta TEXT DEFAULT ''")
     if "visit_count" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN visit_count INTEGER DEFAULT 0")
+    if "deploy_conf" not in cols:
+        cur.execute("ALTER TABLE projects ADD COLUMN deploy_conf TEXT DEFAULT ''")
     # ── 兼容迁移：dispatch_jobs 表（异步派单 + 进度轮询，v4.2 新）──
     cur.execute(
         """CREATE TABLE IF NOT EXISTS dispatch_jobs (
@@ -1280,6 +1282,65 @@ async def market_visit(pid: str):
     conn.commit()
     conn.close()
     return {"ok": True}
+
+
+# ── v5.2 部署一键化：配置服务器 → 自动备份 + scp 上线（expect 包装，S4 同模式）──
+def _expect_cmd(script: str, timeout: int = 240):
+    try:
+        proc = subprocess.run(["expect", "-c", script], capture_output=True, text=True, timeout=timeout)
+        return proc.returncode, (proc.stdout or "")[-400:]
+    except Exception as e:
+        return 1, f"expect 执行失败：{e}"
+
+
+@app.post("/api/projects/{pid}/deploy/conf")
+async def deploy_conf_set(pid: str, req: Request):
+    data = await req.json()
+    conf = {k: str(data.get(k) or "").strip() for k in ("host", "user", "password", "path")}
+    if not conf["host"] or not conf["path"]:
+        return {"ok": False, "error": "host 和 path 必填"}
+    conn = get_db()
+    conn.execute("UPDATE projects SET deploy_conf=? WHERE id=?", (json.dumps(conf, ensure_ascii=False), pid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "conf": {k: v for k, v in conf.items() if k != "password"}}
+
+
+@app.post("/api/projects/{pid}/deploy")
+async def deploy_project(pid: str, req: Request):
+    """一键部署：读配置 → 识别产物 → ssh 备份旧目录 → scp 上线。"""
+    conn = get_db()
+    row = conn.execute("SELECT name,deploy_conf FROM projects WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    if not row:
+        return {"ok": False, "error": "项目不存在"}
+    try:
+        conf = json.loads(row["deploy_conf"] or "{}")
+    except Exception:
+        conf = {}
+    host, user, pwd, path = conf.get("host", ""), conf.get("user", ""), conf.get("password", ""), conf.get("path", "")
+    if not (host and path):
+        return {"ok": False, "error": "未配置部署服务器（host/path），先在项目设置里配置"}
+    artifacts = _detect_artifacts(pid)
+    src = artifacts[0]["path"] if artifacts else ""
+    if not src:
+        return {"ok": False, "error": "未识别到产物目录（site/dist/build/out 或 ~/Desktop/项目名）"}
+    user_at = f"{user}@{host}" if user else f"root@{host}"
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # 1) 远端备份旧目录
+    rc, out = _expect_cmd(
+        f'set timeout 60; spawn ssh -o StrictHostKeyChecking=no {user_at} "mkdir -p {path} && '
+        f'if [ -d {path} ]; then cp -r {path} {path}.bak-{ts} 2>/dev/null; fi; echo BACKUP_OK" '
+        f'? ; expect "password:" {{ send "{pwd}\\r"; exp_continue }} ; expect eof')
+    if "BACKUP_OK" not in out and rc != 0:
+        return {"ok": False, "error": f"远端备份失败：{out[:100]}"}
+    # 2) scp 产物上线
+    rc, out = _expect_cmd(
+        f'set timeout 240; spawn scp -o StrictHostKeyChecking=no -r {src}/* {user_at}:{path}/ '
+        f'? ; expect "password:" {{ send "{pwd}\\r"; exp_continue }} ; expect eof')
+    if rc != 0 and "100%" not in out:
+        return {"ok": False, "error": f"scp 上线失败：{out[:120]}"}
+    return {"ok": True, "detail": f"已部署 {src} → {user_at}:{path}（备份 {path}.bak-{ts}）"}
 
 
 # ── v5.1 首次使用引导：元神软门槛（3 步引导 → 解锁建项目，可跳过）──
@@ -4538,6 +4599,8 @@ def meta_settings_get():
         "approval_mode": approval_mode(),                                  # all / danger / off
         "approval_timeout": int(get_setting("approval_timeout", "90")),    # 秒，超时按拒绝
         "bind": "lan" if ALLOW_LAN else "localhost",
+        # v5.2 监控自动兜底：服务端口监控配置 [{name,port,restart_cmd}]
+        "services": json.loads(get_setting("services", "[]")),
     }
 
 
@@ -4565,6 +4628,23 @@ async def meta_settings_set(req: Request):
         set_setting("watch_paths", json.dumps(paths, ensure_ascii=False))
         # 路径变化 → 重置快照，下次巡检全量对比
         set_setting("watch_snapshot", "{}")
+    # v5.2 监控自动兜底：服务监控配置 [{name,port,restart_cmd}]
+    if "services" in data:
+        svcs = data["services"]
+        if isinstance(svcs, str):
+            try:
+                svcs = json.loads(svcs)
+            except Exception:
+                return {"ok": False, "error": "services 必须是 JSON 数组"}
+        if not isinstance(svcs, list):
+            return {"ok": False, "error": "services 必须是数组"}
+        clean = []
+        for s in svcs:
+            if isinstance(s, dict) and s.get("port"):
+                clean.append({"name": str(s.get("name") or f"服务{s['port']}")[:40],
+                              "port": int(s["port"]),
+                              "restart_cmd": str(s.get("restart_cmd") or "").strip()})
+        set_setting("services", json.dumps(clean, ensure_ascii=False))
     # v4.2 自主闭环：团队自主推进循环可配置（默认开启）
     if "autonomy_enabled" in data:
         set_setting("autonomy_enabled", "1" if data["autonomy_enabled"] else "0")
@@ -4622,6 +4702,52 @@ def _snapshot_path(p: str) -> dict:
     except Exception:
         pass
     return snap
+
+
+def _check_watch_paths(conn):
+    """文件监控：对比上次快照，检测新增/修改/删除 → 元神私聊汇报。"""
+
+
+def _check_services(conn):
+    """v5.2 监控自动兜底：巡检配置的服务端口，DOWN → 自动执行重启命令 → 元神私聊留痕。
+    配置：settings.services = [{"name","port","restart_cmd"}]（模型设置页可配）。30 秒内不重复重启。"""
+    import socket
+    try:
+        services = json.loads(get_setting("services", "[]"))
+    except Exception:
+        services = []
+    if not services:
+        return
+    now = time.time()
+    for svc in services:
+        name = str(svc.get("name") or "?")[:40]
+        port = int(svc.get("port") or 0)
+        cmd = str(svc.get("restart_cmd") or "").strip()
+        if port <= 0:
+            continue
+        last = float(get_setting(f"svc_restart_{name}", "0") or 0)
+        if now - last < 30:
+            continue
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=2)
+            s.close()
+            continue  # 端口正常
+        except Exception:
+            pass  # DOWN
+        if not cmd:
+            continue
+        try:
+            subprocess.Popen(cmd, shell=True, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            set_setting(f"svc_restart_{name}", str(time.time()))
+            conn.execute(
+                "INSERT INTO messages (project_id,sender,kind,text,ts) VALUES (?,?,?,?,?)",
+                (META_PID, "分身 · 元神", "meta",
+                 f"⚠️ 自动兜底：服务「{name}」（端口 {port}）无响应，已自动执行重启命令。", datetime.now().isoformat()))
+            conn.commit()
+            print(f"[services] 已自动重启 {name}")
+        except Exception as e:
+            print(f"[services] 重启失败 {name}: {e}")
 
 
 def _check_watch_paths(conn):
@@ -4686,6 +4812,8 @@ async def _patrol_loop():
             conn = get_db()
             # ── 文件监控（v0.27.0：对比监控路径快照，发现变化→私聊汇报）──
             _check_watch_paths(conn)
+            # ── v5.2 监控自动兜底：服务端口 DOWN → 自动重启 → 私聊留痕 ──
+            _check_services(conn)
             projects = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
             issues = []
             for p in projects:
