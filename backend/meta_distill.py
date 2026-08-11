@@ -365,12 +365,91 @@ def meta_profile():
         "SELECT dim,field,value,confidence,source FROM user_model ORDER BY dim,confidence DESC").fetchall()
     dim_conf = _dim_confidence(conn)
     reflection = _build_reflection(conn)
+    # v4.2 蒸馏二期：充足度仪表盘——每维度条数 + 平均置信度 + 充足判定（≥3 条且 avg≥0.6）
+    dim_suff = {}
+    for dim in META_DIMS:
+        dim_rows = [r for r in rows if r["dim"] == dim]
+        if not dim_rows:
+            dim_suff[dim] = {"count": 0, "avg": 0.0, "sufficient": False}
+            continue
+        avg = round(sum(r["confidence"] for r in dim_rows) / len(dim_rows), 2)
+        dim_suff[dim] = {"count": len(dim_rows), "avg": avg,
+                         "sufficient": len(dim_rows) >= 3 and avg >= 0.6}
     conn.close()
     facts = [{"dim": r["dim"], "field": r["field"], "value": str(_decode(r["value"])),
               "confidence": r["confidence"], "source": r["source"]} for r in rows]
+    suff_dims = [d for d, s in dim_suff.items() if s["sufficient"]]
     return {"narrative": reflection or "元神还在了解你，去“了解我”里回答几个问题，或上传你的聊天记录/工作笔记吧。",
             "facts": facts, "dim_confidence": dim_conf,
-            "total": len(facts), "completeness": min(1.0, len(facts) / 20.0)}
+            "total": len(facts), "completeness": min(1.0, len(facts) / 20.0),
+            "dim_sufficiency": dim_suff,
+            "sufficient_dims": len(suff_dims), "total_dims": len(META_DIMS)}
+
+
+# ── 蒸馏二期：镜像校验（mirror_verify）────────────────────────────
+# 元神用画像"预测你在具体情境下的行为"，你反馈同意/纠正——同意强化置信度，
+# 纠正写入画像（source='mirror'，高置信）。让画像"越用越像"（产品定义 v2 卖点一）。
+MIRROR_SYSTEM = (
+    "你是「镜像校验」引擎：基于用户的真实人格画像，预测他在具体情境下的行为/选择/风格。\n"
+    "用户画像（按置信度排序）：\n{p}\n\n"
+    "输出严格 JSON：{{\"items\": [{{\"scenario\": \"具体情境描述（含细节、逼真，第二人称\"你\"）\", "
+    "\"prediction\": \"基于画像的预测：你会怎么做/怎么选/怎么说（第一人称\"我\"，具体到行动或原话风格）\"}}]}}\n"
+    "要求：生成 {n} 个情境，优先覆盖画像中最有把握的维度（personality/preference/fact）；"
+    "预测必须具体、可验证、不空泛。不要输出 JSON 以外的内容。"
+)
+
+
+@app.post("/api/meta/mirror/generate")
+async def mirror_generate(req: Request):
+    data = await req.json()
+    n = int(data.get("count") or 3)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT dim,field,value,confidence FROM user_model ORDER BY confidence DESC LIMIT 12").fetchall()
+    conn.close()
+    if not rows:
+        return {"ok": False, "error": "画像还太空，先去「了解我」回答几个问题，再来镜像校验"}
+    p = "\n".join(f"- [{r['dim']}] {r['field']}：{str(_decode(r['value']))}" for r in rows)
+    system = MIRROR_SYSTEM.format(p=p, n=n)
+    try:
+        reply = await _extract_async(system, f"请生成 {n} 个镜像校验情境")
+        j = json.loads(reply) if isinstance(reply, str) else reply
+        items = j.get("items") or []
+    except Exception as e:
+        return {"ok": False, "error": f"镜像生成失败：{e}", "raw": str(reply)[:200] if 'reply' in dir() else ""}
+    for i, it in enumerate(items):
+        it["id"] = f"mv{datetime.now().timestamp() * 1000:.0f}{i}"
+    return {"ok": True, "items": items}
+
+
+@app.post("/api/meta/mirror/judge")
+async def mirror_judge(req: Request):
+    data = await req.json()
+    agree = bool(data.get("agree"))
+    prediction = (data.get("prediction") or "").strip()[:500]
+    correction = (data.get("correction") or "").strip()[:300]
+    if not prediction:
+        return {"ok": False, "error": "缺少预测内容"}
+    if agree:
+        # 同意 → 强化画像：给置信度最高的一条 personality 条目 +0.1（封顶 0.95）
+        conn = get_db()
+        row = conn.execute(
+            "SELECT id,confidence FROM user_model WHERE dim='personality' ORDER BY confidence DESC LIMIT 1"
+        ).fetchone()
+        boosted = False
+        if row:
+            newc = min(0.95, row["confidence"] + 0.1)
+            conn.execute("UPDATE user_model SET confidence=? WHERE id=?", (newc, row["id"]))
+            conn.commit()
+            boosted = True
+        conn.close()
+        return {"ok": True, "result": "已强化画像置信度（预测正确，画像是懂你的）", "boosted": boosted}
+    # 不同意 → 写入纠正事实（高置信，source='mirror'）
+    if not correction:
+        return {"ok": False, "error": "不同意时需要给出纠正（你实际会怎么做）"}
+    n = _store_facts([{"dim": "preference", "field": "镜像校验纠正",
+                       "value": correction, "confidence": 0.9}], "mirror")
+    return {"ok": True, "result": "已记录纠正并更新画像", "stored": n}
 
 
 # ── 被动蒸馏：元神每次闲聊自动抽取人格事实 ───────────────────────
