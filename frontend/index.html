@@ -196,6 +196,10 @@
     .sidenav .navitem { flex:1; justify-content:center; padding:9px 2px; font-size:11px; gap:4px; min-height:44px; }
     .sidenav .navitem .dotk { display:none; }
     .sidenav .foot { display:none; }
+    /* v5.0 移动端底部导航：仅 4 主项 + 更多；其余收进抽屉 */
+    .sidenav .m-more { display:none !important; }
+    .sidenav .m-more-btn { display:flex !important; }
+    .sidenav .m-main { display:flex !important; }
     .body { flex-direction:column; }
     .rooms { width:100%; border-right:none; }
     .room { padding:13px 14px; min-height:46px; }
@@ -231,6 +235,21 @@
   @media (max-width:768px){ html { -webkit-tap-highlight-color:transparent; } }
   /* v5.0 移动端：看板卡片快捷操作按钮（触控友好） */
   @media (max-width:768px){ .mv-actions{ display:flex !important; } }
+  /* v5.0 移动端：桌面隐藏「更多」按钮，抽屉网格触控友好 */
+  .sidenav .m-more-btn { display:none; }
+  @media (max-width:768px){
+    .sidenav .m-more-btn { display:flex !important; }
+    #mobileMoreGrid > div { min-height:52px; display:flex; align-items:center; justify-content:center; }
+    /* 群聊目标条：默认单行可折叠 */
+    #chatGoalBar { cursor:pointer; max-height:22px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    #chatGoalBar.goal-open { max-height:none; white-space:normal; }
+    /* 看板移动卡片加大触控 */
+    #boardGrid [style*="cursor:pointer"] { font-size:12px; }
+    #boardGrid .mv-actions button { min-height:38px !important; }
+    /* 看板头部三按钮：手机两行 */
+    #boardProgWrap [onclick] { min-height:34px; }
+    #boardProgWrap > div:last-of-type { flex-wrap:wrap; }
+  }
 </style>
 </head>
 <body>
@@ -247,19 +266,21 @@
 
   <div class="body">
     <div class="sidenav">
-      <div class="navitem meta active" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
-      <div class="navitem" data-sec="chat"><span class="dotk"></span>项目群聊</div>
-      <div class="navitem" data-sec="roles"><span class="dotk"></span>角色库</div>
-      <div class="navitem" data-sec="resources"><span class="dotk"></span>公共资源库</div>
-      <div class="navitem" data-sec="models"><span class="dotk"></span>模型设置</div>
-      <div class="navitem" data-sec="terminal"><span class="dotk"></span>终端</div>
-      <div class="navitem" data-sec="browser"><span class="dotk"></span>浏览器</div>
-      <div class="navitem" data-sec="board"><span class="dotk"></span>项目看板</div>
-      <div class="navitem" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
-      <div class="navitem" data-sec="memory"><span class="dotk"></span>长期记忆</div>
-      <div class="navitem" data-sec="skills"><span class="dotk"></span>技能库</div>
-      <div class="navitem" data-sec="experiences"><span class="dotk"></span>经验库</div>
-      <div class="navitem" data-sec="evolution"><span class="dotk"></span>进化中心</div>
+      <div class="navitem meta active m-main" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
+      <div class="navitem m-main" data-sec="chat"><span class="dotk"></span>项目群聊</div>
+      <div class="navitem m-more" data-sec="roles"><span class="dotk"></span>角色库</div>
+      <div class="navitem m-more" data-sec="resources"><span class="dotk"></span>公共资源库</div>
+      <div class="navitem m-more" data-sec="models"><span class="dotk"></span>模型设置</div>
+      <div class="navitem m-more" data-sec="terminal"><span class="dotk"></span>终端</div>
+      <div class="navitem m-more" data-sec="browser"><span class="dotk"></span>浏览器</div>
+      <div class="navitem m-main" data-sec="board"><span class="dotk"></span>项目看板</div>
+      <div class="navitem m-more" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
+      <div class="navitem m-more" data-sec="memory"><span class="dotk"></span>长期记忆</div>
+      <div class="navitem m-more" data-sec="skills"><span class="dotk"></span>技能库</div>
+      <div class="navitem m-more" data-sec="experiences"><span class="dotk"></span>经验库</div>
+      <div class="navitem m-more" data-sec="evolution"><span class="dotk"></span>进化中心</div>
+      <!-- v5.0 移动端：更多抽屉入口（手机底部第 4 项） -->
+      <div class="navitem m-more-btn" id="navMore" onclick="openMobileMore()"><span class="dotk"></span>更多</div>
       <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
     </div>
 
@@ -524,6 +545,16 @@
             <button class="btn sm ghost" onclick="doCleanup('memory',this)">清空记忆</button>
           </div>
           <div id="memList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- v5.0 移动端：更多抽屉（收纳非主导航工具页） -->
+          <div class="mask" id="mobileMoreMask" style="display:none" onclick="if(event.target===this)closeMobileMore()">
+            <div class="modal" style="max-width:420px;padding:18px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <span style="font-size:14px;font-weight:600">更多工具</span>
+                <button class="btn sm ghost" onclick="closeMobileMore()">收起</button>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px" id="mobileMoreGrid"></div>
+            </div>
+          </div>
           <!-- 添加记忆弹窗 -->
           <div class="mask" id="memAddMask" style="display:none">
             <div class="modal" style="max-width:420px">
@@ -869,11 +900,17 @@ function renderRooms(){ const el=document.getElementById('roomList'); el.innerHT
     const c=r.completion||{};
     const pct=c.percent||0;
     const bar=`<div style="height:3px;background:var(--gray-200);border-radius:99px;margin-top:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct>=100?'#34c98e':'var(--meta-700)'};border-radius:99px"></div></div>`;
-    d.innerHTML=`<span class="s" style="background:var(--${escapeHtml(st)})"></span><div class="info"><div class="nm">${escapeHtml(r.name)}${fz}</div><div class="ds">${escapeHtml(ph)} · 完成度 ${pct}%${bar}</div></div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
+    // v5.0 移动端深化：最后消息摘要 + 时间（微信式列表）
+    const lm=r.last_msg?`<div style="font-size:11px;color:var(--gray-400);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.last_msg)}</div>`:'';
+    const lt=r.last_ts?`<span style="font-size:10px;color:var(--gray-400)">${escapeHtml(r.last_ts.slice(5))}</span>`:'';
+    d.innerHTML=`<span class="s" style="background:var(--${escapeHtml(st)})"></span><div class="info"><div class="nm">${escapeHtml(r.name)}${fz}</div><div class="ds">${escapeHtml(ph)} · 完成度 ${pct}%${bar}</div>${lm}</div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
 async function loadChat(pid){ const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
   const r=rooms.find(x=>x.id===pid); document.getElementById('chatTitle').textContent=r?r.name:''; document.getElementById('chatSub').textContent=r?STATUS_LABEL[r.status]||'':'';
   const gb=document.getElementById('chatGoalBar');
-  if(r){ gb.style.display='block'; gb.innerHTML='🎯 '+(escapeHtml(r.goal||'未设目标'))+'　&nbsp;　✅ 完成标准：'+(escapeHtml(r.standards||'未设')); }
+  if(r){ gb.style.display='block'; gb.innerHTML='🎯 '+(escapeHtml(r.goal||'未设目标'))+'　&nbsp;　✅ 完成标准：'+(escapeHtml(r.standards||'未设'));
+    // v5.0 移动端：目标条点击展开/折叠
+    gb.onclick=()=>gb.classList.toggle('goal-open');
+  }
   else gb.style.display='none';
   refreshPhaseUI(r);
   let msgs=[]; try{ const res=await fetch('/api/messages/'+pid); msgs=await res.json(); }catch(e){ console.error(e); }
@@ -1369,6 +1406,28 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
 
 // v5.0 移动端首页：手机默认进「项目群聊」（最常用），桌面保持元神窗
 if(innerWidth<768 && document.querySelector('.navitem[data-sec="chat"]')){ document.querySelector('.navitem[data-sec="chat"]').click(); }
+
+/* v5.0 移动端：更多抽屉（收纳非主导航工具页） */
+const MOBILE_MORE_ITEMS = [
+  ['roles','角色库'],['skills','技能库'],['resources','公共资源库'],['models','模型设置'],
+  ['terminal','终端'],['browser','浏览器'],['cleanup','清理中心'],['memory','长期记忆'],
+  ['experiences','经验库'],['evolution','进化中心'],
+];
+function openMobileMore(){
+  const grid=document.getElementById('mobileMoreGrid');
+  grid.innerHTML=MOBILE_MORE_ITEMS.map(([sec,label])=>{
+    const nav=document.querySelector('.navitem[data-sec="'+sec+'"]');
+    const active=nav?nav.classList.contains('active'):false;
+    return `<div style="background:${active?'#EEEDFE':'var(--gray-50)'};border:.5px solid var(--gray-200);border-radius:10px;padding:10px 6px;text-align:center;font-size:13px;color:${active?'#3C3489':'var(--gray-600)'};cursor:pointer" onclick="gotoMobileMore('${sec}')">${label}</div>`;
+  }).join('');
+  document.getElementById('mobileMoreMask').style.display='flex';
+}
+function closeMobileMore(){ document.getElementById('mobileMoreMask').style.display='none'; }
+function gotoMobileMore(sec){
+  closeMobileMore();
+  const nav=document.querySelector('.navitem[data-sec="'+sec+'"]');
+  if(nav) nav.click();
+}
 
 /* v5.0 移动端深化：下拉刷新（项目列表 / 群聊消息，触控习惯） */
 function attachPullRefresh(el,fn){
