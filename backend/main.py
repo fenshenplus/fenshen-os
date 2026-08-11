@@ -81,7 +81,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.51.0")
+app = FastAPI(title="分身 v1 后端", version="0.52.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -1063,7 +1063,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.51.0", "release": "v5.1", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.52.0", "release": "v5.2", "port": PORT, "llm": llm,
             "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 
