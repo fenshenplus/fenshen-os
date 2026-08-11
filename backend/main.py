@@ -1067,6 +1067,16 @@ def list_projects():
                                "percent": round(done * 100 / total) if total else 0}
         except Exception:
             d["completion"] = {"total": 0, "done": 0, "percent": 0}
+        # v5.0 移动端深化：项目列表带最后消息摘要 + 时间（微信式列表）
+        try:
+            lm = conn.execute(
+                "SELECT text,ts FROM messages WHERE project_id=? AND topic_id='' AND sender!='系统' "
+                "ORDER BY id DESC LIMIT 1", (r["id"],)).fetchone()
+            if lm:
+                d["last_msg"] = (lm["text"] or "").strip().replace("\n", " ")[:48]
+                d["last_ts"] = (lm["ts"] or "")[:16].replace("T", " ")
+        except Exception:
+            pass
         out.append(d)
     conn.close()
     return out
@@ -4487,7 +4497,8 @@ async def _autonomy_loop():
                 if p["id"] == META_PID:
                     continue
                 # v4.2：项目级自主推进暂停开关（autonomy_paused=1 → 该项目的看板任务交由人工推进）
-                if p.get("autonomy_paused"):
+                # 注意：projects 行是 sqlite3.Row，无 .get()，用 keys() 判断
+                if "autonomy_paused" in p.keys() and p["autonomy_paused"]:
                     continue
                 # 跳过占位种子项目（goal 是状态描述而非真实目标，如"完成 · 首页已上线"）
                 _g = (p["goal"] or "").strip()
