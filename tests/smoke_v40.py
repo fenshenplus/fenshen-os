@@ -394,6 +394,14 @@ def test_batch_d():
     _, ab2 = call("POST", f"/api/projects/{pid}/autonomy", {"paused": False})
     check("批次D：恢复自主推进", isinstance(ab2, dict) and ab2.get("paused") is False)
 
+    # v5.1 应用市场：未完成项目上架被拒 + 市场列表
+    _, pub = call("POST", f"/api/projects/{pid}/publish", {"target": "market"})
+    check("批次D：未完成项目上架被拒",
+          isinstance(pub, dict) and not pub.get("ok") and "仅已完成" in (pub.get("error") or ""),
+          str(pub.get("error"))[:40])
+    _, ml = call("GET", "/api/market")
+    check("批次D：市场列表接口", isinstance(ml, list), f"{len(ml)} 项")
+
     # 清场
     call("DELETE", f"/api/projects/{pid}")
     call("POST", "/api/meta/settings", {"autonomy_enabled": old_auto == "1"}, timeout=20)
