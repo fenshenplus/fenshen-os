@@ -2,8 +2,23 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>分身 · v4.0</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>分身 · v5.0</title>
+<meta name="theme-color" content="#6d5bd0">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="分身">
+<!-- v5.0 PWA：Service Worker 注册（network-first，离线可用 app shell） -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
+</script>
 <style>
   .btext{white-space:pre-wrap;word-break:break-word;}
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -214,6 +229,8 @@
     #topicMask .mb > div:first-child { width:100%; border-right:none; border-bottom:.5px solid var(--gray-200); padding-bottom:8px; }
   }
   @media (max-width:768px){ html { -webkit-tap-highlight-color:transparent; } }
+  /* v5.0 移动端：看板卡片快捷操作按钮（触控友好） */
+  @media (max-width:768px){ .mv-actions{ display:flex !important; } }
 </style>
 </head>
 <body>
@@ -1326,9 +1343,11 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
   }
 });
 
+// v5.0 移动端首页：手机默认进「项目群聊」（最常用），桌面保持元神窗
+if(innerWidth<768 && document.querySelector('.navitem[data-sec="chat"]')){ document.querySelector('.navitem[data-sec="chat"]').click(); }
+
 /* 标注模式 */
-let annotating=false, pendX=0, pendY=0;
-document.getElementById('btnAnnot').onclick=()=>{ annotating=!annotating; document.body.classList.toggle('annotating',annotating);
+let annotating=false, pendX=0, pendY=0;document.getElementById('btnAnnot').onclick=()=>{ annotating=!annotating; document.body.classList.toggle('annotating',annotating);
   document.getElementById('btnAnnot').textContent='标注模式：'+(annotating?'开':'关');
   document.getElementById('annotPanel').classList.toggle('show',annotating); };
 document.addEventListener('click',e=>{ if(!annotating)return; if(e.target.closest('.mask')||e.target.closest('.annot-panel')||e.target.closest('.topbar'))return; e.preventDefault(); e.stopPropagation();
@@ -1661,6 +1680,11 @@ function renderBoard(){
           <select style="margin-left:auto;padding:1px 2px;border:.5px solid var(--gray-200);border-radius:4px;font-size:10px;background:#fff" onclick="event.stopPropagation()" onchange="moveTask('${jsStr(t.id)}',this.value)">
             ${MOD_COLS.map(x=>`<option value="${x[0]}" ${x[0]===t.status?'selected':''}>${x[1]}</option>`).join('')}
           </select>
+        </div>
+        <!-- v5.0 移动端快捷操作：触控友好，桌面隐藏 -->
+        <div class="mv-actions" style="display:none;gap:4px;margin-top:4px">
+          <button class="btn sm" style="flex:1;min-height:32px;font-size:11px;padding:2px 4px" onclick="event.stopPropagation();moveTask('${jsStr(t.id)}','doing')">▶ 推进</button>
+          <button class="btn sm" style="flex:1;min-height:32px;font-size:11px;padding:2px 4px;background:#34c98e;color:#fff;border:none" onclick="event.stopPropagation();moveTask('${jsStr(t.id)}','done')">✅ 完成</button>
         </div>
       </div>`).join('');
       return `<div style="flex:1;min-width:120px;background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:5px;margin:0 3px">${inner||'<div style="font-size:10px;color:var(--gray-400);text-align:center;padding:8px 0">—</div>'}</div>`;
