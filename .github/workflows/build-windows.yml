@@ -1,6 +1,6 @@
 name: build-windows-exe
 
-on:
+"on":
   workflow_dispatch:
   push:
     tags:
