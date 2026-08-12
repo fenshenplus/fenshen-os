@@ -13,6 +13,13 @@ datas = [
 ]
 
 hiddenimports = [
+    "sqlite3",
+    "requests",
+    "paramiko",
+    "fastapi",
+    "fastapi.responses",
+    "fastapi.staticfiles",
+    "fastapi.middleware",
     "uvicorn.logging",
     "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto",
