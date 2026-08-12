@@ -49,7 +49,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="分身",
+    name="Fenshen",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
