@@ -23,8 +23,8 @@ jobs:
           python -m PyInstaller --clean packaging/windows/fenshen.spec -y
       - name: Zip dist
         shell: powershell
-        run: Compress-Archive -Force -Path 'dist\分身.exe' -DestinationPath 'dist\分身-Windows-exe.zip'
+        run: Compress-Archive -Force -Path 'dist\Fenshen.exe' -DestinationPath 'dist\Fenshen-Windows-exe.zip'
       - uses: actions/upload-artifact@v4
         with:
           name: fenshen-windows-exe
-          path: dist/分身-Windows-exe.zip
+          path: dist/Fenshen-Windows-exe.zip
