@@ -81,7 +81,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.52.0")
+app = FastAPI(title="分身 v1 后端", version="0.53.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -1074,7 +1074,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.52.0", "release": "v5.2", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.53.0", "release": "v5.3", "port": PORT, "llm": llm,
             "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 
@@ -3366,7 +3366,7 @@ ROLE_SYSTEMS = {
     "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
     "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
     "frontend": "你是前端工程师，负责 H5 客户端与交互实现。根据任务要求，给出具体的代码或方案，包括：组件结构、样式要点、交互逻辑。回答用中文，直接给代码/方案。",
-    "tester": "你是测试工程师，负责质量保障。根据任务要求，给出测试方案和关键用例。回答用中文，直接给用例。",
+    "tester": "你是测试工程师，负责质量保障。根据任务要求，给出测试方案和关键用例；测试执行类任务请把用例/报告写入项目产物目录（~/Desktop/<项目名>/tests/），并汇报文件路径。回答用中文，直接给用例。",
 }
 ROLE_NAMES = {
     "architect": "架构师",
