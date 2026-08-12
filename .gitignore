@@ -16,3 +16,7 @@ venv/
 
 # 发行包中间产物（site/ 下的 zip 由 dist-stage 打包，保留 site 的 index.html 但排除 zip）
 dist-stage/.venv/
+
+# 官网安装包（大文件，不在仓库维护）
+site/*.zip
+site/*.dmg
