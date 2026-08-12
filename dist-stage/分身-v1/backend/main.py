@@ -18,7 +18,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -81,7 +81,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.52.0")
+app = FastAPI(title="分身 v1 后端", version="0.53.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -95,7 +95,7 @@ ALLOW_LAN = os.environ.get("FENSHEN_ALLOW_LAN") == "1"
 PORT = int(os.environ.get("FENSHEN_PORT", "8002"))
 COOKIE_NAME = "fenshen_token"
 # 无需令牌即可访问的接口（仅健康检查，供启动脚本探活）
-PUBLIC_API = {"/api/health"}
+PUBLIC_API = {"/api/health", "/api/market/feedback", "/api/market/visit"}
 
 
 def _load_or_create_token() -> str:
@@ -401,6 +401,17 @@ def init_db():
         cur.execute("ALTER TABLE projects ADD COLUMN visit_count INTEGER DEFAULT 0")
     if "deploy_conf" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN deploy_conf TEXT DEFAULT ''")
+    # ── v5.3 运营中心：公开产品反馈表（市场反馈 → 一键转看板）──
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS market_feedback (
+            id TEXT PRIMARY KEY,
+            product_id TEXT,
+            text TEXT,
+            ts TEXT,
+            status TEXT DEFAULT 'open',
+            task_id TEXT DEFAULT ''
+        )"""
+    )
     # ── 兼容迁移：dispatch_jobs 表（异步派单 + 进度轮询，v4.2 新）──
     cur.execute(
         """CREATE TABLE IF NOT EXISTS dispatch_jobs (
@@ -1063,7 +1074,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.52.0", "release": "v5.2", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.53.0", "release": "v5.3", "port": PORT, "llm": llm,
             "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
 
 
@@ -1253,12 +1264,11 @@ async def unpublish_project(pid: str, req: Request):
 
 @app.get("/api/market")
 def market_list():
-    """已上架产品列表（含访问统计）。"""
+    """已上架产品列表（含访问统计 + 反馈计数）。"""
     conn = get_db()
     rows = conn.execute(
         "SELECT id,name,goal,published,publish_ts,product_meta,visit_count,phase FROM projects "
         "WHERE published=1 ORDER BY publish_ts DESC").fetchall()
-    conn.close()
     out = []
     for r in rows:
         d = dict(r)
@@ -1270,7 +1280,14 @@ def market_list():
         except Exception:
             d["desc"], d["target"], d["artifacts"] = "", "market", []
         d["product_url"] = f"/p/{r['id']}"
+        # v5.3 运营中心：反馈计数
+        try:
+            d["fb_count"] = conn.execute(
+                "SELECT COUNT(*) c FROM market_feedback WHERE product_id=?", (r["id"],)).fetchone()["c"] or 0
+        except Exception:
+            d["fb_count"] = 0
         out.append(d)
+    conn.close()
     return out
 
 
@@ -1341,6 +1358,108 @@ async def deploy_project(pid: str, req: Request):
     if rc != 0 and "100%" not in out:
         return {"ok": False, "error": f"scp 上线失败：{out[:120]}"}
     return {"ok": True, "detail": f"已部署 {src} → {user_at}:{path}（备份 {path}.bak-{ts}）"}
+
+
+# ── v5.3 运营中心：公开反馈收集 → 一键转看板 + SEO 文案 ─────────
+@app.post("/api/market/feedback")
+async def market_feedback(req: Request):
+    """公开产品反馈（无需 token，产品页内嵌表单调用；简单限流）。"""
+    data = await req.json()
+    pid = (data.get("product_id") or "").strip()
+    text = (data.get("text") or "").strip()[:500]
+    if not pid or not text:
+        return {"ok": False, "error": "缺少产品或反馈内容"}
+    conn = get_db()
+    row = conn.execute("SELECT id FROM projects WHERE id=? AND published=1", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "产品不存在或已下架"}
+    # 简单防刷：同一产品 10 秒内最多 3 条
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM market_feedback WHERE product_id=? AND ts>?",
+        (pid, (datetime.now() - timedelta(seconds=10)).isoformat())).fetchone()["c"]
+    if n and n >= 3:
+        conn.close()
+        return {"ok": False, "error": "提交太频繁，稍后再试"}
+    conn.execute(
+        "INSERT INTO market_feedback (id,product_id,text,ts) VALUES (?,?,?,?)",
+        (f"fb{time.time_ns()}", pid, text, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "message": "已收到反馈，谢谢！"}
+
+
+@app.get("/api/market/feedback/{pid}")
+def market_feedback_list(pid: str):
+    """某产品的反馈列表（运营查看）。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id,text,ts,status,task_id FROM market_feedback WHERE product_id=? ORDER BY ts DESC",
+        (pid,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/market/feedback/{fid}/to-board")
+async def market_feedback_to_board(fid: str):
+    """反馈 → 转成产品项目看板需求卡（进入项目群聊首模块待办列）。"""
+    conn = get_db()
+    fb = conn.execute("SELECT * FROM market_feedback WHERE id=?", (fid,)).fetchone()
+    if not fb:
+        conn.close()
+        return {"ok": False, "error": "反馈不存在"}
+    if fb["status"] == "done":
+        conn.close()
+        return {"ok": False, "error": "该反馈已处理"}
+    proj = conn.execute("SELECT id,name FROM projects WHERE id=? AND published=1", (fb["product_id"],)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "产品项目不存在或已下架"}
+    # 落到项目第一个模块的待办列
+    mod = conn.execute("SELECT id FROM modules WHERE project_id=? ORDER BY id LIMIT 1", (proj["id"],)).fetchone()
+    if not mod:
+        conn.close()
+        return {"ok": False, "error": "产品项目还没有模块"}
+    topic = conn.execute("SELECT id FROM topics WHERE module_id=?", (mod["id"],)).fetchone()
+    if not topic:
+        conn.close()
+        return {"ok": False, "error": "模块还没有话题对话组"}
+    text = (fb["text"] or "")[:120]
+    conn.execute(
+        "INSERT INTO tasks (project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (proj["id"], mod["id"], topic["id"], f"[用户反馈] {text}", "前端工程师", "todo",
+         f"处理用户反馈：{text}", datetime.now().isoformat()))
+    conn.execute("UPDATE market_feedback SET status='done' WHERE id=?", (fid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "message": f"已转成看板需求卡（{proj['name']}）"}
+
+
+@app.post("/api/projects/{pid}/seo")
+async def project_seo(pid: str, req: Request):
+    """SEO 落地页文案生成（LLM：标题/描述/关键词）。"""
+    conn = get_db()
+    row = conn.execute("SELECT name,goal,standards FROM projects WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    if not row:
+        return {"ok": False, "error": "项目不存在"}
+    try:
+        raw = (await _chat_with_tools(
+            META_PID,
+            [{"role": "system", "content": "你是 SEO 文案。输出严格 JSON：{\"title\":\"≤20字标题含核心关键词\",\"desc\":\"≤80字描述\",\"keywords\":\"逗号分隔 5-8 个关键词\"}，不要输出其他内容。"},
+             {"role": "user", "content": f"产品：{row['name']}；目标：{row['goal'] or ''}；完成标准：{(row['standards'] or '')[:80]}"}],
+            "你是 SEO 文案。", tools=[])) or ""
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.S)
+        data = json.loads(m.group(0)) if m else {}
+        seo = {"title": str(data.get("title", ""))[:30], "desc": str(data.get("desc", ""))[:120],
+               "keywords": str(data.get("keywords", ""))[:120]}
+        if not seo["title"]:
+            seo = {"title": row["name"], "desc": (row["goal"] or "")[:80], "keywords": row["name"]}
+        return {"ok": True, "seo": seo}
+    except Exception:
+        return {"ok": True, "seo": {"title": row["name"], "desc": (row["goal"] or "")[:80], "keywords": row["name"]}}
 
 
 # ── v5.1 首次使用引导：元神软门槛（3 步引导 → 解锁建项目，可跳过）──
@@ -1430,9 +1549,27 @@ async def public_product_page(pid: str):
       <div style="font-size:12px;color:#8e8e93;margin-bottom:6px">手机扫码访问（桌面端数据来源）</div>
       <div style="font-size:11px;color:#6d5bd0">[ 二维码生成接入点 ]</div>
     </div>
+    <div style="background:#fff;border-radius:12px;border:.5px solid #e5e5ea;padding:16px;margin-top:12px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px">反馈给团队</div>
+      <textarea id="fbText" rows="2" placeholder="说说你的想法、遇到的问题或想要的功能…" style="width:100%;box-sizing:border-box;border:.5px solid #d6d6db;border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:none"></textarea>
+      <button onclick="submitFeedback('{pid}')" style="margin-top:8px;background:#6d5bd0;color:#fff;border:none;border-radius:8px;padding:8px 20px;font-size:13px">提交反馈</button>
+      <div id="fbOk" style="font-size:12px;color:#0F6E56;margin-top:8px"></div>
+    </div>
   </div>
   <p style="text-align:center;font-size:11px;color:#8e8e93;margin-top:16px">由「分身」生成 · 数据本地化 · 访问次数 {(row["visit_count"] or 0)+1}</p>
-</div></body></html>"""
+</div>
+<script>
+async function submitFeedback(pid){{
+  const t=document.getElementById('fbText').value.trim();
+  if(!t){{ alert('请先填写反馈内容'); return; }}
+  try{{
+    const r=await fetch('/api/market/feedback',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{product_id:pid,text:t}})}});
+    const j=await r.json();
+    document.getElementById('fbOk').textContent=j.ok?('✅ '+j.message):('❌ '+(j.error||'提交失败'));
+    if(j.ok) document.getElementById('fbText').value='';
+  }}catch(e){{ document.getElementById('fbOk').textContent='❌ 网络错误，请重试'; }}
+}}
+</script></body></html>"""
     return HTMLResponse(page_html)
 
 
@@ -3229,7 +3366,7 @@ ROLE_SYSTEMS = {
     "architect": "你是项目架构师，负责技术方案设计。根据任务要求，给出简洁的技术方案，包括：关键设计决策、接口定义、技术栈选择。回答用中文，直接给方案，不废话。",
     "backend": "你是后端工程师，负责 API 和数据层实现。根据任务要求，给出具体的代码或方案，包括：接口定义、数据结构、关键逻辑。回答用中文，直接给代码/方案。",
     "frontend": "你是前端工程师，负责 H5 客户端与交互实现。根据任务要求，给出具体的代码或方案，包括：组件结构、样式要点、交互逻辑。回答用中文，直接给代码/方案。",
-    "tester": "你是测试工程师，负责质量保障。根据任务要求，给出测试方案和关键用例。回答用中文，直接给用例。",
+    "tester": "你是测试工程师，负责质量保障。根据任务要求，给出测试方案和关键用例；测试执行类任务请把用例/报告写入项目产物目录（~/Desktop/<项目名>/tests/），并汇报文件路径。回答用中文，直接给用例。",
 }
 ROLE_NAMES = {
     "architect": "架构师",
