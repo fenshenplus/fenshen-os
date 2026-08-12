@@ -1,0 +1,30 @@
+name: build-windows-exe
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps + pyinstaller
+        run: |
+          pip install -q -r dist-stage/分身-v1/requirements-dist.txt
+          pip install -q pyinstaller
+      - name: Build exe
+        run: |
+          python -m PyInstaller --clean packaging/windows/fenshen.spec -y
+      - name: Zip dist
+        shell: powershell
+        run: Compress-Archive -Force -Path 'dist\分身.exe' -DestinationPath 'dist\分身-Windows-exe.zip'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fenshen-windows-exe
+          path: dist/分身-Windows-exe.zip
