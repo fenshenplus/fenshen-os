@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="icon" type="image/png" href="./favicon.png" />
-<title>分身 v4.0 — 你的数字分身 · 本地优先的 AI 团队总管</title>
+<title>分身 v5.4 — 你的数字分身 · 本地优先的 AI 团队总管（Windows / macOS）</title>
 <style>
   :root{
     --blue:#007aff; --blue-600:#0066d6; --blue-50:#e8f0fe;
@@ -132,12 +132,12 @@
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap"><a class="btn primary" href="./分身-v5.4-macOS.zip">下载 macOS 版</a><a class="btn primary" href="./分身-v5.4-Windows.zip">下载 Windows 版</a></div>
       <a class="btn meta" href="#capabilities">看它现在能做什么</a>
     </div>
-    <div class="pill"><span class="dot"></span> v4.0 已发布 · 本机运行 · 端口 8002 · 令牌鉴权 · 数据存本机 SQLite</div>
+    <div class="pill"><span class="dot"></span> v5.4 已发布 · Windows / macOS 双平台 · 手机随时远程 · 数据存本机 SQLite</div>
     <div class="banner">
       <div class="b-ic">🛡️</div>
       <div>
-        <div class="b-t">v4.0 安全强化公告</div>
-        <div class="b-d">本版对旧发行版的安全隐患做了彻底重构：<b>默认只绑本机 127.0.0.1</b>（不再暴露到局域网）、<b>所有接口需本地令牌</b>、<b>危险命令由系统级对话框真人确认</b>、<b>破坏性清理强制确认并自动备份</b>。请下载 v4.0 及以上版本。</div>
+        <div class="b-t">v5.4 · Windows / macOS 双平台</div>
+        <div class="b-d"><b>Windows 和 Mac 都能用</b>：解压后双击 <code>start.bat</code>（Windows）/ <code>start.sh</code>（macOS）即启动，浏览器自动打开。手机同局域网可随时远程看板（PWA 可装主屏），语音输入、左滑看板。</div>
       </div>
     </div>
   </div>
@@ -147,7 +147,7 @@
   <div class="wrap">
     <div class="sec-title">一句话看懂</div>
     <div class="sec-h">能看 · 能派 · 能动手</div>
-    <div class="sec-d">元神从「会聊天的助手」进化成「能干活的总管」——不是聊天机器人，是你电脑上的分身。</div>
+    <div class="sec-d">元神从「会聊天的助手」进化成「能干活的总管」——手机是遥控器，电脑是引擎，开发到发布全生命周期闭环。</div>
     <div class="pillars">
       <div class="pillar">
         <div class="em">👁️</div>
@@ -230,6 +230,10 @@
       </div>
       <div class="card">
         <div class="ic red">锁</div>
+        <h3>手机遥控器</h3>
+        <p>群聊首页、元神置顶、左滑进看板、语音输入——手机就是分身的遥控器，随时看板推进。</p>
+        <h3>应用市场</h3>
+        <p>开发完的产品一键上架，公开反馈直接转成看板需求卡，SEO 文案自动生成。</p>
         <h3>工程纪律</h3>
         <p>阶段门禁（UI 确认前禁止写代码）、冻结锁 + 修改单、版本快照可回滚、依赖门禁防乱序开发。</p>
         <div class="tags"><span class="tag">门禁</span><span class="tag">冻结</span><span class="tag">快照回滚</span></div>
@@ -354,5 +358,15 @@
   </div>
 </footer>
 
+<script>
+// v5.4：自动推荐对应平台下载（Windows 高亮 Windows 按钮）
+(function(){
+  var isWin = /Windows|Win64|Win32/i.test(navigator.userAgent);
+  if(isWin){
+    var links = document.querySelectorAll('a[href*="Windows.zip"]');
+    links.forEach(function(a){ a.classList.add('win-acc'); });
+  }
+})();
+</script>
 </body>
 </html>
