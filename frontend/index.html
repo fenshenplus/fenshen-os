@@ -2507,8 +2507,11 @@ async function loadMarket(){
         <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
           <button class="btn sm" onclick="marketOpen('${p.id}')">打开产品</button>
           <button class="btn sm" onclick="marketCopyLink('${p.id}')">复制链接</button>
+          <button class="btn sm" onclick="genSeo('${p.id}')">SEO 文案</button>
+          <button class="btn sm" onclick="loadFeedback('${p.id}')">反馈(${p.fb_count||0})</button>
           <button class="btn sm ghost" onclick="marketUnpublish('${p.id}')">下架</button>
         </div>
+        <div id="fbBox_${escapeHtml(p.id)}" style="display:none;margin-top:8px;font-size:12px"></div>
       </div>`).join('');
   }catch(e){ el.textContent='加载失败：'+errText(e); }
 }
@@ -2523,6 +2526,39 @@ async function marketUnpublish(pid){
   if(!confirm('确认下架该产品？')) return;
   try{ const r=await fetch('/api/projects/'+pid+'/unpublish',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const j=await r.json(); if(j.ok){ toast('已下架','ok'); loadMarket(); } else toast('❌ '+j.error);
+  }catch(e){ toast('请求失败：'+errText(e)); }
+}
+/* v5.3 运营中心：反馈列表 / 转看板 / SEO 文案 */
+async function loadFeedback(pid){
+  const box=document.getElementById('fbBox_'+pid); if(!box) return;
+  const show=box.style.display==='none';
+  box.style.display=show?'block':'none';
+  if(!show) return;
+  try{
+    const r=await fetch('/api/market/feedback/'+pid); const list=await r.json();
+    if(!list.length){ box.innerHTML='<div style="color:var(--gray-400)">暂无反馈</div>'; return; }
+    box.innerHTML=list.map(f=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:.5px solid var(--gray-200)">
+      <div style="flex:1">${escapeHtml(f.text)} <span style="font-size:10px;color:var(--gray-400)">${escapeHtml((f.ts||'').slice(5,16).replace('T',' '))} · ${f.status==='done'?'已处理':'待处理'}</span></div>
+      ${f.status!=='done'?`<button class="btn sm" onclick="fbToBoard('${f.id}')">转看板</button>`:''}
+    </div>`).join('');
+  }catch(e){ box.innerHTML='加载失败：'+errText(e); }
+}
+async function fbToBoard(fid){
+  try{ const r=await fetch('/api/market/feedback/'+fid+'/to-board',{method:'POST'});
+    const j=await r.json(); if(j.ok){ toast('✅ '+j.message,'ok'); loadMarket(); } else toast('❌ '+(j.error||''),'err');
+  }catch(e){ toast('请求失败：'+errText(e)); }
+}
+async function genSeo(pid){
+  toast('SEO 文案生成中…');
+  try{
+    const r=await fetch('/api/projects/'+pid+'/seo',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json();
+    if(j.ok&&j.seo){
+      const s=j.seo;
+      const txt=`标题：${s.title}\n描述：${s.desc}\n关键词：${s.keywords}`;
+      (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>toast('✅ SEO 文案已复制','ok'))
+        .catch(()=>{ prompt('SEO 文案：', txt); });
+    } else toast('❌ '+(j.error||'生成失败'),'err');
   }catch(e){ toast('请求失败：'+errText(e)); }
 }
 async function openMarketPublish(){
