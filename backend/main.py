@@ -27,7 +27,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+# v5.4 PyInstaller 兼容：打包后静态资源在 sys._MEIPASS 下
+_MEI = getattr(sys, "_MEIPASS", None)
 BASE = os.path.dirname(os.path.abspath(__file__))
+if _MEI:
+    BASE = os.path.join(_MEI, "backend") if os.path.isdir(os.path.join(_MEI, "backend")) else _MEI
 FRONTEND = os.path.abspath(os.path.join(BASE, "..", "frontend"))
 DB = os.path.join(BASE, "..", "data", "fenshen.db")
 META_PID = "__meta__"  # 元神私聊在消息表中使用的 project_id
