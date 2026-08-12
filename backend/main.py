@@ -34,6 +34,11 @@ if _MEI:
     BASE = os.path.join(_MEI, "backend") if os.path.isdir(os.path.join(_MEI, "backend")) else _MEI
 FRONTEND = os.path.abspath(os.path.join(BASE, "..", "frontend"))
 DB = os.path.join(BASE, "..", "data", "fenshen.db")
+# v5.4 打包版（PyInstaller）数据目录：临时目录会丢数据 → 落用户目录 ~/.fenshen
+if _MEI:
+    DB_DIR = os.path.join(os.path.expanduser("~"), ".fenshen")
+    os.makedirs(DB_DIR, exist_ok=True)
+    DB = os.path.join(DB_DIR, "fenshen.db")
 META_PID = "__meta__"  # 元神私聊在消息表中使用的 project_id
 
 # ── 元神人格 grounding ─────────────────────────────────────────────
@@ -94,7 +99,7 @@ app = FastAPI(title="分身 v1 后端", version="0.54.0")
 #   2) 校验 Host 头，阻断 DNS rebinding（恶意网页把域名解析到 127.0.0.1）
 #   3) 校验 Origin，阻断跨站 CSRF（恶意网页用 JS 打本地端口）
 #   4) 本地令牌鉴权，令牌只对本机文件可读
-TOKEN_FILE = os.path.join(BASE, "..", "data", ".auth_token")
+TOKEN_FILE = os.path.join(DB_DIR if _MEI else os.path.join(BASE, "..", "data"), ".auth_token")
 ALLOW_LAN = os.environ.get("FENSHEN_ALLOW_LAN") == "1"
 PORT = int(os.environ.get("FENSHEN_PORT", "8002"))
 COOKIE_NAME = "fenshen_token"
@@ -470,7 +475,10 @@ def init_db():
             ("p3", "9percent Token网关", "阻塞 · API 超配额", "red", now),
             ("p4", "应用市场设计", "暂停 · 等待评审", "amber", now),
         ]
-        cur.executemany("INSERT OR IGNORE INTO projects VALUES (?,?,?,?,?)", sample_proj)
+        # v5.4 修复：projects 表列数增长后种子 INSERT 必须显式列名（新库/打包版会崩）
+        cur.executemany(
+            "INSERT OR IGNORE INTO projects (id,name,status,created_at) VALUES (?,?,?,?)",
+            [(p[0], p[1], p[2], p[4]) for p in sample_proj])
         seed_msgs_p1 = [
             ("分身 · 元神", "meta", "项目已成立，已拉起团队：架构师、前端、后端、测试。", None),
             ("分身 · 前端", "agent", "首页 section 重构完成，使用了栅格系统。", "done"),
