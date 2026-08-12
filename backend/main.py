@@ -730,7 +730,7 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None):
 # ── 清理/上下文/长期记忆 常量 ────────────────────────────────────
 BASE_DIR = os.path.dirname(BASE)  # fenshen-v1 项目根目录
 PROTECTED_ROOTS = {"backend", "frontend", "data", "dist-stage", "site", "tests"}
-PROTECTED_NAMES = {"main.py", "index.html", "requirements.txt", "requirements-dist.txt", "README.md", "start.sh"}
+PROTECTED_NAMES = {"main.py", "index.html", "requirements.txt", "requirements-dist.txt", "README.md", "start.sh", "start.bat"}
 CLEANABLE_DIRS = {"__pycache__", ".temp", "tmp", "temp", "cache"}
 CLEANABLE_EXTS = {".pyc", ".pyo", ".log", ".tmp", ".temp", ".swp", ".DS_Store"}
 
@@ -1012,10 +1012,26 @@ def _human_approve_sync(title: str, detail: str, timeout: int = 90):
     # 同时让回归测试可无打扰、确定性地验证危险命令拦截（approval_timeout=2 即命中）。
     if timeout <= 3:
         return False, f"审批超时过短（{timeout}s），已按最安全策略直接拒绝。"
-    if sys.platform != "darwin":
-        return False, "当前系统不支持系统级确认框，已按最安全策略拒绝执行。"
     text = (detail or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", " / ")[:900]
     ttl = (title or "分身请求授权").replace('"', "'")[:80]
+    # v5.4 跨平台：macOS 用 osascript；Windows 用 PowerShell MessageBox（默认按钮=拒绝，subprocess 超时=拒绝）
+    if sys.platform == "win32":
+        script = (
+            f'Add-Type -AssemblyName System.Windows.Forms; '
+            f'$r=[System.Windows.Forms.MessageBox]::Show("{text}","{ttl}",'
+            f'"YesNo","Warning","No"); if($r -eq "Yes"){{"ALLOW"}}else{{"DENY"}}'
+        )
+        try:
+            proc = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                                  capture_output=True, text=True, timeout=timeout + 15)
+            out = (proc.stdout or "").strip()
+            if "ALLOW" in out:
+                return True, "用户已在系统对话框中授权。"
+            return False, "用户拒绝了本次执行（或弹窗超时）。"
+        except Exception as e:
+            return False, f"授权对话框调用失败（{e}），已按最安全策略拒绝。"
+    if sys.platform != "darwin":
+        return False, "当前系统不支持系统级确认框，已按最安全策略拒绝执行。"
     script = (
         f'display dialog "{text}" with title "{ttl}" '
         f'buttons {{"拒绝", "允许执行"}} default button "拒绝" '
@@ -1344,6 +1360,40 @@ async def deploy_project(pid: str, req: Request):
         return {"ok": False, "error": "未识别到产物目录（site/dist/build/out 或 ~/Desktop/项目名）"}
     user_at = f"{user}@{host}" if user else f"root@{host}"
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # v5.4 跨平台：优先用 paramiko（SSH 库，Windows/macOS 通用）；无 paramiko 时 macOS 回退 expect
+    try:
+        import paramiko
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, username=user or "root", password=pwd, timeout=20)
+        # 1) 远端备份
+        ssh.exec_command(f"mkdir -p {path}")[1].read()
+        _, out, err = ssh.exec_command(f"cp -r {path} {path}.bak-{ts} 2>/dev/null; echo BACKUP_OK")
+        backup_out = (out.read().decode() + err.read().decode())
+        if "BACKUP_OK" not in backup_out:
+            ssh.close()
+            return {"ok": False, "error": f"远端备份失败：{backup_out[:100]}"}
+        # 2) 上传产物（顶层文件/目录）
+        sftp = ssh.open_sftp()
+        up, skip = 0, 0
+        for name in os.listdir(src):
+            local = os.path.join(src, name)
+            remote = f"{path.rstrip('/')}/{name}"
+            if os.path.isdir(local):
+                ssh.exec_command(f"mkdir -p {remote}")[1].read()
+                for sub in os.listdir(local):
+                    sftp.put(os.path.join(local, sub), f"{remote}/{sub}")
+                    up += 1
+            else:
+                sftp.put(local, remote)
+                up += 1
+        sftp.close()
+        ssh.close()
+        return {"ok": True, "detail": f"已部署（paramiko）{src} → {user_at}:{path}（备份 {path}.bak-{ts}，上传 {up} 文件）"}
+    except ImportError:
+        pass  # 无 paramiko → 走 expect（仅 macOS）
+    except Exception as e:
+        return {"ok": False, "error": f"paramiko 部署失败：{str(e)[:120]}"}
     # 1) 远端备份旧目录
     rc, out = _expect_cmd(
         f'set timeout 60; spawn ssh -o StrictHostKeyChecking=no {user_at} "mkdir -p {path} && '
