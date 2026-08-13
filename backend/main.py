@@ -3659,9 +3659,12 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
     tasks = conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
     mod_desc = ""
     if mods:
-        mod_desc = "项目模块总览：\n" + "\n".join(
-            f"- {m['name']}（{m['status']} · 负责人 {m['owner_role']}）" for m in mods
-        )
+        active = [m for m in mods if m["status"] != "done"]
+        done_cnt = len(mods) - len(active)
+        mod_desc = "项目模块总览：" + ("\n" + "\n".join(
+            f"- {m['name']}（{m['status']} · 负责人 {m['owner_role']}）" for m in active[:8])) if active else ""
+        if done_cnt:
+            mod_desc += f"\n（另 {done_cnt} 个模块已完成）"
     task_desc = ""
     if tasks:
         doing = [t for t in tasks if t["status"] == "doing"]
@@ -3671,7 +3674,7 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
     # 最近群聊消息（项目级，不含话题消息）
     rows = conn.execute(
         "SELECT sender,kind,text FROM messages WHERE project_id=? AND (topic_id IS NULL OR topic_id='') "
-        "ORDER BY id DESC LIMIT 10", (pid,)
+        "ORDER BY id DESC LIMIT 6", (pid,)
     ).fetchall()
     conn.close()
 
@@ -5060,7 +5063,7 @@ async def _autonomy_loop():
     - autonomy_enabled 默认开启；任务全部 done 后由 _auto_advance_phase 自动流转阶段"""
     while True:
         try:
-            await asyncio.sleep(max(15, int(get_setting("autonomy_interval", "25"))))
+            await asyncio.sleep(max(15, int(get_setting("autonomy_interval", "60"))))
             if get_setting("autonomy_enabled", "1") != "1":
                 continue
             conn = get_db()
