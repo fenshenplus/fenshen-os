@@ -11,6 +11,10 @@ fi
 . .venv/bin/activate 2>/dev/null || true
 # 安全默认：只绑本机 127.0.0.1。局域网访问需 FENSHEN_ALLOW_LAN=1 且带令牌。
 HOST="127.0.0.1"
+if [ "$FENSHEN_ALLOW_LAN" != "1" ] && command -v sqlite3 >/dev/null 2>&1 && [ -f "data/fenshen.db" ]; then
+  LAN_DB=$(sqlite3 data/fenshen.db "SELECT value FROM meta_settings WHERE key='lan_enabled'" 2>/dev/null)
+  [ "$LAN_DB" = "1" ] && FENSHEN_ALLOW_LAN=1
+fi
 if [ "$FENSHEN_ALLOW_LAN" = "1" ]; then
   HOST="0.0.0.0"
   echo "⚠️  局域网模式已开启，访问需令牌（data/.auth_token），仅限可信网络。"

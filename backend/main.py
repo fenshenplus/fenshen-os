@@ -129,9 +129,18 @@ def _load_or_create_token() -> str:
 AUTH_TOKEN = _load_or_create_token()
 
 
+def _lan_mode() -> bool:
+    """局域网模式：环境变量 FENSHEN_ALLOW_LAN=1 或 设置页 lan_enabled=1（v5.5 一键开关）。
+    注意：仅影响鉴权放行；实际监听地址由启动脚本按同一配置决定（见 run.py / start.sh）。"""
+    try:
+        return ALLOW_LAN or get_setting("lan_enabled", "0") == "1"
+    except Exception:
+        return ALLOW_LAN
+
+
 def _host_allowed(host: str) -> bool:
     """Host 头白名单。局域网模式下放行任意 Host，但仍强制令牌校验。"""
-    if ALLOW_LAN:
+    if _lan_mode():
         return True
     hostname = host.split(":")[0].strip().lower()
     return hostname in {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -144,14 +153,14 @@ async def local_guard(request: Request, call_next):
     if not _host_allowed(host):
         return JSONResponse(
             {"ok": False, "error": f"拒绝访问：Host「{host}」不在允许列表。"
-                                   "分身默认只接受本机访问，如需局域网访问请以 FENSHEN_ALLOW_LAN=1 启动。"},
+                                   "分身默认只接受本机访问，如需局域网访问请在设置中开启「局域网访问」。"},
             status_code=403,
         )
     # Origin 校验：只允许同源页面发起的跨域请求（无 Origin 的同源请求正常放行）
     origin = request.headers.get("origin")
     if origin:
         netloc = urlparse(origin).hostname or ""
-        if not ALLOW_LAN and netloc.lower() not in {"127.0.0.1", "localhost", "::1"}:
+        if not _lan_mode() and netloc.lower() not in {"127.0.0.1", "localhost", "::1"}:
             return JSONResponse({"ok": False, "error": "拒绝访问：跨站请求已被阻断。"}, status_code=403)
     # 页面与静态资源：放行，并把令牌以 SameSite=Strict Cookie 下发给本机页面
     if not path.startswith("/api/"):
@@ -1069,7 +1078,8 @@ async def human_approve(title: str, detail: str, timeout: int = 0):
     """
     if timeout <= 0:
         try:
-            timeout = max(5, min(300, int(get_setting("approval_timeout", "90"))))
+            # v5.5 修复：下限与 settings 端点一致（1s）——此前 max(5) 会把 2s 抬到 5s 绕过 ≤3 直接拒绝
+            timeout = max(1, min(300, int(get_setting("approval_timeout", "90"))))
         except ValueError:
             timeout = 90
     return await asyncio.to_thread(_human_approve_sync, title, detail, timeout)
@@ -1103,7 +1113,7 @@ def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
     return {"status": "ok", "version": "0.54.0", "release": "v5.4", "port": PORT, "llm": llm,
-            "bind": "lan" if ALLOW_LAN else "localhost", "approval_mode": approval_mode()}
+            "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
 
 
 @app.get("/api/projects")
@@ -4797,7 +4807,8 @@ def meta_settings_get():
         # v4.0 安全策略（AI 动手前的真人闸门）
         "approval_mode": approval_mode(),                                  # all / danger / off
         "approval_timeout": int(get_setting("approval_timeout", "90")),    # 秒，超时按拒绝
-        "bind": "lan" if ALLOW_LAN else "localhost",
+        "bind": "lan" if _lan_mode() else "localhost",
+        "lan_enabled": get_setting("lan_enabled", "0") == "1",  # v5.5 局域网一键开关
         # v5.2 监控自动兜底：服务端口监控配置 [{name,port,restart_cmd}]
         "services": json.loads(get_setting("services", "[]")),
     }
@@ -4827,6 +4838,9 @@ async def meta_settings_set(req: Request):
         set_setting("watch_paths", json.dumps(paths, ensure_ascii=False))
         # 路径变化 → 重置快照，下次巡检全量对比
         set_setting("watch_snapshot", "{}")
+    # v5.5 局域网一键开关（鉴权层立即生效；监听地址需重启，由启动脚本读取同配置）
+    if "lan_enabled" in data:
+        set_setting("lan_enabled", "1" if data["lan_enabled"] else "0")
     # v5.2 监控自动兜底：服务监控配置 [{name,port,restart_cmd}]
     if "services" in data:
         svcs = data["services"]

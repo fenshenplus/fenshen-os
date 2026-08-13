@@ -35,9 +35,15 @@ if errorlevel 1 (
   )
 )
 
-echo [2/2] 启动分身（127.0.0.1:8002）...
+set "HOST=127.0.0.1"
+rem v5.5：设置页「局域网访问」一键开关（lan_enabled=1）同样启用
+%PY% -c "import sqlite3,os;db=os.path.join('data','fenshen.db');print('1' if os.path.exists(db) and sqlite3.connect(db).execute(\"select value from meta_settings where key='lan_enabled'\").fetchone()==('1',) else '0')" > "%TEMP%\fenshen_lan.txt" 2>nul
+set /p LANDB=<"%TEMP%\fenshen_lan.txt"
+if "%LANDB%"=="1" set "HOST=0.0.0.0"
+
+echo [2/2] 启动分身（%HOST%:8002）...
 start "" http://127.0.0.1:8002
-%PY% -m uvicorn backend.main:app --app-dir "%~dp0" --host 127.0.0.1 --port 8002
+%PY% -m uvicorn backend.main:app --app-dir "%~dp0" --host %HOST% --port 8002
 
 echo.
 echo 分身已退出。按任意键关闭窗口。
