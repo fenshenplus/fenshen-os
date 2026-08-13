@@ -2497,11 +2497,27 @@ META_TOOLS = [
     }
 ]
 # 批次 B / P2-1：工具分级——元神只搭基础设施（只读 + 搭建，不直接写文件），角色才动手（含写文件）。
+# v5.6 借鉴 DeepSeek Harness「工作区限定」：角色执行时注入项目工作区（contextvar，
+# 并发任务各自独立）。write_file 越界 → 拒绝并引导写工作区（除非 approval_mode=off 显式放行）。
+import contextvars
+_TOOL_WORKDIR: contextvars.ContextVar = contextvars.ContextVar("tool_workdir", default="")
+
+
+def _tool_workdir() -> str:
+    return _TOOL_WORKDIR.get() or ""
+
+
+def _project_workdir(proj_name: str) -> str:
+    """项目工作区：与产物识别一致，默认 ~/Desktop/<项目名>。"""
+    name = (proj_name or "未命名项目").strip().strip("/")
+    return os.path.expanduser(f"~/Desktop/{name}")
+
+
 WRITE_FILE_TOOL = {
     "type": "function",
     "function": {
         "name": "write_file",
-        "description": "在用户电脑上写入文本文件（覆盖已有内容）。路径限制在用户主目录下，禁止写入敏感目录。文件内容上限 50KB。当用户要求创建/修改文档、代码、配置时使用。",
+        "description": "在用户电脑上写入文本文件（覆盖已有内容）。路径限制在用户主目录下，禁止写入敏感目录。文件内容上限 50KB。当用户要求创建/修改文档、代码、配置时使用。若处于项目执行上下文，文件必须写入该项目工作区目录内（越界会被拒绝）。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -2512,7 +2528,32 @@ WRITE_FILE_TOOL = {
         }
     }
 }
-ROLE_TOOLS = META_TOOLS + [WRITE_FILE_TOOL]  # 角色工具集（可写文件）
+# v5.6 PTC 简化版：批处理工具——一次往返组合多步工具（省 LLM 轮次与 token）
+RUN_BATCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "run_batch",
+        "description": "把多步工具操作合并成一次调用（节省轮次与 token）。传入 JSON 数组，每项 {tool, args}；支持工具：read_file / write_file / list_files / search_files / exec_command。按顺序执行并返回每步结果。写文件同样须在项目工作区内。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "args": {"type": "object"}
+                        },
+                        "required": ["tool", "args"]
+                    }
+                }
+            },
+            "required": ["steps"]
+        }
+    }
+}
+ROLE_TOOLS = META_TOOLS + [WRITE_FILE_TOOL, RUN_BATCH_TOOL]  # 角色工具集（可写文件 + 批处理）
 
 
 def _call_provider_tools(provider: str, base: str, key: str, model: str, history: list, system_prompt: str, tools: list):
@@ -2620,6 +2661,30 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
                 if not ok_approved:
                     return f"⛔ 未获授权，文件未写入：{why}"
             return await _run_file_tool(name, args, agent_id)
+        elif name == "run_batch":
+            # v5.6 PTC 简化版：批量执行工具序列（一次往返省轮次/token）。写文件受工作区限定。
+            steps = args.get("steps") or []
+            if not isinstance(steps, list) or not steps:
+                return "⛔ run_batch 需要 steps 数组"
+            if len(steps) > 10:
+                return "⛔ run_batch 单次最多 10 步"
+            lines = []
+            for i, st in enumerate(steps[:10]):
+                if not isinstance(st, dict):
+                    lines.append(f"第{i+1}步：跳过（非对象）")
+                    continue
+                tool, a = st.get("tool", ""), st.get("args") or {}
+                if tool not in ("read_file", "write_file", "list_files", "search_files", "exec_command"):
+                    lines.append(f"第{i+1}步 [{tool}]：不支持的工具")
+                    continue
+                try:
+                    if tool == "exec_command":
+                        lines.append(f"第{i+1}步 [exec] {await _run_meta_tool(tool, a, agent_id)}")
+                    else:
+                        lines.append(f"第{i+1}步 [{tool}] {await _run_file_tool(tool, a, agent_id)}")
+                except Exception as e:
+                    lines.append(f"第{i+1}步 [{tool}] 异常：{str(e)[:200]}")
+            return "\n".join(lines)[:4000]
         return f"❌ 未知工具 {name}"
     except subprocess.TimeoutExpired:
         return "⛔ 命令执行超时 30s，已终止"
@@ -2690,6 +2755,12 @@ def _write_file_tool(path: str, content: str):
     real = _safe_file_path(path)
     if not real:
         return "⛔ 路径不安全或被禁止（仅限用户主目录下，避开 .ssh/.git/系统目录等）"
+    # v5.6 借鉴 Harness「工作区限定」：角色执行时写文件默认限定在项目工作区内（越界拒绝，除非审批关闭）
+    wd = _tool_workdir()
+    if wd and not (real == wd or real.startswith(wd.rstrip(os.sep) + os.sep)):
+        if approval_mode() != "off":
+            return (f"⛔ 写文件越界：目标不在项目工作区内。\n工作区：{wd}\n请求路径：{path}\n"
+                    f"请把产出写入工作区目录（这是分身的安全边界）。")
     if len(content) > FILE_MAX_WRITE:
         return f"⛔ 内容超过 {FILE_MAX_WRITE // 1024}KB 上限"
     try:
@@ -3779,7 +3850,12 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
         _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
 
         # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
-        role_sys_ctx = role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
+        # v5.6 工作区限定（借鉴 Harness）：角色执行期注入项目工作区（contextvar 并发隔离）
+        workdir = _project_workdir(proj["name"])
+        _TOOL_WORKDIR.set(workdir)
+        role_sys_ctx = (role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
+                        f"\n【工作区】所有写文件必须写入此目录（越界会被拒绝）：{workdir}"
+                        f"\n多步文件操作建议用 run_batch 一次完成（省 token）。")
         if done_criteria:
             role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
         role_hist = [
