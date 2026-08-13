@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import urllib.error
 import urllib.request
 
@@ -232,6 +233,19 @@ def test_batch_b():
           str(h.get("approval_mode")))
     check("批次B：release 版本 v5.5", isinstance(h, dict) and h.get("release") == "v5.5",
           str(h.get("release")) + "/" + str(h.get("version")))
+
+    # ── v5.6 借鉴 DeepSeek Harness：工作区限定 + PTC 批处理 ──
+    from backend.main import _write_file_tool, ROLE_TOOLS, _TOOL_WORKDIR, _project_workdir
+    _TOOL_WORKDIR.set(_project_workdir("冒烟-工作区"))
+    r_ws = _write_file_tool("~/Desktop/冒烟-越界.txt", "x")
+    check("v5.6：工作区越界写被拦截", "越界" in r_ws and "工作区" in r_ws, r_ws[:60])
+    r_ok = _write_file_tool(os.path.join(_project_workdir("冒烟-工作区"), "a.txt"), "ok")
+    check("v5.6：工作区内写放行", "[已写入]" in r_ok, r_ok[:60])
+    _TOOL_WORKDIR.set("")
+    r_plain = _write_file_tool("~/Desktop/冒烟-普通.txt", "y")
+    check("v5.6：无工作区上下文（元神）原行为", "[已写入]" in r_plain, r_plain[:60])
+    _role_tool_names = [t.get("function", {}).get("name") for t in ROLE_TOOLS]
+    check("v5.6：角色工具集含 run_batch（PTC）", "run_batch" in _role_tool_names, ", ".join(_role_tool_names))
 
     # P2-2 元神搭建基础设施：创建项目（带 roles）→ 群聊应有 bootstrap 开场消息
     code, b = call("POST", "/api/projects",
