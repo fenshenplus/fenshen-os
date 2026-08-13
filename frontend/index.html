@@ -279,7 +279,7 @@
       <div class="navitem m-more" data-sec="skills"><span class="dotk"></span>技能库</div>
       <div class="navitem m-more" data-sec="experiences"><span class="dotk"></span>经验库</div>
       <div class="navitem m-more" data-sec="evolution"><span class="dotk"></span>进化中心</div>
-      <div class="navitem m-more" data-sec="market"><span class="dotk"></span>应用市场</div>
+      <div class="navitem m-more" data-sec="market" style="display:none"><span class="dotk"></span>应用市场</div>
       <!-- v5.0 移动端：更多抽屉入口（手机底部第 4 项） -->
       <div class="navitem m-more-btn" id="navMore" onclick="openMobileMore()"><span class="dotk"></span>更多</div>
       <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
@@ -605,10 +605,7 @@
       <div class="section" id="sec-skills">
         <div style="padding:16px 20px;flex:1;overflow-y:auto">
           <div class="grid-head"><span class="t">技能库</span><span class="rl" style="font-size:11px;color:var(--gray-400)">可复用的标准化工作流，跨项目共享 · 支持版本迭代与回滚</span></div>
-          <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
-            <button class="btn sm meta" onclick="distillSkills(this)">从对话提炼</button>
-            <button class="btn sm" onclick="openSkillEdit()">手动添加</button>
-          </div>
+          <div style="font-size:11px;color:var(--gray-500);margin:12px 0">预装 12 项 coding 核心技能（必要且充分，自动可用）</div>
           <div id="skillList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
           <!-- 技能编辑弹窗 -->
           <div class="mask" id="skillMask" style="display:none">
@@ -1347,6 +1344,14 @@ async function loadMetaBoard(){
     +'<button class="btn sm" onclick="savePatrol()">保存监控</button>'
     +'</div>'
     +'<div style="font-size:10px;color:var(--gray-400);margin-top:4px">巡检时对比快照，文件新增/修改/删除 → 元神私聊汇报（与自动巡检同频率）</div>'
+    +'</div>'
+    +'<div style="border:.5px solid var(--gray-200);border-radius:10px;padding:10px 12px;background:var(--gray-50);margin-top:8px">'
+    +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><b style="font-size:12px">手机远程访问</b>'
+    +'<span style="font-size:10px;color:var(--gray-400)">开启后同局域网手机/平板可访问（需带令牌，重启生效）</span></div>'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    +'<label style="display:flex;align-items:center;gap:5px;font-size:12px"><input type="checkbox" id="lanEnabled" onchange="saveLan()"> 开启局域网访问</label>'
+    +'<span id="lanStatus" style="font-size:10px;color:var(--gray-400)"></span>'
+    +'</div><div style="font-size:10px;color:var(--gray-400);margin-top:4px">手机打开 http://电脑IP:8002 · 数据仍只存本机，访问需令牌</div>'
     +'</div></div></div>';
   el.innerHTML=html;
   // 回填已保存的巡检设置
@@ -1361,7 +1366,20 @@ async function loadPatrolSettings(){
     const wp=document.getElementById('watchPaths'); if(wp) wp.value=(s.watch_paths||[]).join(', ');
     const st=document.getElementById('patrolStatus');
     if(st) st.textContent=s.patrol_enabled?`已启用 · 每 ${s.patrol_interval} 分钟`:'未启用（默认关闭，你可随时打开）';
+    const lan=document.getElementById('lanEnabled'); if(lan) lan.checked=!!s.lan_enabled;
+    const ls=document.getElementById('lanStatus');
+    if(ls) ls.textContent=s.lan_enabled?'已开启 · 重启后生效（手机可访问）':'关闭（默认仅本机）';
   }catch(e){}
+}
+// v5.5 局域网一键开关：鉴权层即时生效；监听地址重启后生效（启动脚本读取同配置）
+async function saveLan(){
+  const on=document.getElementById('lanEnabled').checked;
+  try{
+    const r=await fetch('/api/meta/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lan_enabled:on})});
+    const j=await r.json();
+    if(j.ok&&!j.error){ toast(on?'✅ 已开启局域网（重启后手机可访问）':'已关闭局域网','ok'); loadPatrolSettings(); }
+    else toast('❌ '+(j.error||'保存失败'),'err');
+  }catch(e){ toast('请求失败：'+errText(e)); }
 }
 async function savePatrol(){
   const en=document.getElementById('patrolEnabled').checked;
@@ -1380,10 +1398,12 @@ async function savePatrol(){
 /* ── 成立项目向导 ── */
 let wStep=1; let modRows=[]; let wTemplates=[];
 function defaultModRows(){
+  // v5.5 战略修正：通用 coding 骨架（取代电商模板）——聚焦编码全流程
   return [
-    {name:'登录/注册', owner:'后端'},
-    {name:'支付', owner:'后端'},
-    {name:'内容/题库列表', owner:'前端'},
+    {name:'需求澄清与方案设计', owner:'后端'},
+    {name:'后端实现', owner:'后端'},
+    {name:'前端实现', owner:'前端'},
+    {name:'测试与验收', owner:'测试'},
   ];
 }
 async function loadTemplates(){
@@ -1426,8 +1446,8 @@ async function saveCurAsTemplate(){
   }catch(e){ toast('保存失败：'+e); }
 }
 function openWizard(){ 
-  // v5.1 软门槛：元神引导未完成时，先引导培养元神
-  if(window.__ONB_PENDING__){ checkOnboarding(); toast('先完成元神培养（3 步），即可解锁建项目'); return; }
+  // v5.5 战略修正：首启不阻塞——元神培养为可选背景动作，新用户直接可建项目
+  if(window.__ONB_PENDING__){ window.__ONB_PENDING__=false; toast('💡 可以边干活边培养元神（头像里随时继续）'); }
   wStep=1; document.getElementById('wName').value=''; document.getElementById('wGoal').value=''; document.getElementById('wStandards').value='';
   document.getElementById('wz1').style.display=''; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display='none';
   document.getElementById('ws1').classList.add('on'); document.getElementById('ws2').classList.remove('on'); document.getElementById('ws3').classList.remove('on');
@@ -2178,9 +2198,6 @@ async function loadSkills(){
         ${steps?`<div style="background:var(--gray-50);border-radius:8px;padding:8px 12px;margin-top:6px;font-size:12px">${steps}</div>`:''}
         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
           <button class="btn sm" onclick="toggleSkill(${s.id})">${s.enabled?'停用':'启用'}</button>
-          <button class="btn sm" onclick="openSkillEdit(${s.id})">编辑</button>
-          <button class="btn sm" onclick="openSkillVersions(${s.id})">版本</button>
-          <button class="btn sm ghost" onclick="deleteSkill(${Number(s.id)})">删除</button>
         </div>
       </div>`; }).join('');
   }catch(e){ el.textContent='加载失败'; }
@@ -2379,7 +2396,10 @@ const ONB_STEPS=[
 async function checkOnboarding(){
   try{
     const d=await apiJson('/api/meta/onboarding');
-    if(d.status==='pending'){ window.__ONB_PENDING__=true; openOnboarding(d); }
+    if(d.status==='pending'){ window.__ONB_PENDING__=true;
+      // v5.5 战略修正：不弹强制引导，只给一次性轻提示条（元神培养可选，不阻塞）
+      setTimeout(()=>{ if(window.__ONB_PENDING__) toast('💡 点顶部「元神」可培养你的数字分身（可选，不耽误干活）'); }, 4000);
+    }
     else window.__ONB_PENDING__=false;
   }catch(e){}
 }

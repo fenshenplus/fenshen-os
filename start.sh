@@ -27,6 +27,11 @@ fi
 # v3.9 之前这里写死 --host 0.0.0.0，等于在同一 WiFi 下开了个后门——
 # 别人扫到 8002 端口就能调用能执行 shell 的接口，审查中已实测可接管整台电脑。
 HOST="127.0.0.1"
+# v5.5：设置页「局域网访问」一键开关（lan_enabled=1）同样启用，无需环境变量
+if [ "$FENSHEN_ALLOW_LAN" != "1" ] && command -v sqlite3 >/dev/null 2>&1 && [ -f "data/fenshen.db" ]; then
+  LAN_DB=$(sqlite3 data/fenshen.db "SELECT value FROM meta_settings WHERE key='lan_enabled'" 2>/dev/null)
+  [ "$LAN_DB" = "1" ] && FENSHEN_ALLOW_LAN=1
+fi
 if [ "$FENSHEN_ALLOW_LAN" = "1" ]; then
   HOST="0.0.0.0"
   echo "⚠️  局域网模式已开启：同一网络的设备可访问本机分身。"
