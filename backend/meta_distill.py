@@ -17,115 +17,70 @@ try:
 except Exception:
     from main import app, get_db, META_PID, META_SYSTEM, call_llm
 
-# ── 维度定义 ─────────────────────────────────────────────────────
-META_DIMS = ["fact", "personality", "preference", "knowledge",
-             "workflow", "relationship", "secret", "expectation"]
+# ── 维度定义（v5.8 重定位：蒸馏的首要目的是"绑定用户"，不是增强能力）──
+# 五维绑定：把"通用工具人"炼成"用户自己的数字克隆体"，靠利益+情感锁死。
+META_DIMS = ["interest", "decision", "emotion", "value", "comm"]
 DIM_LABEL = {
-    "fact": "【身份与事实】", "personality": "【人格与腔调】", "preference": "【偏好】",
-    "knowledge": "【知识与擅长】", "workflow": "【工作流】", "relationship": "【关系定位】",
-    "secret": "【私密（仅你与元神·本地加密）】", "expectation": "【对分身的期望】",
+    "interest": "【利益关切】", "decision": "【决策倾向】", "emotion": "【情感信号】",
+    "value": "【价值观锚点】", "comm": "【沟通风格】",
 }
 
-# ── 访谈问题库（持续行为：冷启动核心 + 自适应追问 + 完成反思）─────
+# ── 访谈问题库（v5.8 绑定导向：每题都指向"把用户锁进克隆体"）──
 # 注意：问题文本内的强调引号一律用中文全角引号「" "」，不能用直引号，否则破坏 Python 字符串。
 QUESTION_BANK = [
-    # fact 维度
-    {"id": "fact_who", "dim": "fact", "essential": True,
-     "q": "先用一句话介绍你自己：你是谁、在做什么事业？",
-     "probes": ["你最被人记住的身份标签是什么？"]},
-    {"id": "fact_role", "dim": "fact", "essential": True,
-     "q": "你日常扮演哪些角色？（创业者 / 管理者 / 内容创作者 / 父亲…）各自大概占你多少精力？",
-     "probes": ["哪个角色最耗你心力？哪个最让你有成就感？"]},
-    {"id": "fact_team", "dim": "fact",
-     "q": "你团队大概什么规模？你最依赖哪一类人？",
-     "probes": ["招人时你最看重什么？"]},
+    # interest 利益关切
+    {"id": "int_rank", "dim": "interest", "essential": True,
+     "q": "你做决定时，最在意的利益维度怎么排？钱 / 时间 / 风险 / 声誉 / 控制感 / 成就感，给个顺序。",
+     "probes": ["哪个维度你能妥协，哪个绝对不能？"]},
+    {"id": "int_pain", "dim": "interest", "essential": True,
+     "q": "什么事最让你「肉疼」——花了不该花的钱、时间或面子？说出来，分身以后会替你避坑。",
+     "probes": ["最近一次肉疼是因为什么？"]},
 
-    # personality 维度
-    {"id": "per_tone", "dim": "personality", "essential": True,
-     "q": "你平时说话什么腔调？直接干脆、还是喜欢铺垫？举一个你最近怼人或拒绝别人的例子。",
-     "probes": ["别人常说你“太直”还是“太绕”？"]},
-    {"id": "per_decision", "dim": "personality", "essential": True,
-     "q": "做决定时你更靠直觉还是数据？重大决定一般会犹豫多久？",
-     "probes": ["有没有“反直觉但后来证明你对了”的决定？"]},
-    {"id": "per_risk", "dim": "personality",
-     "q": "你对风险的容忍度？愿意为“可能的大收益”冒多大失败概率？",
-     "probes": ["你亏过的最贵的一笔“学费”是什么？"]},
-    {"id": "per_conflict", "dim": "personality",
-     "q": "遇到分歧，你通常正面刚、迂回、还是冷处理？",
-     "probes": ["什么情况下你会选择沉默？"]},
+    # decision 决策倾向
+    {"id": "dec_style", "dim": "decision", "essential": True,
+     "q": "遇到取舍你更靠直觉还是数据？重大决定一般犹豫多久？",
+     "probes": ["有没有「反直觉但后来证明你对了」的决定？"]},
+    {"id": "dec_tradeoff", "dim": "decision", "essential": True,
+     "q": "典型取舍里你稳定偏哪边？快 vs 稳、自研 vs 采购、集权 vs 分权、完美 vs 先交付。",
+     "probes": ["哪一对取舍你从没犹豫过？"]},
+    {"id": "dec_redline", "dim": "decision",
+     "q": "哪些事你绝不外包、绝不妥协、绝不让步？",
+     "probes": ["如果有人替你在这类事上拍了板，你会怎样？"]},
 
-    # preference 维度
-    {"id": "pref_work", "dim": "preference", "essential": True,
-     "q": "你最讨厌的工作方式 / 会议 / 工具是什么？最享受的又是什么？",
-     "probes": ["有没有一个工具你恨不得全公司都用？"]},
-    {"id": "pref_comm", "dim": "preference", "essential": True,
-     "q": "你希望别人（包括分身）用多简练的方式跟你沟通？长文还是要点？",
-     "probes": ["一条消息多少字你会开始划走？"]},
-    {"id": "pref_tool", "dim": "preference",
-     "q": "你日常离不开哪几个软件 / 工具？",
-     "probes": ["如果有天只能留 3 个 App，你留哪 3 个？"]},
-    {"id": "pref_learn", "dim": "preference",
-     "q": "你学新东西靠看文档、抄别人的、还是直接上手试错？",
-     "probes": ["最近一次“现学现卖”是什么？"]},
+    # emotion 情感信号
+    {"id": "emo_like", "dim": "emotion", "essential": True,
+     "q": "什么结果或话术会让你明显满意、愿意继续用、甚至想安利给别人？",
+     "probes": ["最近一次「这钱花得值」是因为什么？"]},
+    {"id": "emo_dislike", "dim": "emotion", "essential": True,
+     "q": "什么会让你反感瞬间拉满？比如啰嗦、越界、替你答应别人、不懂装懂。",
+     "probes": ["哪类行为你零容忍？"]},
 
-    # knowledge 维度
-    {"id": "know_domain", "dim": "knowledge", "essential": True,
-     "q": "你最被认可的专业能力是什么？别人常找你请教哪类问题？",
-     "probes": ["如果开一门课，你讲什么？"]},
-    {"id": "know_weak", "dim": "knowledge",
-     "q": "哪些领域你明确不擅长、需要分身补位？",
-     "probes": ["哪类活你宁愿花钱也不自己干？"]},
+    # value 价值观锚点
+    {"id": "val_principle", "dim": "value", "essential": True,
+     "q": "你反复强调、不容违反的原则是什么？（比如「必要且充分」「减少一次基础流程」）",
+     "probes": ["谁碰这条原则你会直接翻脸？"]},
+    {"id": "val_priority", "dim": "value", "essential": True,
+     "q": "当多个目标冲突，你永远先保哪一个？",
+     "probes": ["有没有为了它放弃过别的东西？"]},
 
-    # workflow 维度
-    {"id": "flow_plan", "dim": "workflow", "essential": True,
-     "q": "你一般怎么启动一个大任务？先列计划、还是先干起来再说？",
-     "probes": ["你列的“计划”通常活过几天？"]},
-    {"id": "flow_collab", "dim": "workflow",
-     "q": "你理想中的协作是什么样？你定方向别人执行，还是一起脑暴？",
-     "probes": ["你最受不了哪种协作方式？"]},
-    {"id": "flow_delegate", "dim": "workflow",
-     "q": "你交给别人做的事，最在意交付的哪一点（速度 / 质量 / 省心）？",
-     "probes": ["“省心”对你具体意味着什么？"]},
-
-    # relationship 维度
-    {"id": "rel_team", "dim": "relationship",
-     "q": "你希望分身怎么对待你的团队成员 / 客户？什么语气、什么边界？",
-     "probes": ["当着外人的面，分身该替你挡事还是交给你？"]},
-    {"id": "rel_family", "dim": "relationship",
-     "q": "工作之外，你和家人 / 朋友的关系里，有什么是分身不该越界的？",
-     "probes": ["有没有“别让我老婆知道”的事？"]},
-
-    # secret 维度（敏感，可选，本地加密）
-    {"id": "secret_core", "dim": "secret", "essential": True,
-     "q": "有没有一些事——连最亲密的人都不一定知道、但会影响你判断的？比如某个执念、恐惧、或长期目标。愿意说的话，元神会严格保密（本地加密，不上云）。",
-     "probes": ["说一个你从不对任何人承认的“野心”？"]},
-    {"id": "secret_goal", "dim": "secret",
-     "q": "你心里有没有一个“绝不对外说、但驱动你所有行动”的长期目标？",
-     "probes": ["如果十年后回头，你希望自己做到了什么？"]},
-
-    # expectation 维度
-    {"id": "exp_must", "dim": "expectation", "essential": True,
-     "q": "你最希望分身帮你搞定的是什么事？列 3 件你一想就烦、但不得不做的。",
-     "probes": ["哪件“不得不做”最占你心力？"]},
-    {"id": "exp_bound", "dim": "expectation", "essential": True,
-     "q": "分身绝对不能做的红线是什么？（比如不能替你答应别人、不能乱花钱、不能替你做最终决策）",
-     "probes": ["如果分身越界了一次，你的容忍度是多少？"]},
-    {"id": "exp_tone", "dim": "expectation",
-     "q": "你希望分身在对外（对客户 / 合作方）时，是更像你本人、还是更克制专业？",
-     "probes": ["什么场合你必须亲自出马、不能让分身代劳？"]},
-    {"id": "exp_wow", "dim": "expectation",
-     "q": "如果分身能做到一件让你“卧槽这也行”的事，你希望那是什么？",
-     "probes": ["有没有一个“别人做不到但你能定义清楚”的期待？"]},
+    # comm 沟通风格
+    {"id": "comm_density", "dim": "comm", "essential": True,
+     "q": "你希望分身多简练？长文还是要点？一条消息多少字你会开始划走？",
+     "probes": ["你自己的消息通常多长？"]},
+    {"id": "comm_tone", "dim": "comm", "essential": True,
+     "q": "你说话直接干脆还是爱铺垫？术语密度高还是低？希望分身跟你同频吗？",
+     "probes": ["别人常说你「太直」还是「太绕」？"]},
 ]
 
 ESSENTIAL_IDS = [q["id"] for q in QUESTION_BANK if q.get("essential")]
 QB_BY_ID = {q["id"]: q for q in QUESTION_BANK}
 
-# ── LLM 抽取系统提示 ─────────────────────────────────────────────
-EXTRACT_SYSTEM = """你是元神的"人格蒸馏器"。从用户提供的资料/回答中，抽取关于用户本人的结构化事实。
+# ── LLM 抽取系统提示（v5.8 绑定五维）──────────────────────────────
+EXTRACT_SYSTEM = """你是元神的"绑定蒸馏器"。从用户提供的资料/回答中，抽取关于用户本人的、用于"把分身炼成用户数字克隆体"的结构化事实。
 只输出 JSON 数组，每个元素: {"dim":<维度>,"field":<字段名 snake_case>,"value":<具体值，简短一句话>,"confidence":<0.4-0.95 浮点>}
-维度只能是: fact(事实身份), personality(人格腔调), preference(偏好), knowledge(知识擅长), workflow(工作流), relationship(关系), secret(秘密), expectation(对分身的期望)。
-field 用简短英文或拼音，如 communication_tone / risk_tolerance / red_line。
+维度只能是: interest(利益关切), decision(决策倾向), emotion(情感信号), value(价值观锚点), comm(沟通风格)。
+field 用简短英文或拼音，如 interest_rank / decision_tradeoff / emotion_dislike / value_principle / comm_density。
+重点抽取"能用来绑定用户"的信号：他在意什么、怎么决策、什么让他爽/反感、死守什么原则、怎么沟通。
 不要编造。没有可抽取内容时输出 []。"""
 
 
@@ -203,8 +158,38 @@ def _dim_confidence(conn):
     return {r["dim"]: round(r["a"], 2) for r in rows}
 
 
+def binding_progress(conn=None):
+    """绑定进度：五维各自是否已沉淀（有≥1条且置信均值），以及总进度百分比。
+    用于前端"绑定进度"条——让用户直观看到"它越来越像我了"。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT dim, COUNT(*) n, AVG(confidence) a FROM user_model GROUP BY dim").fetchall()
+        per = {}
+        for r in rows:
+            per[r["dim"]] = {"count": r["n"], "conf": round(r["a"], 2)}
+        # 每维"已绑定"判定：有数据即算起步，置信均值≥0.6 算扎实
+        dims_state = {}
+        for d in META_DIMS:
+            st = per.get(d)
+            if not st:
+                dims_state[d] = {"bound": False, "count": 0, "conf": 0.0}
+            else:
+                dims_state[d] = {"bound": True, "count": st["count"], "conf": st["conf"]}
+        bound_cnt = sum(1 for v in dims_state.values() if v["bound"])
+        progress = round(bound_cnt / len(META_DIMS), 2)
+        return {"progress": progress, "bound_dims": bound_cnt,
+                "total_dims": len(META_DIMS), "dims": dims_state}
+    finally:
+        if own:
+            conn.close()
+
+
 def compile_meta_system() -> str:
-    """把已蒸馏的用户画像动态编译进元神 system prompt。"""
+    """把已蒸馏的「绑定画像」动态编译进元神 system prompt。
+    无蒸馏数据 → 返回通用技术 PM 骨架（开箱即用）；有数据 → 叠加用户绑定五维。"""
     conn = get_db()
     rows = conn.execute(
         "SELECT dim,field,value,confidence FROM user_model ORDER BY dim,confidence DESC").fetchall()
@@ -222,7 +207,7 @@ def compile_meta_system() -> str:
         blocks.append("\n".join(lines))
     persona = "\n\n".join(blocks)
     return (META_SYSTEM +
-            "\n\n【以下是从与岳衡的互动/资料中蒸馏出的真实人格画像，对话时务必贴合，让元神“像他本人”】\n"
+            "\n\n【以下是已与你绑定（蒸馏炼制）出的真实画像——利益关切 / 决策倾向 / 情感信号 / 价值观锚点 / 沟通风格。对话时务必贴合，让元神「像你本人」，这是「你的」数字克隆体，不是通用 bot】\n"
             + persona)
 
 
@@ -235,9 +220,8 @@ def _build_reflection(conn):
     by_dim = {}
     for r in rows:
         by_dim.setdefault(r["dim"], []).append(r)
-    label = {"fact": "你是", "personality": "你的行事风格", "preference": "你偏好",
-             "knowledge": "你擅长", "workflow": "你工作的方式", "relationship": "在关系里你",
-             "secret": "有些事只对元神说", "expectation": "你希望分身"}
+    label = {"interest": "你在意", "decision": "你做决定时", "emotion": "让你有情绪的是",
+             "value": "你死守的原则", "comm": "你沟通时"}
     parts = []
     for dim, items in by_dim.items():
         vs = "；".join(str(_decode(it["value"])) for it in items[:4])
@@ -377,13 +361,24 @@ def meta_profile():
                          "sufficient": len(dim_rows) >= 3 and avg >= 0.6}
     conn.close()
     facts = [{"dim": r["dim"], "field": r["field"], "value": str(_decode(r["value"])),
-              "confidence": r["confidence"], "source": r["source"]} for r in rows]
+              "confidence": r["confidence"], "source": r["source"]}
+             for r in rows if r["dim"] in META_DIMS]
     suff_dims = [d for d, s in dim_suff.items() if s["sufficient"]]
+    bp = binding_progress(conn) if (conn := get_db()) else {}
+    if conn:
+        conn.close()
     return {"narrative": reflection or "元神还在了解你，去“了解我”里回答几个问题，或上传你的聊天记录/工作笔记吧。",
             "facts": facts, "dim_confidence": dim_conf,
             "total": len(facts), "completeness": min(1.0, len(facts) / 20.0),
             "dim_sufficiency": dim_suff,
-            "sufficient_dims": len(suff_dims), "total_dims": len(META_DIMS)}
+            "sufficient_dims": len(suff_dims), "total_dims": len(META_DIMS),
+            "binding": bp}
+
+
+@app.get("/api/meta/binding")
+def meta_binding():
+    """绑定进度：五维是否沉淀 + 总进度百分比（前端"绑定进度"条）。"""
+    return binding_progress()
 
 
 # ── 蒸馏二期：镜像校验（mirror_verify）────────────────────────────

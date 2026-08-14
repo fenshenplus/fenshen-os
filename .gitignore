@@ -20,3 +20,8 @@ dist-stage/.venv/
 # 官网安装包（大文件，不在仓库维护）
 site/*.zip
 site/*.dmg
+
+# PyInstaller 构建产物（不入库）
+dist/
+build/
+*.spec

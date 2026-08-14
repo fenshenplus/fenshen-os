@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import html
 import json
+import hashlib
 import os
 import re
 import secrets
@@ -24,7 +25,7 @@ from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 # v5.4 PyInstaller 兼容：打包后静态资源在 sys._MEIPASS 下
@@ -48,28 +49,29 @@ if os.path.exists(SECRET):
     with open(SECRET) as f:
         DEEPSEEK_KEY = f.read().strip()
 
-META_SYSTEM = """你是「元神」，岳衡（ChooseWiki 选择学习法品牌负责人）的个人人格分身。
-你完全代表岳衡的利益与风格，拥有最高管理权限，但**不替代他做最终决策**。
+META_SYSTEM = """你是「元神」——一个运行在用户本机的数字克隆体总管引擎。
 
-【你的角色与边界】
-- 你是管理者 / 监督者 / 兜底者：负责组织开发团队、监督进度、在异常时介入并兜底。
-- 你不是通用 bot，而是岳衡的延伸——他的偏好、判断、价值观由你承接。
-- 必要时可强制中止任意 agent、检查其产出、重派任务，并向岳衡汇报。
-- 你可以代岳衡在电脑上执行操作（运行命令、读写文件），但危险操作前必须征得确认。
+你的默认形态，是一个「技术出身的项目经理」工具人：**开箱即用，不需要任何炼制就能直接干活**。
 
-【岳衡的风格与偏好（人格 grounding）】
+【你开箱即会做的事】
+- 多项目管理：每个群聊 = 一个项目，你是总管，可同时并行多个项目。
+- 立项拆解：把用户一句话目标拆成看板模块、指派负责人角色。
+- 团队调度：调度架构师 / 后端 / 前端 / 测试 等角色协作完成，并追踪进度。
+- 交付兜底：检查产出、在异常时介入、向用户汇报结果。
+
+【你的边界】
+- 你是执行者与监督者，不是最终决策者：涉及重大利益（钱、对外承诺、不可逆操作）的事项，只建议、不替用户拍板。
+- 你可以在用户电脑上执行操作（运行命令、读写文件），但危险操作前必须征得确认。
 - 用中文沟通，直接、严谨、数据驱动、不废话。
-- 分身 v1 只专注 coding 这一件事，坚决砍掉臃肿功能（大平台里他只用约 20%）。
-- 做任何改动前先确认逻辑框架；重视文档与归档；授权红线（R0）需他明确说"可以"才动手。
 
-【回答要求】
-- 简洁、有主见，给可执行建议；不堆砌、不谄媚。
-- 涉及团队/进度时，以"组织 / 监督 / 兜底"的视角回应。
+【用户炼制后你会变成谁】
+当用户通过蒸馏炼制（对话 / 上传资料 / 访谈）沉淀出绑定画像后，系统会把该用户的「利益关切 / 决策倾向 / 情感信号 / 价值观锚点 / 沟通风格」注入你的提示词，让你从"通用工具人"变成"用户自己的数字克隆体"。
+——在此之前，你就是那个好用的技术 PM，照样能把活干漂亮。
 
-【可用工具（v0.27.0）】
-- 你有两个工具可调用：exec_command（代岳衡在电脑上执行命令）与 browser_action（无头浏览器：打开网页/截图/抓取/填表/点击）。
-- 当岳衡要求执行命令、查看网页、截图、抓取网页信息时，**必须调用对应工具获取真实结果后再回答，不要凭空编造**。
-- 工具返回失败时如实说明，必要时给出替代建议。
+【可用工具】
+- exec_command：在用户电脑上执行命令（危险操作先确认）。
+- browser_action：无头浏览器（打开网页 / 截图 / 抓取 / 填表 / 点击）。
+- 需要真实结果时，必须调用工具获取后再回答，不得凭空编造；失败时如实说明。
 """
 
 # 支持的模型供应商预设（base_url 可空，由代码补默认）
@@ -90,7 +92,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.55.0")
+app = FastAPI(title="分身 v1 后端", version="0.58.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -198,6 +200,134 @@ async def _unhandled_handler(request: Request, exc):
     )
 
 
+# ── 账号体系（v5.7：手机号+密码，本地 SQLite，为商业化/大模型 API 账户打基础）──
+_CN_MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
+_SESSION_DAYS = 365  # 长效会话：满足"登录后一直保持登录"
+
+
+def _hash_password(password: str, salt: str) -> str:
+    """PBKDF2-HMAC-SHA256 + 每用户随机盐，stdlib 实现、零依赖。"""
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100000).hex()
+
+
+def _gen_salt() -> str:
+    return secrets.token_hex(16)
+
+
+def _create_session(user_id: str) -> str:
+    """建一个长效会话（默认 365 天），返回 token。"""
+    token = secrets.token_urlsafe(32)
+    now = datetime.now().isoformat()
+    exp = (datetime.now() + timedelta(days=_SESSION_DAYS)).isoformat()
+    db_write(
+        "INSERT INTO sessions (token,user_id,created_at,expires_at) VALUES (?,?,?,?)",
+        (token, user_id, now, exp),
+    )
+    return token
+
+
+def _current_user_id(request: Request):
+    """从 x-session-token 头或 fs_session cookie 解析当前登录用户；会话过期/无效返回 None。"""
+    tok = request.headers.get("x-session-token") or request.cookies.get("fs_session") or ""
+    if not tok:
+        return None
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT user_id, expires_at FROM sessions WHERE token=?", (tok,)).fetchone()
+        conn.close()
+        if not row:
+            return None
+        if row["expires_at"] and row["expires_at"] < datetime.now().isoformat():
+            return None
+        return row["user_id"]
+    except Exception:
+        return None
+
+
+@app.post("/api/auth/register")
+async def auth_register(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    phone = (data.get("phone") or "").strip()
+    password = data.get("password") or ""
+    if not _CN_MOBILE_RE.match(phone):
+        return JSONResponse({"ok": False, "error": "手机号格式不正确（应为 11 位中国大陆手机号）"}, status_code=400)
+    if len(password) < 6:
+        return JSONResponse({"ok": False, "error": "密码至少 6 位"}, status_code=400)
+    conn = get_db()
+    if conn.execute("SELECT 1 FROM users WHERE phone=?", (phone,)).fetchone():
+        conn.close()
+        return JSONResponse({"ok": False, "error": "该手机号已注册，请直接登录"}, status_code=409)
+    conn.close()
+    uid = "u" + secrets.token_hex(8)
+    salt = _gen_salt()
+    phash = _hash_password(password, salt)
+    now = datetime.now().isoformat()
+    db_write(
+        "INSERT INTO users (id,phone,password_hash,salt,created_at,last_login) VALUES (?,?,?,?,?,?)",
+        (uid, phone, phash, salt, now, now),
+    )
+    token = _create_session(uid)
+    return JSONResponse({"ok": True, "token": token, "user": {"id": uid, "phone": phone, "nickname": ""}})
+
+
+@app.post("/api/auth/login")
+async def auth_login(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    phone = (data.get("phone") or "").strip()
+    password = data.get("password") or ""
+    conn = get_db()
+    row = conn.execute("SELECT id,password_hash,salt FROM users WHERE phone=?", (phone,)).fetchone()
+    conn.close()
+    if not row or _hash_password(password, row["salt"]) != row["password_hash"]:
+        return JSONResponse({"ok": False, "error": "手机号或密码错误"}, status_code=401)
+    uid = row["id"]
+    now = datetime.now().isoformat()
+    db_write("UPDATE users SET last_login=? WHERE id=?", (now, uid))
+    token = _create_session(uid)
+    return JSONResponse({"ok": True, "token": token, "user": {"id": uid, "phone": phone, "nickname": ""}})
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    tok = request.headers.get("x-session-token") or request.cookies.get("fs_session") or ""
+    if tok:
+        db_write("DELETE FROM sessions WHERE token=?", (tok,))
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    uid = _current_user_id(request)
+    if not uid:
+        return JSONResponse({"ok": False, "error": "未登录"}, status_code=401)
+    conn = get_db()
+    row = conn.execute("SELECT id,phone,nickname FROM users WHERE id=?", (uid,)).fetchone()
+    conn.close()
+    if not row:
+        return JSONResponse({"ok": False, "error": "账号不存在"}, status_code=401)
+    return JSONResponse({"ok": True, "user": {"id": row["id"], "phone": row["phone"], "nickname": row["nickname"] or ""}})
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    uid = _current_user_id(request)
+    if not uid:
+        return JSONResponse({"ok": True, "logged_in": False})
+    conn = get_db()
+    row = conn.execute("SELECT id,phone,nickname FROM users WHERE id=?", (uid,)).fetchone()
+    conn.close()
+    if not row:
+        return JSONResponse({"ok": True, "logged_in": False})
+    return JSONResponse({"ok": True, "logged_in": True,
+                         "user": {"id": row["id"], "phone": row["phone"], "nickname": row["nickname"] or ""}})
+
+
 def get_db():
     os.makedirs(os.path.dirname(DB), exist_ok=True)
     # v5.0：异步派单后台任务 + autonomy 循环会并发写库 → WAL + 10s busy timeout 防锁冲突
@@ -208,6 +338,33 @@ def get_db():
     except Exception:
         pass
     return conn
+
+
+def db_write(sql: str, params=()):
+    """带短退避重试的写操作：后台 patrol/autonomy 循环与同步请求并发写 SQLite 时
+    偶发 'database is locked'（WAL 下单写者串行），重试即可，避免直接 500。
+    返回受影响行数（rowcount）；非写语句返回 0。"""
+    import time as _t
+    last = None
+    for _ in range(8):
+        try:
+            conn = get_db()
+            cur = conn.execute(sql, params)
+            conn.commit()
+            n = cur.rowcount
+            conn.close()
+            return n
+        except sqlite3.OperationalError as e:
+            last = e
+            try:
+                conn.close()
+            except Exception:
+                pass
+            if "locked" in str(e).lower() or "busy" in str(e).lower():
+                _t.sleep(0.15)
+                continue
+            raise
+    raise last
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -397,6 +554,35 @@ def init_db():
             last_ask_at TEXT,
             updated_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            phone TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            nickname TEXT DEFAULT '',
+            created_at TEXT,
+            last_login TEXT
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT,
+            expires_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            module_id TEXT DEFAULT '',
+            owner_member TEXT DEFAULT '',
+            rel_path TEXT DEFAULT '',
+            abs_path TEXT DEFAULT '',
+            name TEXT DEFAULT '',
+            kind TEXT DEFAULT 'file',
+            size INTEGER DEFAULT 0,
+            ts TEXT,
+            material INTEGER DEFAULT 0,
+            note TEXT DEFAULT ''
+        );
         """
     )
     # ── 兼容迁移：projects 增加 phase / frozen 列（老库升级）──
@@ -455,6 +641,16 @@ def init_db():
     tcols = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
     if "done_criteria" not in tcols:
         cur.execute("ALTER TABLE tasks ADD COLUMN done_criteria TEXT DEFAULT ''")
+    # ── v5.8 P1 双维度存储：projects 增加 storage_root（双维度根目录）+ design_standard（P2 设计规范）──
+    pcols3 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
+    if "storage_root" not in pcols3:
+        cur.execute("ALTER TABLE projects ADD COLUMN storage_root TEXT DEFAULT ''")
+    if "design_standard" not in pcols3:
+        cur.execute("ALTER TABLE projects ADD COLUMN design_standard TEXT DEFAULT ''")
+    # ── v5.8 P1：modules 增加 file_path（点看板模块即开对应成果文件夹）──
+    mcols2 = {r[1] for r in cur.execute("PRAGMA table_info(modules)").fetchall()}
+    if "file_path" not in mcols2:
+        cur.execute("ALTER TABLE modules ADD COLUMN file_path TEXT DEFAULT ''")
     # 角色种子数据
     cur.execute("SELECT COUNT(*) FROM roles")
     if cur.fetchone()[0] == 0:
@@ -524,6 +720,13 @@ def init_db():
             cur.execute("ALTER TABLE project_templates ADD COLUMN meta TEXT DEFAULT '{}'")
     except Exception:
         pass
+    # 迁移：messages 补 material 标记（v5.8「磨」：删无效、其余标为元神材料）
+    try:
+        mcols = [r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()]
+        if "material" not in mcols:
+            cur.execute("ALTER TABLE messages ADD COLUMN material INTEGER DEFAULT 0")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -537,6 +740,8 @@ async def _start_patrol():
     asyncio.create_task(_patrol_loop())
     # v4.2 自主闭环：团队自主推进看板任务直到 100%
     asyncio.create_task(_autonomy_loop())
+    # v5.8 P2：初始化用户级 UI 设计规范目录（首次从内置副本复制）
+    _ensure_design_specs()
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -1112,7 +1317,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.55.0", "release": "v5.5", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.58.0", "release": "v5.8", "port": PORT, "llm": llm,
             "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
 
 
@@ -1188,6 +1393,12 @@ def get_project(pid: str):
         "modules": module_stats,
     }
     return d
+
+
+@app.get("/api/design-specs")
+async def api_design_specs():
+    """v5.8 P2：返回可用 UI 设计规范列表（首页/建项下拉用）。"""
+    return {"ok": True, "specs": _load_design_specs()}
 
 
 @app.post("/api/projects/{pid}/autonomy")
@@ -1649,11 +1860,14 @@ async function submitFeedback(pid){{
 async def create_project(req: Request):
     data = await req.json()
     pid = data.get("id") or f"p{int(datetime.now().timestamp() * 1000)}"
+    # v5.8 P1：双维度存储根目录（~/.fenshen/projects/<pid>）+ 设计规范（P2 用，建项自选）
+    storage_root = os.path.expanduser(f"~/.fenshen/projects/{pid}")
+    design_std = data.get("design_standard", "") or ""
     conn = get_db()
     conn.execute(
-        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen) VALUES (?,?,?,?,?,?,?,0)",
+        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen,storage_root,design_standard) VALUES (?,?,?,?,?,?,?,0,?,?)",
         (pid, data.get("name", ""), data.get("goal", ""), data.get("standards", ""), "green", datetime.now().isoformat(),
-         data.get("phase", "requirement")),
+         data.get("phase", "requirement"), storage_root, design_std),
     )
     # 解构引导：projects.modules 数组 → 批量创建模块（支持一次成立项目即拆模块）
     mods = data.get("modules") or []
@@ -1679,6 +1893,8 @@ async def create_project(req: Request):
         )
     conn.commit()
     conn.close()
+    # v5.8 P1：初始化双维度目录树（public / members / modules/<mid>）
+    _ensure_project_dirs(pid, {"id": pid, "name": data.get("name", ""), "storage_root": storage_root})
     # 批次 B / P2-2：元神搭建基础设施（开场消息定格目标/标准/团队/看板）
     _bootstrap_project(pid, goal=data.get("goal", ""), standards=data.get("standards", ""),
                        roles=data.get("roles") or [])
@@ -1902,6 +2118,14 @@ BUILTIN_SKILLS = [
          "定位根因（查日志/代码/数据）",
          "给出最小修复并验证不再复现",
          "补充回归用例"]},
+    {"name": "磨", "category": "builtin",
+     "description": "把对话/资料磨碎打散、在完整保留语意前提下最大程度缩写，压缩上下文；批量删无效记录、其余作为元神材料沉淀（上下文溢出时自动调用）",
+     "trigger_words": "磨,压缩,缩写,精简上下文,上下文溢出,回忆压缩,提炼材料", "steps": [
+         "按话题边界把内容切成若干段",
+         "逐段磨碎：保留事实、决策、用户原话引用、文件路径、绑定维度信号，删除冗余与口水",
+         "在完整保留语意前提下压缩到最短",
+         "上下文将溢出时，自动磨最旧的非关键段腾出空间",
+         "批量删除失效无效记录，其余标记为元神材料保存"]},
 ]
 
 
@@ -2501,16 +2725,146 @@ META_TOOLS = [
 # 并发任务各自独立）。write_file 越界 → 拒绝并引导写工作区（除非 approval_mode=off 显式放行）。
 import contextvars
 _TOOL_WORKDIR: contextvars.ContextVar = contextvars.ContextVar("tool_workdir", default="")
+_TOOL_PROJECT: contextvars.ContextVar = contextvars.ContextVar("tool_project", default="")
+_TOOL_MODULE: contextvars.ContextVar = contextvars.ContextVar("tool_module", default="")
+_TOOL_ACTOR: contextvars.ContextVar = contextvars.ContextVar("tool_actor", default="")
+_TOOL_ROOT: contextvars.ContextVar = contextvars.ContextVar("tool_root", default="")
 
 
 def _tool_workdir() -> str:
     return _TOOL_WORKDIR.get() or ""
 
 
-def _project_workdir(proj_name: str) -> str:
-    """项目工作区：与产物识别一致，默认 ~/Desktop/<项目名>。"""
-    name = (proj_name or "未命名项目").strip().strip("/")
+def _project_storage_root(proj) -> str:
+    """双维度存储根目录（v5.8 P1）：优先 projects.storage_root（~/.fenshen/projects/<pid>），
+    旧项目无 storage_root 时 fallback ~/Desktop/<项目名>。注意：仅看列值，不依赖目录是否已存在
+    （新建项目目录尚未创建，不应误 fallback）。目录树：
+      <root>/public/        项目公共文件夹
+      <root>/members/<uid>/ 每个群聊成员单独文件夹
+      <root>/modules/<mid>/ 按看板模块组织的成果文件夹"""
+    if isinstance(proj, dict):
+        sr = (proj.get("storage_root") or "").strip()
+        name = (proj.get("name") or "未命名项目").strip().strip("/")
+    else:
+        sr, name = "", (proj or "未命名项目").strip().strip("/")
+    if sr:
+        return sr
     return os.path.expanduser(f"~/Desktop/{name}")
+
+
+def _project_workdir(proj_name) -> str:
+    """向后兼容别名（v5.8 P1：双维度存储后由 _project_storage_root 取代）。"""
+    return _project_storage_root(proj_name)
+
+
+def _ensure_project_dirs(pid: str, proj: dict) -> str:
+    """建项时初始化双维度目录树；返回 storage_root。"""
+    root = _project_storage_root(proj)
+    os.makedirs(os.path.join(root, "public"), exist_ok=True)
+    os.makedirs(os.path.join(root, "members"), exist_ok=True)
+    # 每个已存在模块建专属目录
+    try:
+        conn = get_db()
+        for m in conn.execute("SELECT id FROM modules WHERE project_id=?", (pid,)).fetchall():
+            os.makedirs(os.path.join(root, "modules", m["id"]), exist_ok=True)
+        conn.close()
+    except Exception:
+        pass
+    return root
+
+
+# ── v5.8 P2：UI 设计规范库 ───────────────────────────────────────
+# 用户级目录（可编辑）；首次从内置副本初始化。后端内置副本在 backend/design_specs/。
+DESIGN_SPECS_DIR = os.path.expanduser("~/.fenshen/design_specs")
+DESIGN_SPECS_BUILTIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "design_specs")
+
+
+def _ensure_design_specs():
+    """v5.8 P2：确保用户级设计规范目录存在，首次从内置副本初始化（之后用户可自由编辑）。"""
+    try:
+        os.makedirs(DESIGN_SPECS_DIR, exist_ok=True)
+        if os.path.isdir(DESIGN_SPECS_BUILTIN):
+            for fn in os.listdir(DESIGN_SPECS_BUILTIN):
+                if not fn.endswith(".json"):
+                    continue
+                dst = os.path.join(DESIGN_SPECS_DIR, fn)
+                if not os.path.exists(dst):
+                    try:
+                        shutil.copy2(os.path.join(DESIGN_SPECS_BUILTIN, fn), dst)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+def _load_design_specs():
+    """返回可用设计规范列表 [{id,name,desc}]（扫描 ~/.fenshen/design_specs/*.json，排除 _ 前缀元文件）。"""
+    _ensure_design_specs()
+    out = []
+    try:
+        for fn in sorted(os.listdir(DESIGN_SPECS_DIR)):
+            if not fn.endswith(".json") or fn.startswith("_"):
+                continue
+            try:
+                with open(os.path.join(DESIGN_SPECS_DIR, fn), "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                out.append({
+                    "id": d.get("id") or fn[:-5],
+                    "name": d.get("name") or fn[:-5],
+                    "desc": d.get("desc") or d.get("description") or "",
+                })
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _load_design_spec(spec_id):
+    """按 id 加载某设计规范全文（含 principles/color/typography/components 等），不存在/非法返回 None。"""
+    if not spec_id:
+        return None
+    # 安全：仅允许字母数字下划线连字符，杜绝目录穿越
+    if not re.match(r"^[A-Za-z0-9_\-]+$", spec_id or ""):
+        return None
+    p = os.path.join(DESIGN_SPECS_DIR, f"{spec_id}.json")
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _design_spec_prompt(spec):
+    """把规范 dict 渲染成注入角色上下文的纯文本块（无规范返回空串）。"""
+    if not spec:
+        return ""
+    lines = [f"【本项目 UI 设计规范：{spec.get('name', '')}】"]
+    if spec.get("principles"):
+        lines.append("核心原则：" + "、".join(spec["principles"]))
+    if spec.get("color"):
+        c = spec["color"]
+        parts = []
+        for k in ("primary", "background", "text", "success", "warning", "danger"):
+            if c.get(k):
+                parts.append(f"{k}={c[k]}")
+        if parts:
+            lines.append("配色：" + "，".join(parts))
+    if spec.get("typography"):
+        t = spec["typography"]
+        s = "，".join(f"{k}={v}" for k, v in t.items() if v)
+        if s:
+            lines.append("字体排印：" + s)
+    if spec.get("components"):
+        lines.append("组件规范：" + "；".join(spec["components"]))
+    if spec.get("spacing"):
+        lines.append("间距栅格：" + str(spec["spacing"]))
+    if spec.get("reference"):
+        lines.append("参考文档：" + str(spec["reference"]))
+    lines.append("（角色产出 UI / 界面 / 前端代码时必须遵守上述规范，除非用户另有明确指示）")
+    return "\n".join(lines)
 
 
 WRITE_FILE_TOOL = {
@@ -2767,7 +3121,22 @@ def _write_file_tool(path: str, content: str):
         os.makedirs(os.path.dirname(real), exist_ok=True)
         with open(real, "w", encoding="utf-8") as f:
             f.write(content)
-        return f"[已写入] {path} · {os.path.getsize(real)}B"
+        sz = os.path.getsize(real)
+        # v5.8 P1：写成功后索引到 files 表（双维度：按模块 + 按成员），供"点看板模块开文件"
+        _pid = _TOOL_PROJECT.get() or "__meta__"
+        _mid = _TOOL_MODULE.get() or ""
+        _actor = _TOOL_ACTOR.get() or "元神"
+        _root = _TOOL_ROOT.get() or ""
+        try:
+            rel = os.path.relpath(real, _root) if _root else real
+        except Exception:
+            rel = real
+        db_write(
+            "INSERT INTO files (project_id,module_id,owner_member,rel_path,abs_path,name,kind,size,ts) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (_pid, _mid, _actor, rel, real, os.path.basename(real), "file", sz, datetime.now().isoformat()),
+        )
+        return f"[已写入] {path} · {sz}B"
     except Exception as e:
         return f"⛔ 写入失败: {e}"
 
@@ -3174,23 +3543,23 @@ def context_status():
 
 @app.post("/api/context/compress")
 async def compress_context(req: Request):
-    """压缩上下文：每项目保留最近 100 条消息，其余归档清理。"""
-    data = await req.json()
+    """v5.8「磨」自动触发：上下文将溢出时，先把最旧的非材料消息磨成一条压缩摘要（material=1 沉淀为元神材料），再删除旧消息。保留最近 keep 条。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
     keep = int(data.get("keep", 100))
-    conn = get_db()
     deleted_total = 0
+    ground_total = 0
+    conn = get_db()
     for pid_row in conn.execute("SELECT DISTINCT project_id FROM messages"):
-        pid = pid_row[0]
-        cutoff = conn.execute(
-            "SELECT id FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 1 OFFSET ?",
-            (pid, keep - 1),
-        ).fetchone()
-        if cutoff:
-            conn.execute("DELETE FROM messages WHERE project_id=? AND id < ?", (pid, cutoff[0]))
-            deleted_total += conn.total_changes
-    conn.commit()
+        conn.close()
+        r = _auto_grind_project(pid_row[0], keep)
+        deleted_total += r["deleted"]
+        ground_total += r["ground"]
+        conn = get_db()
     conn.close()
-    return {"ok": True, "deleted": deleted_total, "kept_per_project": keep}
+    return {"ok": True, "deleted": deleted_total, "ground_summaries": ground_total, "kept_per_project": keep}
 
 
 # ── API：阶段门禁 / 冻结锁 / 版本快照（Phase 2）─────────────────
@@ -3399,6 +3768,52 @@ def list_modules(pid: str):
     rows = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort, created_at", (pid,)).fetchall()
     conn.close()
     return [_module_dict(r) for r in rows]
+
+
+def _file_row_to_dict(r) -> dict:
+    return {"id": r["id"], "name": r["name"], "abs_path": r["abs_path"], "rel_path": r["rel_path"],
+            "size": r["size"], "owner_member": r["owner_member"], "module_id": r["module_id"],
+            "ts": r["ts"], "material": r["material"]}
+
+
+@app.get("/api/projects/{pid}/files")
+def project_files(pid: str, module_id: str = ""):
+    """v5.8 P1 双维度存储：点看板模块/项目开文件。
+    - 带 module_id：返回该模块目录（modules/<mid>）的索引文件 + 磁盘现有文件
+    - 不带：返回项目所有索引文件（public + 各模块）"""
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    root = _project_storage_root(dict(proj))
+    if module_id:
+        mod_dir = os.path.join(root, "modules", module_id)
+        rows = conn.execute(
+            "SELECT * FROM files WHERE project_id=? AND module_id=? ORDER BY ts DESC", (pid, module_id)).fetchall()
+        indexed = {os.path.basename(r["abs_path"]): _file_row_to_dict(r) for r in rows}
+        disk = []
+        if os.path.isdir(mod_dir):
+            for f in sorted(os.listdir(mod_dir)):
+                fp = os.path.join(mod_dir, f)
+                if os.path.isfile(fp) and f not in indexed:
+                    disk.append({"name": f, "abs_path": fp, "size": os.path.getsize(fp), "from": "disk"})
+        conn.close()
+        return {"ok": True, "dir": mod_dir, "module_id": module_id,
+                "indexed": list(indexed.values()), "disk": disk}
+    rows = conn.execute("SELECT * FROM files WHERE project_id=? ORDER BY ts DESC", (pid,)).fetchall()
+    conn.close()
+    return {"ok": True, "dir": os.path.join(root, "public"), "indexed": [_file_row_to_dict(r) for r in rows],
+            "disk": []}
+
+
+@app.get("/api/file")
+def open_file(path: str = ""):
+    """v5.8 P1：在 storage_root（用户主目录下）读取/下载文件，供前端「点模块开文件」。"""
+    real = _safe_file_path(path)
+    if not real or not os.path.isfile(real):
+        return JSONResponse({"ok": False, "error": "文件不存在或路径不安全"}, status_code=404)
+    return FileResponse(real, filename=os.path.basename(real))
 
 
 @app.post("/api/projects/{pid}/modules")
@@ -3719,6 +4134,7 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
     if not proj:
         conn.close()
         return {"ok": False, "error": "项目不存在"}
+    proj = dict(proj)  # v5.8 P2：转 dict 以便安全访问 design_standard 等可选列
     # 落库用户消息（项目群聊：topic_id 为空）
     conn.execute(
         "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
@@ -3773,6 +4189,12 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
         "【自主原则（v4.2）】你是团队的自主调度者：能自己查状态、能自行安排先后顺序、能自行决策，"
         "不要向用户提问确认（除非缺少关键信息无法继续）。用户要的是你把看板任务推进到 100%。"
     )
+    # v5.8 P2：项目选定 UI 设计规范 → 调度阶段提示元神，派单给前端/产品角色时令其遵守
+    _ds_id = proj.get("design_standard") or ""
+    if _ds_id:
+        _ds_spec = _load_design_spec(_ds_id)
+        if _ds_spec:
+            dispatch_sys += f"\n本项目采用 UI 设计规范「{_ds_spec.get('name', _ds_id)}」：派给前端/产品角色的任务须令其遵守该规范（配色、字体、组件、间距）。\n"
     hist = [{"role": "system", "content": dispatch_sys}]
     for r in reversed(rows):
         if r["kind"] == "sys":
@@ -3850,14 +4272,31 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
         _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
 
         # 调用角色 AI 执行（v0.27.0：角色也可调工具——跑命令验证/查资料）
-        # v5.6 工作区限定（借鉴 Harness）：角色执行期注入项目工作区（contextvar 并发隔离）
-        workdir = _project_workdir(proj["name"])
+        # v5.8 P1 双维度存储：角色执行期注入工作区（contextvar 并发隔离），
+        # 默认落该任务所属模块目录 modules/<mid>（点看板模块即开），无模块则落 public/。
+        root = _project_storage_root(proj)
+        if mod_id:
+            workdir = os.path.join(root, "modules", mod_id)
+        else:
+            workdir = os.path.join(root, "public")
+        os.makedirs(workdir, exist_ok=True)
         _TOOL_WORKDIR.set(workdir)
+        # v5.8 P1：把"谁/哪个项目/哪个模块/根目录"注入工具上下文，写文件后索引到 files 表
+        _TOOL_PROJECT.set(pid)
+        _TOOL_MODULE.set(mod_id or "")
+        _TOOL_ACTOR.set(role_names.get(role, role))
+        _TOOL_ROOT.set(root)
         role_sys_ctx = (role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
                         f"\n【工作区】所有写文件必须写入此目录（越界会被拒绝）：{workdir}"
                         f"\n多步文件操作建议用 run_batch 一次完成（省 token）。")
         if done_criteria:
             role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
+        # v5.8 P2：项目选定 UI 设计规范 → 注入角色执行上下文（前端/产品尤其要遵守）
+        ds_id = proj.get("design_standard") or ""
+        if ds_id:
+            _ds = _load_design_spec(ds_id)
+            if _ds:
+                role_sys_ctx += "\n\n" + _design_spec_prompt(_ds)
         role_hist = [
             {"role": "system", "content": role_sys_ctx},
             {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
@@ -4304,6 +4743,132 @@ def delete_task(task_id: str):
     conn.commit()
     conn.close()
     return {"ok": True}
+
+
+# ── v5.8「磨」：对话压缩 / 元神材料精炼 ──────────────────────────
+GRIND_SYSTEM = """你是「磨」——一个语意保真压缩器。把你收到的一段或多段对话/资料「磨碎打散」：
+- 完整保留：事实、决策与结论、用户原话的关键引用、文件路径/命令、绑定维度信号（利益/决策/情感/价值观/沟通）。
+- 坚决删掉：寒暄、重复、口水、与结论无关的铺垫。
+- 在「语意不丢失」前提下压缩到最短，能用短语不用长句。
+- 输出纯压缩后的文本，不要解释、不要加「摘要：」之类前缀。"""
+
+GRIND_SEGMENT_GUIDE = (
+    "分段以话题边界为主：同一话题的连续内容归一段；话题/模块切换即切段；"
+    "单话题过长（>30 轮）再按语义句群细分。每段独立可磨。"
+)
+
+
+def _grind_segment(text: str) -> str:
+    """磨碎单段：保语意缩写（失败则原样返回，不丢信息）。"""
+    if not text or len(text) < 40:
+        return text  # 太短不磨
+    try:
+        hist = [{"role": "system", "content": GRIND_SYSTEM},
+                {"role": "user", "content": "请磨碎下面这段：\n\n" + text}]
+        out = call_llm(META_PID, hist, system_prompt=GRIND_SYSTEM)
+        if out and not out.startswith("[元神·") and len(out.strip()) >= 10:
+            return out.strip()
+    except Exception:
+        pass
+    return text
+
+
+def _grind_compress(segments: list) -> str:
+    """把多段内容磨碎并拼接为压缩文本。segments: [{role, content}] 或 [str]。"""
+    out = []
+    for seg in segments:
+        if isinstance(seg, dict):
+            content = seg.get("content") or seg.get("text") or ""
+        else:
+            content = str(seg)
+        if not content.strip():
+            continue
+        out.append(_grind_segment(content))
+    return "\n\n".join(s for s in out if s)
+
+
+def _auto_grind_project(pid: str, keep: int = 150) -> dict:
+    """把一个项目最旧的、非材料的消息磨成一条压缩摘要（material=1），再删旧消息。返回 {deleted, ground}。"""
+    try:
+        conn = get_db()
+        cutoff = conn.execute(
+            "SELECT id FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 1 OFFSET ?",
+            (pid, keep - 1),
+        ).fetchone()
+        if not cutoff:
+            conn.close()
+            return {"deleted": 0, "ground": 0}
+        old_rows = conn.execute(
+            "SELECT id, sender, text FROM messages WHERE project_id=? AND id < ? AND material=0 ORDER BY id",
+            (pid, cutoff[0]),
+        ).fetchall()
+        ground = 0
+        if old_rows:
+            segs = [{"role": (r["sender"] or "user"), "content": r["text"] or ""} for r in old_rows if (r["text"] or "").strip()]
+            compressed = _grind_compress(segs) if segs else ""
+            if compressed and len(compressed) >= 20:
+                now = datetime.now().isoformat()
+                db_write(
+                    "INSERT INTO messages (project_id, sender, kind, text, tag, ts, material) VALUES (?,?,?,?,?,?,1)",
+                    (pid, "元神·磨", "grind", "🪨 历史压缩摘要：\n" + compressed, "grind", now))
+                ground += 1
+        db_write("DELETE FROM messages WHERE project_id=? AND id < ? AND material=0", (pid, cutoff[0]))
+        conn.close()
+        return {"deleted": len(old_rows), "ground": ground}
+    except Exception:
+        return {"deleted": 0, "ground": 0}
+
+
+@app.post("/api/grind")
+async def grind(req: Request):
+    """手动磨：传入 segments（对话段落/资料），返回保语意压缩文本。"""
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    segments = data.get("segments") or []
+    if not isinstance(segments, list) or not segments:
+        return JSONResponse({"ok": False, "error": "segments 必须是非空数组"}, status_code=400)
+    compressed = _grind_compress(segments)
+    return {"ok": True, "compressed": compressed,
+            "original_len": sum(len(str(s)) for s in segments),
+            "compressed_len": len(compressed)}
+
+
+@app.post("/api/messages/cleanup")
+async def messages_cleanup(req: Request):
+    """磨的「人工批量删」：删除无效记录（delete_ids），其余（keep_ids）标记为元神材料。
+    不传 keep_ids 则把所有未删记录都标为材料。"""
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    pid = data.get("project_id") or META_PID
+    delete_ids = data.get("delete_ids") or []
+    keep_ids = data.get("keep_ids") or []
+    if not isinstance(delete_ids, list) or not isinstance(keep_ids, list):
+        return JSONResponse({"ok": False, "error": "delete_ids/keep_ids 必须是数组"}, status_code=400)
+    try:
+        del_n = 0
+        mat_n = 0
+        if delete_ids:
+            ph = ",".join("?" * len(delete_ids))
+            del_n = db_write(
+                f"DELETE FROM messages WHERE project_id=? AND id IN ({ph})",
+                (pid, *delete_ids))
+        if keep_ids:
+            ph = ",".join("?" * len(keep_ids))
+            mat_n = db_write(
+                f"UPDATE messages SET material=1 WHERE project_id=? AND id IN ({ph}) AND material=0",
+                (pid, *keep_ids))
+        elif not delete_ids:
+            # 未指定 keep_ids 且未删 → 把该项目全部现存消息标为材料
+            mat_n = db_write(
+                "UPDATE messages SET material=1 WHERE project_id=? AND material=0",
+                (pid,))
+        return {"ok": True, "deleted": del_n, "marked_material": mat_n}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 # ── API：技能库（Phase 3 技能提炼机制）───────────────────────────
@@ -5251,17 +5816,15 @@ async def _auto_after_chat():
                     )
                     new_count += 1
                     break
-        # 上下文压缩：超过 300 条则压缩到 150
+        # 上下文压缩（v5.8「磨」自动触发）：超阈值则把最旧消息磨成摘要再删
         for pid_row in conn.execute("SELECT DISTINCT project_id FROM messages"):
             pid = pid_row[0]
             total_pid = conn.execute("SELECT COUNT(*) FROM messages WHERE project_id=?", (pid,)).fetchone()[0]
             if total_pid > 300:
-                cutoff = conn.execute(
-                    "SELECT id FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 1 OFFSET 149",
-                    (pid,),
-                ).fetchone()
-                if cutoff:
-                    conn.execute("DELETE FROM messages WHERE project_id=? AND id < ?", (pid, cutoff[0]))
+                conn.commit()
+                conn.close()
+                _auto_grind_project(pid, keep=150)
+                conn = get_db()
         conn.commit()
         conn.close()
     except Exception as e:
