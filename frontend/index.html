@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>分身 · v5.9</title>
+<title>分身 · v6.0</title>
 <meta name="theme-color" content="#6d5bd0">
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
@@ -259,7 +259,7 @@
     <div class="logo">分</div>
     <div class="brand">分身 <small>coding 版 · 群聊团队</small></div>
     <div class="spacer"></div>
-    <span class="ver">v5.9</span>
+    <span class="ver">v6.0</span>
     <span id="userChip" class="user-chip" style="display:none"></span>
     <button class="btn" id="btnAnnot">标注模式：关</button>
     <button class="btn" onclick="showAbout()">原型说明</button>
@@ -299,29 +299,107 @@
   </style>
 
   <div class="body">
-    <div class="sidenav">
-      <div class="navitem meta active m-more" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
-      <div class="navitem m-main" data-sec="chat"><span class="dotk"></span>项目群聊</div>
-      <div class="navitem m-more" data-sec="roles"><span class="dotk"></span>角色库</div>
-      <div class="navitem m-more" data-sec="resources"><span class="dotk"></span>公共资源库</div>
-      <div class="navitem m-more" data-sec="models"><span class="dotk"></span>模型设置</div>
-      <div class="navitem m-more" data-sec="terminal"><span class="dotk"></span>终端</div>
-      <div class="navitem m-more" data-sec="browser"><span class="dotk"></span>浏览器</div>
-      <div class="navitem m-more" data-sec="board"><span class="dotk"></span>项目看板</div>
-      <div class="navitem m-more" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
-      <div class="navitem m-more" data-sec="memory"><span class="dotk"></span>长期记忆</div>
-      <div class="navitem m-more" data-sec="skills"><span class="dotk"></span>技能库</div>
-      <div class="navitem m-more" data-sec="experiences"><span class="dotk"></span>经验库</div>
-      <div class="navitem m-more" data-sec="evolution"><span class="dotk"></span>进化中心</div>
-      <div class="navitem m-more" data-sec="market" style="display:none"><span class="dotk"></span>应用市场</div>
-      <!-- v5.0 移动端：更多抽屉入口（手机底部第 4 项） -->
-      <div class="navitem m-more-btn" id="navMore" onclick="openMobileMore()"><span class="dotk"></span>更多</div>
-      <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
+    <!-- v6 外壳：最左深色图标栏（WorkBuddy 极简风） -->
+    <div class="rail">
+      <div class="rail-avatar" id="railAvatar" onclick="openDrawer()" title="账户与设置">分</div>
+      <div class="rail-item navitem active" data-sec="chat" title="对话">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.6-.8L3 21l1.9-5.5A8.5 8.5 0 1 1 21 11.5z"/></svg>
+      </div>
+      <div class="rail-sep"></div>
+      <div class="rail-item" onclick="openDrawer()" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </div>
     </div>
+
+    <!-- 设置抽屉：高级功能全部收拢进账号设置（微信网页端式） -->
+    <div class="drawer-mask" id="drawerMask" onclick="closeDrawer()"></div>
+    <div class="drawer" id="drawer">
+      <div class="drawer-head">
+        <div class="t">分身 · 工作台</div>
+        <button class="drawer-close" onclick="closeDrawer()">✕</button>
+      </div>
+      <div class="drawer-search"><input id="drawerSearch" placeholder="搜索功能…" oninput="filterDrawer(this.value)"></div>
+      <div class="drawer-nav" id="drawerNav">
+        <div class="navitem meta" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
+        <div class="navitem" data-sec="roles"><span class="dotk"></span>角色库</div>
+        <div class="navitem" data-sec="resources"><span class="dotk"></span>公共资源库</div>
+        <div class="navitem" data-sec="models"><span class="dotk"></span>模型设置</div>
+        <div class="navitem" data-sec="terminal"><span class="dotk"></span>终端</div>
+        <div class="navitem" data-sec="browser"><span class="dotk"></span>浏览器</div>
+        <div class="navitem" data-sec="board"><span class="dotk"></span>项目看板</div>
+        <div class="navitem" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
+        <div class="navitem" data-sec="memory"><span class="dotk"></span>长期记忆</div>
+        <div class="navitem" data-sec="skills"><span class="dotk"></span>技能库</div>
+        <div class="navitem" data-sec="experiences"><span class="dotk"></span>经验库</div>
+        <div class="navitem" data-sec="evolution"><span class="dotk"></span>进化中心</div>
+        <div class="navitem" data-sec="about"><span class="dotk"></span>关于分身</div>
+        <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
+      </div>
+    </div>
+
+    <style>
+    /* ===== v6 外壳：图标栏 + 抽屉 + 分栏 + 思考链/轨迹 ===== */
+    .rail{width:60px;background:#20232a;display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 0;flex-shrink:0}
+    .rail-avatar{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,#6d5bd0,#34c98e);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;cursor:pointer;margin-bottom:6px}
+    .rail-item{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#cfd2dc}
+    .rail-item:hover{background:#2c2f38}
+    .rail-item.active{background:#34384a;color:#fff}
+    .rail-item svg{width:22px;height:22px}
+    .rail-sep{width:26px;height:1px;background:#34384a;margin:6px 0}
+    .drawer-mask{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:80;display:none}
+    .drawer-mask.show{display:block}
+    .drawer{position:fixed;top:0;left:0;bottom:0;width:280px;background:#fff;z-index:81;transform:translateX(-100%);transition:transform .22s ease;display:flex;flex-direction:column;box-shadow:2px 0 20px rgba(0,0,0,.15)}
+    .drawer.show{transform:translateX(0)}
+    .drawer-head{display:flex;align-items:center;justify-content:space-between;padding:16px 16px 10px}
+    .drawer-head .t{font-size:15px;font-weight:600;color:#1f2230}
+    .drawer-close{border:none;background:none;font-size:16px;color:#9aa0b4;cursor:pointer}
+    .drawer-search{padding:0 16px 10px}
+    .drawer-search input{width:100%;box-sizing:border-box;padding:8px 12px;border:.5px solid #e6e6ee;border-radius:9px;font-size:12px;outline:none;background:#f7f7fb}
+    .drawer-nav{flex:1;overflow-y:auto;padding:4px 10px 10px;display:flex;flex-direction:column;gap:2px}
+    .drawer-nav .navitem{color:#2a2e3a}
+    .drawer-nav .navitem.active{background:var(--blue-50);color:var(--blue-600)}
+    .drawer-nav .foot{margin-top:auto;padding:10px 4px}
+    /* 联系人列微调（微信网页端观感） */
+    .rooms{width:248px;background:#f7f8fa}
+    /* v6：群聊区改为横向三栏 rooms | chat | split（微信网页端式） */
+    #sec-chat.active{display:flex;flex-direction:row}
+    @media(max-width:768px){ #sec-chat.active{flex-direction:column} }
+    .rooms-head{background:#f7f8fa}
+    .room{border-left:2px solid transparent}
+    .room.active{background:#e8eaf6;border-left-color:#5b53d6}
+    /* 元神置顶卡（renderRooms 内）融入到联系人列风格 */
+    /* 分栏面板 */
+    .split{width:384px;flex-shrink:0;border-left:.5px solid var(--gray-200);display:flex;flex-direction:column;background:#fff}
+    .split-head{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:.5px solid var(--gray-200)}
+    .split-tabs{display:flex;gap:4px}
+    .split-tab{font-size:12px;padding:5px 12px;border-radius:8px;cursor:pointer;color:#6b7080;background:#f1f2f6}
+    .split-tab.active{background:#5b53d6;color:#fff}
+    .split-close{border:none;background:none;font-size:15px;color:#9aa0b4;cursor:pointer}
+    .split-body{flex:1;overflow-y:auto}
+    /* 思考过程（聊天内 inline，仿 Harness） */
+    .think-block{margin-top:6px;border:.5px solid #e6e2f7;border-radius:10px;background:#faf9ff;overflow:hidden}
+    .think-hd{font-size:11px;color:#6b5bd0;padding:6px 10px;cursor:pointer;user-select:none;background:#f3f0ff}
+    .think-body{padding:8px 10px}
+    /* 轨迹事件（Harness 式彩色时间轴） */
+    .traj-ev{display:flex;gap:8px;padding:7px 12px;border-left:2px solid #eee;font-size:12px;line-height:1.5}
+    .traj-ev .tk{font-size:10px;font-weight:600;padding:1px 7px;border-radius:6px;flex-shrink:0;height:fit-content;white-space:nowrap}
+    .tk.run_start{background:#e8f0ff;color:#2b6cff}.tk.plan{background:#eafaf0;color:#1d9e75}.tk.role_start{background:#f3edff;color:#6b5bd0}.tk.tool{background:#fff3e0;color:#c47f00}.tk.role_done{background:#eafaf0;color:#1d9e75}.tk.error{background:#ffeaea;color:#d23}.tk.info{background:#eef0f3;color:#667}
+    .traj-ev .ta{color:#9aa0b4;font-size:10px;flex-shrink:0}
+    .traj-ev .tx{color:#333;flex:1}
+    .traj-ev pre{margin:4px 0 0;white-space:pre-wrap;font-size:11px;color:#555;background:#f6f6fa;border-radius:6px;padding:6px 8px;max-height:160px;overflow:auto}
+    @media(max-width:768px){
+      .rail{position:fixed;left:0;right:0;bottom:0;top:auto;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;background:#20232a;z-index:45;gap:0}
+      .rail-avatar{margin-bottom:0;width:34px;height:34px}
+      .rail-sep{display:none}
+      .body{flex-direction:column}
+      .rooms{width:100%}
+      .split{width:100%;position:fixed;inset:0;z-index:70}
+    }
+    </style>
 
     <div class="main">
       <!-- 项目群聊 -->
-      <div class="section" id="sec-chat">
+      <div class="section active" id="sec-chat">
         <div class="rooms">
           <div class="rooms-head"><span class="t">项目 / 团队</span><button class="room-add" onclick="openWizard()">+</button></div>
           <div class="room-list" id="roomList"></div>
@@ -336,6 +414,7 @@
               <button class="btn sm" onclick="toggleFreeze()" id="freezeBtn">冻结</button>
               <button class="btn sm" onclick="openChangeOrder()">修改单</button>
               <button class="btn sm" onclick="openSnapshots()">快照</button>
+              <button class="btn sm" onclick="toggleSplit()">▥ 分栏</button>
               <button class="btn sm meta" onclick="openBoard()">模块看板</button>
             </div>
             <button class="btn sm mobile-only" onclick="backToRooms()">← 列表</button>
@@ -349,6 +428,23 @@
             <button class="send" id="btnSendMsg" onclick="sendMsg()">↑</button>
           </div>
         </div>
+      <!-- v6 分栏：进程轨迹 + 看板（右侧拉出） -->
+      <div class="split" id="splitPanel" style="display:none">
+        <div class="split-head">
+          <div class="split-tabs">
+            <span class="split-tab active" id="tabTraj" onclick="switchSplit('traj')">进程轨迹</span>
+            <span class="split-tab" id="tabBoard" onclick="switchSplit('board')">看板</span>
+          </div>
+          <button class="split-close" onclick="toggleSplit()">✕</button>
+        </div>
+        <div class="split-body">
+          <div id="trajPane">
+            <div id="trajList" style="padding:8px 4px"></div>
+            <div id="trajEvents" class="traj-events"></div>
+          </div>
+          <div id="boardPane" style="display:none;padding:12px"><div id="splitBoard"></div></div>
+        </div>
+      </div>
       </div>
 
       <!-- 项目看板（总览图）：与群聊并列的定位入口 -->
@@ -401,7 +497,7 @@
       </div>
 
       <!-- 元神专属窗口 -->
-      <div class="section active" id="sec-meta">
+      <div class="section" id="sec-meta">
         <div class="chat">
           <div class="chat-head">
             <div><div class="t">元神 · 我的个人分身</div><div class="sub">完全代表你的利益与风格</div></div>
@@ -1104,7 +1200,7 @@ async function loadChat(pid){ const b=document.getElementById('chatBody'); b.inn
   else gb.style.display='none';
   refreshPhaseUI(r);
   let msgs=[]; try{ const res=await fetch('/api/messages/'+pid); msgs=await res.json(); }catch(e){ console.error(e); }
-  renderChat(msgs); }
+  renderChat(msgs); attachThinking(); if(window.__splitOpen) loadTrajPanel(); }
 function refreshPhaseUI(r){
   if(!r) return;
   document.getElementById('phaseBadge').textContent=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
@@ -1137,6 +1233,57 @@ function backToRooms(){ document.getElementById('sec-chat').classList.remove('ch
 async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
 /* 当前正在进行的元神请求（群聊 / 私聊共用一个），「元神中止」靠它做真正的取消 */
 let activeChatAbort=null;
+/* ===== v6：设置抽屉 / 分栏 / 思考链 / 进程轨迹 ===== */
+function openDrawer(){ const m=document.getElementById('drawerMask'), d=document.getElementById('drawer'); if(m)m.classList.add('show'); if(d)d.classList.add('show'); window.__drawerOpen=true; }
+function closeDrawer(){ const m=document.getElementById('drawerMask'), d=document.getElementById('drawer'); if(m)m.classList.remove('show'); if(d)d.classList.remove('show'); window.__drawerOpen=false; }
+function filterDrawer(q){ q=(q||'').trim().toLowerCase(); document.querySelectorAll('#drawerNav .navitem').forEach(it=>{ const t=it.textContent.toLowerCase(); it.style.display=(!q||t.includes(q))?'':'none'; }); }
+function toggleSplit(){ const p=document.getElementById('splitPanel'); if(!p)return; const open=p.style.display!=='none'; if(open){ p.style.display='none'; window.__splitOpen=false; } else { p.style.display='flex'; window.__splitOpen=true; switchSplit('traj'); } }
+function switchSplit(tab){ const t1=document.getElementById('tabTraj'),t2=document.getElementById('tabBoard'),tp=document.getElementById('trajPane'),bp=document.getElementById('boardPane'); if(t1)t1.classList.toggle('active',tab==='traj'); if(t2)t2.classList.toggle('active',tab==='board'); if(tp)tp.style.display=tab==='traj'?'block':'none'; if(bp)bp.style.display=tab==='board'?'block':'none'; if(tab==='traj') loadTrajPanel(); else loadSplitBoard(); }
+async function loadSplitBoard(){ if(!curRoom) return; try{ await loadBoard(); }catch(e){} const src=document.getElementById('boardGridInline'), dst=document.getElementById('splitBoard'); if(src&&dst) dst.innerHTML=src.innerHTML; }
+function renderEv(ev){
+  let meta=ev.meta; try{ if(typeof meta==='string') meta=JSON.parse(meta); }catch(e){ meta={}; }
+  const detail = (meta && (meta.detail||meta.tool||meta.plan||meta.thought)) ? (meta.detail||meta.tool||meta.plan||meta.thought) : (ev.text||'');
+  const ts = ev.ts ? String(ev.ts).slice(11,19) : '';
+  const kind = ev.kind||'info'; const agent = ev.agent||''; const text = ev.text||'';
+  let body = escapeHtml(text);
+  if(detail && detail!==text){ body += '<pre>'+escapeHtml(typeof detail==='string'?detail:JSON.stringify(detail,null,2))+'</pre>'; }
+  return `<div class="traj-ev"><span class="tk ${escapeHtml(kind)}">${escapeHtml(kind)}</span><span class="ta">${escapeHtml(agent)}</span><span class="tx">${body}</span><span class="ta">${escapeHtml(ts)}</span></div>`;
+}
+async function loadTrajPanel(){
+  const list=document.getElementById('trajList'), evs=document.getElementById('trajEvents'); if(!curRoom||!list||!evs) return;
+  list.innerHTML='<div style="font-size:12px;color:var(--gray-400);padding:6px 10px">加载进程轨迹…</div>'; evs.innerHTML='';
+  try{
+    const runs=await (await fetch('/api/projects/'+curRoom+'/runs')).json();
+    if(!runs.length){ list.innerHTML='<div style="font-size:12px;color:var(--gray-400);padding:10px">暂无运行记录——发一条消息触发元神派单后会出现。</div>'; return; }
+    list.innerHTML=`<div style="font-size:12px;color:#6b7080;padding:6px 10px">共 ${runs.length} 次运行</div>`+runs.slice(0,10).map(r=>`<div style="padding:5px 10px;font-size:11px;color:#333;cursor:pointer;border-bottom:.5px solid #f0f0f4" onclick="loadTrajRun('${jsStr(r.run_id)}')"><span style="color:#5b53d6">▸</span> ${escapeHtml(r.run_id)} <span style="color:#9aa0b4">· ${escapeHtml(String(r.ts||'').slice(11,19))} · ${escapeHtml(String(r.total_events||0))} 事件</span></div>`).join('');
+    await loadTrajRun(runs[0].run_id);
+  }catch(e){ list.innerHTML='<div style="color:#d23;padding:10px;font-size:12px">加载失败：'+errText(e)+'</div>'; }
+}
+async function loadTrajRun(runId){
+  const evs=document.getElementById('trajEvents'); if(!evs) return;
+  evs.innerHTML='<div style="font-size:12px;color:var(--gray-400);padding:8px 10px">运行 '+escapeHtml(runId)+' 的事件…</div>';
+  try{
+    const data=await (await fetch('/api/projects/'+curRoom+'/trajectory?run_id='+encodeURIComponent(runId))).json();
+    if(!data.length){ evs.innerHTML='<div style="font-size:12px;color:var(--gray-400);padding:10px">该运行无事件。</div>'; return; }
+    evs.innerHTML=data.map(renderEv).join('');
+  }catch(e){ evs.innerHTML='<div style="color:#d23;padding:10px;font-size:12px">加载失败：'+errText(e)+'</div>'; }
+}
+async function attachThinking(){
+  const b=document.getElementById('chatBody'); if(!b||!curRoom) return;
+  const prev=b.querySelector('.think-block'); if(prev) prev.remove();
+  try{
+    const runs=await (await fetch('/api/projects/'+curRoom+'/runs')).json();
+    if(!runs.length) return;
+    const data=await (await fetch('/api/projects/'+curRoom+'/trajectory?run_id='+encodeURIComponent(runs[0].run_id))).json();
+    if(!data.length) return;
+    const rows=[...b.querySelectorAll('.msg')].filter(r=>!r.classList.contains('right')&&!r.classList.contains('sysmsg'));
+    const target=rows[rows.length-1]; if(!target) return;
+    const bubble=target.querySelector('.bubble'); if(!bubble) return;
+    const blk=document.createElement('div'); blk.className='think-block';
+    blk.innerHTML=`<div class="think-hd" onclick="this.nextElementSibling.style.display=(this.nextElementSibling.style.display==='none'?'block':'none')">▶ 思考过程（${data.length} 步 · 最新运行）</div><div class="think-body" style="display:none">${data.map(renderEv).join('')}</div>`;
+    bubble.appendChild(blk);
+  }catch(e){ /* 思考过程为增强展示，失败静默 */ }
+}
 async function sendMsg(){
   const inp=document.getElementById('msgInput');
   const v=inp.value.trim(); if(!v||!curRoom)return; inp.value=''; window.__LAST_SENT__=true;
@@ -1628,6 +1775,7 @@ async function wizardNext(){ if(wStep===1){ if(!document.getElementById('wName')
 
 /* 导航 */
 document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
+  closeDrawer();
   document.querySelectorAll('.navitem').forEach(x=>x.classList.remove('active')); n.classList.add('active');
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.getElementById('sec-'+n.dataset.sec).classList.add('active');
@@ -2770,7 +2918,7 @@ async function doPublish(pid,name,btn){
 loadExperiences(''); loadReviews('pending'); initCrossCheck(); loadUsage();
 setInterval(loadContextBadge, 30000); // 每30秒刷新上下文状态
 
-/* ── v5.9：底部实时 token 条 ── */
+/* ── v6.0：底部实时 token 条 ── */
 function fmtN(n){ n=Number(n)||0; return n>=1000 ? (n/1000).toFixed(1)+'k' : ''+n; }
 async function loadTokenBar(){
   try{
@@ -2787,7 +2935,7 @@ async function loadTokenBar(){
 }
 function resetTokens(){ fetch('/api/token/reset',{method:'POST'}).then(()=>loadTokenBar()); }
 
-/* ── v5.9：Trajectory 事件级回放面板 ── */
+/* ── v6.0：Trajectory 事件级回放面板 ── */
 let _replayRunId='';
 async function openReplay(){
   document.getElementById('replayMask').style.display='flex';
@@ -2831,10 +2979,10 @@ loadTokenBar();
 setInterval(loadTokenBar, 2500);
 </script>
 
-<!-- v5.9：底部实时 token 条 -->
+<!-- v6.0：底部实时 token 条 -->
 <div id="tokenBar" class="token-bar"></div>
 
-<!-- v5.9：Trajectory 回放面板 -->
+<!-- v6.0：Trajectory 回放面板 -->
 <div id="replayMask" class="mask" style="display:none" onclick="if(event.target===this)closeReplay()">
   <div class="dialog" style="max-width:760px;width:92vw;height:80vh;display:flex;flex-direction:column">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:.5px solid var(--gray-200)">
