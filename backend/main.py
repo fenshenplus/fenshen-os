@@ -80,6 +80,10 @@ PROVIDER_PRESETS = {
     "openai":   {"base": "https://api.openai.com",   "chat": "/v1/chat/completions", "default_model": "gpt-4o-mini", "auth": "Bearer"},
     "claude":   {"base": "https://api.anthropic.com","chat": "/v1/messages", "default_model": "claude-3-5-sonnet-latest", "auth": "x-api-key"},
     "ollama":   {"base": "http://localhost:11434",   "chat": "/api/chat", "default_model": "qwen2.5:7b", "auth": None},
+    # v5.9 扩展内置供方（均 OpenAI 兼容，走 else 分支）
+    "qwen":     {"base": "https://dashscope.aliyuncs.com/compatible-mode/v1", "chat": "/chat/completions", "default_model": "qwen-plus", "auth": "Bearer"},
+    "moonshot": {"base": "https://api.moonshot.cn/v1", "chat": "/chat/completions", "default_model": "moonshot-v1-8k", "auth": "Bearer"},
+    "zhipu":    {"base": "https://open.bigmodel.cn/api/paas/v4", "chat": "/chat/completions", "default_model": "glm-4-flash", "auth": "Bearer"},
 }
 
 # 角色推荐模型（Phase 5 多模型协作：简单任务走廉价模型，复杂任务走强推理）
@@ -92,7 +96,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.58.0")
+app = FastAPI(title="分身 v1 后端", version="0.59.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -487,7 +491,21 @@ def init_db():
         CREATE TABLE IF NOT EXISTS model_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT, agent_id TEXT, provider TEXT, model TEXT,
-            latency_ms INTEGER DEFAULT 0, status TEXT DEFAULT 'success'
+            latency_ms INTEGER DEFAULT 0, status TEXT DEFAULT 'success',
+            input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0
+        );
+        -- v5.9：Trajectory 事件级回放（一次派单/对话 = 一个 run，run 内按时间记录关键事件）
+        CREATE TABLE IF NOT EXISTS trajectory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL, project_id TEXT NOT NULL,
+            ts TEXT, kind TEXT DEFAULT 'info', agent TEXT DEFAULT '',
+            text TEXT DEFAULT '', meta TEXT DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_traj_run ON trajectory(run_id);
+        CREATE INDEX IF NOT EXISTS idx_traj_pid ON trajectory(project_id);
+        CREATE TABLE IF NOT EXISTS trajectory_runs (
+            run_id TEXT PRIMARY KEY, project_id TEXT, ts TEXT,
+            trigger TEXT DEFAULT '', total_events INTEGER DEFAULT 0, status TEXT DEFAULT 'running'
         );
         CREATE TABLE IF NOT EXISTS project_templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -727,6 +745,14 @@ def init_db():
             cur.execute("ALTER TABLE messages ADD COLUMN material INTEGER DEFAULT 0")
     except Exception:
         pass
+    # v5.9 迁移：model_usage 补 token 计数列（老库兼容）
+    try:
+        mu_cols = [r[1] for r in cur.execute("PRAGMA table_info(model_usage)").fetchall()]
+        for col in ("input_tokens", "output_tokens"):
+            if col not in mu_cols:
+                cur.execute(f"ALTER TABLE model_usage ADD COLUMN {col} INTEGER DEFAULT 0")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -769,13 +795,47 @@ def resolve_provider_cfg(agent_id: str):
     return None
 
 
-def _log_usage(agent_id: str, provider: str, model: str, latency_ms: int, status: str):
-    """记录一次 LLM 调用（Phase 5 成本/效果统计埋点）。"""
+# v5.9：实时 token 累加器（进程级，单租户本地应用，前端轮询展示底部 token 条）
+LIVE_TOKENS = {"input": 0, "output": 0, "total": 0, "calls": 0, "last_provider": "", "last_model": ""}
+# 每进程 token 上限兜底（防失控循环烧钱）；到达后整体降级为离线
+TOKEN_HARD_LIMIT = int(os.environ.get("FENSHEN_TOKEN_LIMIT", "2000000"))
+
+
+def _live_add(provider, model, inp, out):
+    LIVE_TOKENS["input"] += int(inp or 0)
+    LIVE_TOKENS["output"] += int(out or 0)
+    LIVE_TOKENS["total"] = LIVE_TOKENS["input"] + LIVE_TOKENS["output"]
+    LIVE_TOKENS["calls"] += 1
+    LIVE_TOKENS["last_provider"] = provider or ""
+    LIVE_TOKENS["last_model"] = model or ""
+
+
+def _log_usage(agent_id: str, provider: str, model: str, latency_ms: int, status: str,
+               input_tokens: int = 0, output_tokens: int = 0):
+    """记录一次 LLM 调用（v5.9 起含 token 计数，供成本/效果统计与实时 token 条）。"""
+    try:
+        _live_add(provider, model, input_tokens, output_tokens)
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO model_usage (ts,agent_id,provider,model,latency_ms,status,input_tokens,output_tokens) VALUES (?,?,?,?,?,?,?,?)",
+            (datetime.now().isoformat(), agent_id, provider, model, latency_ms, status,
+             int(input_tokens or 0), int(output_tokens or 0)),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+# ── v5.9：Trajectory 事件级回放 ───────────────────────────────────
+def _trajectory_event(run_id: str, pid: str, kind: str, agent: str, text: str, meta: dict = None):
+    """记录一条 trajectory 事件（run 内按时间排序）。kind ∈ plan/role_start/tool/role_done/phase/error/info。"""
     try:
         conn = get_db()
         conn.execute(
-            "INSERT INTO model_usage (ts,agent_id,provider,model,latency_ms,status) VALUES (?,?,?,?,?,?)",
-            (datetime.now().isoformat(), agent_id, provider, model, latency_ms, status),
+            "INSERT INTO trajectory (run_id,project_id,ts,kind,agent,text,meta) VALUES (?,?,?,?,?,?,?)",
+            (run_id, pid, datetime.now().isoformat(), kind, agent or "", (text or "")[:4000],
+             json.dumps(meta or {}, ensure_ascii=False)),
         )
         conn.commit()
         conn.close()
@@ -798,7 +858,8 @@ def _merge_system(history: list, system_prompt: str) -> list:
 
 
 def _call_single_provider(provider: str, base: str, key: str, model: str, history: list, system_prompt: str):
-    """调用单个模型，成功返回文本，失败抛异常。"""
+    """调用单个模型，成功返回 (文本, usage_dict{prompt_tokens,completion_tokens})，失败抛异常。"""
+    _usage = {"prompt_tokens": 0, "completion_tokens": 0}
     if provider == "claude":
         msgs = [m for m in history if m["role"] != "system"]
         sys = system_prompt or next((m["content"] for m in history if m["role"] == "system"), "")
@@ -809,7 +870,10 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["content"][0]["text"].strip()
+        j = resp.json()
+        u = j.get("usage") or {}
+        _usage = {"prompt_tokens": u.get("input_tokens", 0), "completion_tokens": u.get("output_tokens", 0)}
+        return j["content"][0]["text"].strip(), _usage
     elif provider == "ollama":
         resp = requests.post(
             base + "/api/chat",
@@ -817,8 +881,12 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
             timeout=60,
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
-    else:  # deepseek / openai 兼容 OpenAI 格式
+        j = resp.json()
+        u = j.get("prompt_eval_count") or 0
+        c = j.get("eval_count") or 0
+        _usage = {"prompt_tokens": int(u), "completion_tokens": int(c)}
+        return j["message"]["content"].strip(), _usage
+    else:  # deepseek / openai / qwen / moonshot / zhipu 兼容 OpenAI 格式
         payload = {"model": model, "messages": _merge_system(history, system_prompt),
                    "temperature": 0.7, "max_tokens": 2000}
         if provider == "deepseek":
@@ -835,7 +903,10 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        j = resp.json()
+        u = j.get("usage") or {}
+        _usage = {"prompt_tokens": u.get("prompt_tokens", 0), "completion_tokens": u.get("completion_tokens", 0)}
+        return j["choices"][0]["message"]["content"].strip(), _usage
 
 
 def _available_providers(agent_id: str):
@@ -930,17 +1001,19 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None):
     for provider, base, key, model in cands:
         t0 = datetime.now()
         try:
-            text = _call_single_provider(provider, base, key, model, history, system_prompt)
+            text, usage = _call_single_provider(provider, base, key, model, history, system_prompt)
             latency = int((datetime.now() - t0).total_seconds() * 1000)
-            _log_usage(agent_id, provider, model, latency, "success")
+            _log_usage(agent_id, provider, model, latency, "success",
+                       usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
             return text
         except Exception as e:
             if _is_conn_error(e):
                 # 连接瞬时故障：原地重试一次再放弃
                 try:
-                    text = _call_single_provider(provider, base, key, model, history, system_prompt)
+                    text, usage = _call_single_provider(provider, base, key, model, history, system_prompt)
                     latency = int((datetime.now() - t0).total_seconds() * 1000)
-                    _log_usage(agent_id, provider, model, latency, "success")
+                    _log_usage(agent_id, provider, model, latency, "success",
+                               usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
                     return text
                 except Exception as e2:
                     latency = int((datetime.now() - t0).total_seconds() * 1000)
@@ -1317,7 +1390,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.58.0", "release": "v5.8", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.59.0", "release": "v5.9", "port": PORT, "llm": llm,
             "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
 
 
@@ -2379,6 +2452,62 @@ def model_usage_stats():
     return {"stats": sorted(out, key=lambda x: -x["total"]), "total_calls": total_usage}
 
 
+# ── API：实时 token 条（v5.9）──────────────────────────────────────
+@app.get("/api/token/usage")
+def token_usage():
+    """返回进程级实时 token 累加（底部 token 条轮询用）。"""
+    return dict(LIVE_TOKENS)
+
+
+@app.post("/api/token/reset")
+def token_reset():
+    """清零实时 token 累加（新一轮工作时手动重置）。"""
+    LIVE_TOKENS["input"] = 0
+    LIVE_TOKENS["output"] = 0
+    LIVE_TOKENS["total"] = 0
+    LIVE_TOKENS["calls"] = 0
+    LIVE_TOKENS["last_provider"] = ""
+    LIVE_TOKENS["last_model"] = ""
+    return {"ok": True}
+
+
+# ── API：Trajectory 回放（v5.9）──────────────────────────────────
+@app.get("/api/projects/{pid}/runs")
+def list_runs(pid: str):
+    """列出该项目的回放 run（按时间倒序）。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT run_id,project_id,ts,trigger,total_events,status FROM trajectory_runs "
+        "WHERE project_id=? ORDER BY ts DESC LIMIT 50", (pid,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/projects/{pid}/trajectory")
+def get_trajectory(pid: str, run_id: str = ""):
+    """返回回放事件列表：指定 run_id 取该 run，否则取项目最近事件。"""
+    conn = get_db()
+    if run_id:
+        rows = conn.execute(
+            "SELECT id,run_id,ts,kind,agent,text,meta FROM trajectory WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id,run_id,ts,kind,agent,text,meta FROM trajectory WHERE project_id=? ORDER BY id DESC LIMIT 200", (pid,)
+        ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["meta"] = json.loads(d["meta"] or "{}")
+        except Exception:
+            d["meta"] = {}
+        out.append(d)
+    return out
+
+
 @app.post("/api/models/cross-check")
 async def cross_check(req: Request):
     """交叉验证：同一段内容交给两个不同模型（角色 A / 角色 B），返回对比结果。"""
@@ -2729,6 +2858,8 @@ _TOOL_PROJECT: contextvars.ContextVar = contextvars.ContextVar("tool_project", d
 _TOOL_MODULE: contextvars.ContextVar = contextvars.ContextVar("tool_module", default="")
 _TOOL_ACTOR: contextvars.ContextVar = contextvars.ContextVar("tool_actor", default="")
 _TOOL_ROOT: contextvars.ContextVar = contextvars.ContextVar("tool_root", default="")
+# v5.9：当前 trajectory run（仅在项目角色执行期被设置，用于工具级事件回放）
+_TRAJ_RUN: contextvars.ContextVar = contextvars.ContextVar("traj_run", default=None)
 
 
 def _tool_workdir() -> str:
@@ -2911,10 +3042,10 @@ ROLE_TOOLS = META_TOOLS + [WRITE_FILE_TOOL, RUN_BATCH_TOOL]  # 角色工具集�
 
 
 def _call_provider_tools(provider: str, base: str, key: str, model: str, history: list, system_prompt: str, tools: list):
-    """openai 兼容通道返回完整 message（含 tool_calls）；claude/ollama 退化为普通调用。"""
+    """openai 兼容通道返回 (完整 message(含 tool_calls), usage)；claude/ollama 退化为普通调用。"""
     if provider in ("claude", "ollama"):
-        text = _call_single_provider(provider, base, key, model, history, system_prompt)
-        return {"role": "assistant", "content": text}
+        text, usage = _call_single_provider(provider, base, key, model, history, system_prompt)
+        return {"role": "assistant", "content": text}, usage
     # 审查 #10（本次审查最贵的一个 bug）：这里原本是 max_tokens=800。
     # 写文件时 content 参数一长就被截断 → tool_calls.arguments 成了残缺 JSON →
     # 解析失败被静默吞成空 dict → 最终报给用户一句误导性的"路径不安全"。
@@ -2935,7 +3066,10 @@ def _call_provider_tools(provider: str, base: str, key: str, model: str, history
         timeout=60,
     )
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]
+    j = resp.json()
+    u = j.get("usage") or {}
+    usage = {"prompt_tokens": u.get("prompt_tokens", 0), "completion_tokens": u.get("completion_tokens", 0)}
+    return j["choices"][0]["message"], usage
 
 
 def _exec_shell_tool(cmd: str):
@@ -3033,9 +3167,16 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
                     continue
                 try:
                     if tool == "exec_command":
-                        lines.append(f"第{i+1}步 [exec] {await _run_meta_tool(tool, a, agent_id)}")
+                        res = await _run_meta_tool(tool, a, agent_id)
+                        lines.append(f"第{i+1}步 [exec] {res}")
                     else:
-                        lines.append(f"第{i+1}步 [{tool}] {await _run_file_tool(tool, a, agent_id)}")
+                        res = await _run_file_tool(tool, a, agent_id)
+                        lines.append(f"第{i+1}步 [{tool}] {res}")
+                    # v5.9：回放事件——批量工具调用（仅项目角色执行期记录）
+                    _tr = _TRAJ_RUN.get()
+                    if _tr:
+                        _trajectory_event(_tr[0], _tr[1], "tool", agent_id,
+                                          f"🔧 {tool} → {str(res)[:200]}", {"tool": tool, "args": a})
                 except Exception as e:
                     lines.append(f"第{i+1}步 [{tool}] 异常：{str(e)[:200]}")
             return "\n".join(lines)[:4000]
@@ -3249,7 +3390,7 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                 # debug v4.1：连接类瞬时故障（RemoteDisconnected 等）原地重试一次
                 for _attempt in range(2):
                     try:
-                        msg = _call_provider_tools(provider, base, key, model, history, system_prompt, tool_list)
+                        msg, usage = _call_provider_tools(provider, base, key, model, history, system_prompt, tool_list)
                         break
                     except Exception as e:
                         last_err = f"{provider}: {e}"
@@ -3258,7 +3399,8 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                             continue
                         raise
                 latency = int((datetime.now() - t0).total_seconds() * 1000)
-                _log_usage(agent_id, provider, model, latency, "success")
+                _log_usage(agent_id, provider, model, latency, "success",
+                           usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
                 tool_calls = msg.get("tool_calls")
                 if tool_calls:
                     history.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
@@ -3268,6 +3410,12 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                         try:
                             fargs = json.loads(raw_args)
                             tool_result = await _run_meta_tool(fname, fargs, agent_id)
+                            # v5.9：回放事件——工具调用（仅项目角色执行期记录）
+                            _tr = _TRAJ_RUN.get()
+                            if _tr:
+                                _trajectory_event(_tr[0], _tr[1], "tool", agent_id,
+                                                  f"🔧 {fname} → {str(tool_result)[:200]}",
+                                                  {"tool": fname, "args": fargs})
                         except json.JSONDecodeError:
                             # 审查 #10 配套修复：旧版把解析失败静默吞成 {}，于是后续报出
                             # 完全不相干的"路径不安全"。现在如实告诉模型参数坏在哪，让它重发。
@@ -4129,10 +4277,25 @@ def get_dispatch_job(job_id: str):
 async def _execute_project_chat(pid: str, user_text: str) -> dict:
     """v4.2 自主闭环：项目群聊执行链（API 与团队自主推进循环共用）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
+    # v5.9：Trajectory run_id（本次派单/对话的唯一回放标识）
+    run_id = f"{pid}-{int(time.time()*1000)}"
+    _TRAJ_RUN.set((run_id, pid))
+    _trajectory_event(run_id, pid, "run_start", "元神", f"收到指令：{user_text[:200]}", {"trigger": "project_chat"})
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT OR REPLACE INTO trajectory_runs (run_id,project_id,ts,trigger,status) VALUES (?,?,?,?,?)",
+            (run_id, pid, datetime.now().isoformat(), "project_chat", "running"),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
     conn = get_db()
     proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
     if not proj:
         conn.close()
+        _trajectory_event(run_id, pid, "error", "元神", "项目不存在")
         return {"ok": False, "error": "项目不存在"}
     proj = dict(proj)  # v5.8 P2：转 dict 以便安全访问 design_standard 等可选列
     # 落库用户消息（项目群聊：topic_id 为空）
@@ -4217,6 +4380,10 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
                 _a.setdefault("done_criteria", "")
     except Exception:
         pass  # 非 JSON，当作纯文本回复
+    # v5.9：回放事件——元神调度计划
+    _trajectory_event(run_id, pid, "plan", "元神",
+                      f"调度计划：{meta_reply[:300]}" + (f"\n派单 {len(actions)} 个角色任务" if actions else "（仅回复，无派单）"),
+                      {"actions": [{"role": a.get("role"), "task": a.get("task_name")} for a in actions]})
 
     # 落库元神回复
     conn = get_db()
@@ -4242,6 +4409,9 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
         task_name = act.get("task_name", "未命名任务")[:20]
         detail = act.get("detail", "")
         done_criteria = (act.get("done_criteria") or "").strip()[:300]
+        # v5.9：回放事件——角色开始执行
+        _trajectory_event(run_id, pid, "role_start", role_names.get(role, role),
+                          f"▶️ 派单：{task_name}（{role_names.get(role, role)}）", {"detail": detail[:300]})
 
         # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
         task_id = f"tk{time.time_ns()}"
@@ -4323,6 +4493,9 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
             "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
         }[final]
         _task_status(task_id, final, pid, note)
+        # v5.9：回放事件——角色执行结果
+        _trajectory_event(run_id, pid, "role_done", role_names.get(role, role),
+                          f"{note}（{judge_reason[:200]}）", {"task_id": task_id, "status": final, "round": round_no})
         return {"role": role, "task_name": task_name, "task_id": task_id,
                 "status": final, "round": round_no, "reason": judge_reason}
 
@@ -4379,6 +4552,18 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
             break
 
     all_done = all(r["status"] == "done" for r in role_results) if role_results else False
+    # v5.9：回放——标记 run 完成 + 统计事件数
+    try:
+        conn = get_db()
+        cnt = conn.execute("SELECT COUNT(*) FROM trajectory WHERE run_id=?", (run_id,)).fetchone()[0]
+        conn.execute(
+            "UPDATE trajectory_runs SET status='done', total_events=? WHERE run_id=?",
+            (cnt, run_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
     return {"reply": meta_reply, "actions": role_results, "ok": True, "rounds": round_no, "all_done": all_done}
 
 
