@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>分身 · v5.8</title>
+<title>分身 · v5.9</title>
 <meta name="theme-color" content="#6d5bd0">
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
@@ -259,7 +259,7 @@
     <div class="logo">分</div>
     <div class="brand">分身 <small>coding 版 · 群聊团队</small></div>
     <div class="spacer"></div>
-    <span class="ver">v5.8</span>
+    <span class="ver">v5.9</span>
     <span id="userChip" class="user-chip" style="display:none"></span>
     <button class="btn" id="btnAnnot">标注模式：关</button>
     <button class="btn" onclick="showAbout()">原型说明</button>
@@ -360,6 +360,9 @@
               <div class="sub" id="boardProjGoal" style="font-size:12px;color:var(--gray-400);margin-top:2px"></div>
               <div id="boardProjStd" style="font-size:12px;color:var(--meta-700);background:var(--meta-50);border:.5px solid #cfc9ef;border-radius:8px;padding:6px 10px;margin-top:6px;max-width:720px"></div>
               <div id="boardProjDesign" style="font-size:12px;color:var(--gray-600);background:var(--gray-100);border-radius:8px;padding:6px 10px;margin-top:6px;max-width:720px"></div>
+              <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn sm" style="border-color:var(--gray-200)" onclick="openReplay()">🎬 回放</button>
+              </div>
               <!-- v4.2 自主闭环：看板完成度进度条（100% → 自动进下一阶段） -->
               <div id="boardProgWrap" style="display:none;max-width:720px;margin-top:6px">
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-400);margin-bottom:3px">
@@ -1776,6 +1779,9 @@ async function renderModels(){
           <option value="deepseek"${c.provider==='deepseek'?' selected':''}>DeepSeek</option>
           <option value="openai"${c.provider==='openai'?' selected':''}>OpenAI</option>
           <option value="claude"${c.provider==='claude'?' selected':''}>Claude (Anthropic)</option>
+          <option value="qwen"${c.provider==='qwen'?' selected':''}>通义千问 Qwen（阿里）</option>
+          <option value="moonshot"${c.provider==='moonshot'?' selected':''}>月之暗面 Moonshot</option>
+          <option value="zhipu"${c.provider==='zhipu'?' selected':''}>智谱 GLM（清华）</option>
           <option value="ollama"${c.provider==='ollama'?' selected':''}>Ollama 本地</option>
         </select></div>
       <div class="field" style="margin-bottom:6px"><label>模型名</label><input data-f="model_name" value="${escapeHtml(c.model_name||'')}" placeholder="如 deepseek-v4-flash / gpt-4o-mini"></div>
@@ -2763,6 +2769,101 @@ async function doPublish(pid,name,btn){
 }
 loadExperiences(''); loadReviews('pending'); initCrossCheck(); loadUsage();
 setInterval(loadContextBadge, 30000); // 每30秒刷新上下文状态
+
+/* ── v5.9：底部实时 token 条 ── */
+function fmtN(n){ n=Number(n)||0; return n>=1000 ? (n/1000).toFixed(1)+'k' : ''+n; }
+async function loadTokenBar(){
+  try{
+    const r=await fetch('/api/token/usage'); const j=await r.json();
+    const el=document.getElementById('tokenBar');
+    if(el) el.innerHTML =
+      `<span class="tb-i">📥 输入 <b>${fmtN(j.input)}</b></span>`+
+      `<span class="tb-i">📤 输出 <b>${fmtN(j.output)}</b></span>`+
+      `<span class="tb-i">∑ 合计 <b>${fmtN(j.total)}</b></span>`+
+      `<span class="tb-i">调用 <b>${fmtN(j.calls)}</b> 次</span>`+
+      (j.last_model?`<span class="tb-i" style="color:var(--gray-400)">${escapeHtml(j.last_provider||'')}/${escapeHtml(j.last_model||'')}</span>`:'')+
+      `<span class="tb-reset" onclick="resetTokens()">清零</span>`;
+  }catch(e){}
+}
+function resetTokens(){ fetch('/api/token/reset',{method:'POST'}).then(()=>loadTokenBar()); }
+
+/* ── v5.9：Trajectory 事件级回放面板 ── */
+let _replayRunId='';
+async function openReplay(){
+  document.getElementById('replayMask').style.display='flex';
+  await loadRuns();
+}
+function closeReplay(){ document.getElementById('replayMask').style.display='none'; }
+const TRAJ_COLOR={run_start:'#534ab7',plan:'#0a84ff',role_start:'#ff9f0a',tool:'#30b0c7',role_done:'#34c759',phase:'#af52de',error:'#ff453a',info:'#8e8e93'};
+async function loadRuns(){
+  const el=document.getElementById('replayRuns'); if(!curRoom){ el.innerHTML='<div style="color:var(--gray-400);padding:10px">请先进入一个项目</div>'; return; }
+  try{
+    const r=await fetch('/api/projects/'+curRoom+'/runs'); const runs=await r.json();
+    if(!runs.length){ el.innerHTML='<div style="color:var(--gray-400);padding:10px">暂无回放记录。派单或对话后这里会出现每次执行的事件轨迹。</div>'; document.getElementById('replayEvents').innerHTML=''; return; }
+    el.innerHTML=runs.map(x=>{
+      const t=(x.ts||'').replace('T',' ').slice(0,19);
+      const sel=_replayRunId===x.run_id?' selected':'';
+      const st=x.status==='done'?'✅':'⏳';
+      return `<div class="run-item${sel}" onclick="selectRun('${escapeJs(x.run_id)}')"><div style="font-size:12px;font-weight:500">${st} ${escapeHtml(x.trigger||'run')} · ${x.total_events||0} 事件</div><div style="font-size:10px;color:var(--gray-400)">${t}</div></div>`;
+    }).join('');
+    if(!_replayRunId && runs[0]) _replayRunId=runs[0].run_id;
+    await loadTrajectory(_replayRunId);
+  }catch(e){ el.innerHTML='<div style="color:var(--gray-400)">加载失败：'+errText(e)+'</div>'; }
+}
+async function selectRun(rid){ _replayRunId=rid; document.querySelectorAll('.run-item').forEach(e=>e.classList.remove('selected')); await loadTrajectory(rid); }
+async function loadTrajectory(rid){
+  const el=document.getElementById('replayEvents');
+  try{
+    const url=rid?('/api/projects/'+curRoom+'/trajectory?run_id='+encodeURIComponent(rid)):('/api/projects/'+curRoom+'/trajectory');
+    const r=await fetch(url); const evs=await r.json();
+    if(!evs.length){ el.innerHTML='<div style="color:var(--gray-400);padding:10px">该次执行暂无事件</div>'; return; }
+    el.innerHTML=evs.map(e=>{
+      const c=TRAJ_COLOR[e.kind]||'#8e8e93';
+      const t=(e.ts||'').replace('T',' ').slice(11,19);
+      const meta=Object.keys(e.meta||{}).length?' <span style="color:var(--gray-400)">'+escapeHtml(JSON.stringify(e.meta).slice(0,80))+'</span>':'';
+      return `<div class="traj-ev"><span class="traj-dot" style="background:${c}"></span><div class="traj-body"><div class="traj-h"><b style="color:${c}">${escapeHtml(e.kind)}</b> <span style="color:var(--gray-400)">${escapeHtml(e.agent||'')}</span> <span class="traj-t">${t}</span></div><div class="traj-txt">${escapeHtml(e.text||'')}${meta}</div></div></div>`;
+    }).join('');
+  }catch(e){ el.innerHTML='<div style="color:var(--gray-400)">加载失败：'+errText(e)+'</div>'; }
+}
+
+// token 条定时刷新
+loadTokenBar();
+setInterval(loadTokenBar, 2500);
 </script>
+
+<!-- v5.9：底部实时 token 条 -->
+<div id="tokenBar" class="token-bar"></div>
+
+<!-- v5.9：Trajectory 回放面板 -->
+<div id="replayMask" class="mask" style="display:none" onclick="if(event.target===this)closeReplay()">
+  <div class="dialog" style="max-width:760px;width:92vw;height:80vh;display:flex;flex-direction:column">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:.5px solid var(--gray-200)">
+      <div class="t" style="font-size:15px;font-weight:500">🎬 执行回放（事件级时间线）</div>
+      <button class="btn sm" onclick="closeReplay()">关闭</button>
+    </div>
+    <div style="display:flex;flex:1;min-height:0">
+      <div id="replayRuns" style="width:200px;border-right:.5px solid var(--gray-200);overflow:auto;padding:8px"></div>
+      <div id="replayEvents" style="flex:1;overflow:auto;padding:12px 16px"></div>
+    </div>
+  </div>
+</div>
+<style>
+.token-bar{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+  background:rgba(255,255,255,.96);backdrop-filter:saturate(180%) blur(8px);border-top:.5px solid var(--gray-200);
+  padding:6px 14px;font-size:12px;color:var(--gray-900)}
+.token-bar .tb-i b{font-weight:600}
+.token-bar .tb-reset{margin-left:auto;color:var(--meta-700);cursor:pointer;font-size:11px;border:.5px solid var(--gray-200);border-radius:6px;padding:2px 8px}
+.token-bar .tb-reset:hover{background:var(--meta-50)}
+.run-item{padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:4px;border:.5px solid transparent}
+.run-item:hover{background:var(--gray-100)}
+.run-item.selected{background:var(--meta-50);border-color:#cfc9ef}
+.traj-ev{display:flex;gap:8px;padding:7px 0;border-bottom:.5px solid var(--gray-100)}
+.traj-dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:0 0 auto}
+.traj-body{flex:1;min-width:0}
+.traj-h{font-size:11px;display:flex;gap:8px;align-items:baseline}
+.traj-t{color:var(--gray-400);font-variant-numeric:tabular-nums}
+.traj-txt{font-size:12px;color:var(--gray-900);white-space:pre-wrap;word-break:break-word;margin-top:2px}
+</style>
+
 </body>
 </html>

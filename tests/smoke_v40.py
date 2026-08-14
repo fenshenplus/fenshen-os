@@ -231,7 +231,7 @@ def test_batch_b():
     code, h = call("GET", "/api/health")
     check("批次B：approval_mode 默认 danger", isinstance(h, dict) and h.get("approval_mode") == "danger",
           str(h.get("approval_mode")))
-    check("批次B：release 版本 v5.5", isinstance(h, dict) and h.get("release") == "v5.5",
+    check("批次B：release 版本 v5.9", isinstance(h, dict) and h.get("release") == "v5.9",
           str(h.get("release")) + "/" + str(h.get("version")))
 
     # ── v5.6 借鉴 DeepSeek Harness：工作区限定 + PTC 批处理 ──
