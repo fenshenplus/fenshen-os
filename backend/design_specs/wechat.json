@@ -1,0 +1,28 @@
+{
+  "id": "wechat",
+  "name": "微信 WeChat 设计",
+  "desc": "国民级 IM：高效、克制、熟悉感",
+  "principles": ["清晰", "高效", "一致", "熟悉", "友好"],
+  "color": {
+    "primary": "#07C160",
+    "background": "#EDEDED",
+    "text": "#191919",
+    "success": "#07C160",
+    "warning": "#FA9D3B",
+    "danger": "#FA5151"
+  },
+  "typography": {
+    "font_family": "'PingFang SC', 'Helvetica Neue', Helvetica, sans-serif",
+    "scale": "标题 17-18 / 正文 15-17 / 辅助 12-13（px）",
+    "weight": "Regular 正文 / Medium 标题"
+  },
+  "components": [
+    "主色微信绿 #07C160，仅用于品牌与关键确认，链接/强调可复用",
+    "会话卡片：白底圆角 4-8px，卡片间留白 8-12px",
+    "导航栏：白底黑字，标题居中 17px，返回在左",
+    "图标：线性简洁，描边 1.5-2px，填充表选中",
+    "按钮高度 44-48px，圆角 4-8px；主按钮绿底白字"
+  ],
+  "spacing": "4 / 8 / 12 / 16 / 24（px）间距体系；列表分隔线紧跟文字左边距",
+  "reference": "https://developers.weixin.qq.com/miniprogram/design/"
+}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>分身 · v5.4</title>
+<title>分身 · v5.8</title>
 <meta name="theme-color" content="#6d5bd0">
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
@@ -259,10 +259,44 @@
     <div class="logo">分</div>
     <div class="brand">分身 <small>coding 版 · 群聊团队</small></div>
     <div class="spacer"></div>
-    <span class="ver">v4.0</span>
+    <span class="ver">v5.8</span>
+    <span id="userChip" class="user-chip" style="display:none"></span>
     <button class="btn" id="btnAnnot">标注模式：关</button>
     <button class="btn" onclick="showAbout()">原型说明</button>
   </div>
+
+  <!-- 账号登录/注册遮罩（v5.7：手机号+密码，本地持久登录，为商业化/大模型 API 账户打基础） -->
+  <div id="authMask" class="auth-mask" style="display:none">
+    <div class="auth-card">
+      <div class="auth-title">分身账号</div>
+      <div class="auth-sub">登录后可使用大模型 API 与云端能力（账号本地保存，登录状态长期保持）</div>
+      <div class="auth-tabs">
+        <span class="auth-tab active" id="tabLogin" onclick="authSwitch('login')">登录</span>
+        <span class="auth-tab" id="tabReg" onclick="authSwitch('register')">注册</span>
+      </div>
+      <input id="authPhone" class="auth-input" placeholder="手机号" inputmode="numeric" maxlength="11">
+      <input id="authPwd" class="auth-input" type="password" placeholder="密码（至少 6 位）">
+      <div class="auth-err" id="authErr"></div>
+      <button class="btn meta auth-btn" id="authSubmit" onclick="authSubmit()">登录</button>
+      <div class="auth-skip" onclick="hideAuthModal()">暂不登录（本地模式）</div>
+    </div>
+  </div>
+  <style>
+  .auth-mask{position:fixed;inset:0;background:rgba(15,12,40,.55);display:flex;align-items:center;justify-content:center;z-index:9999}
+  .auth-card{width:320px;max-width:90vw;background:#fff;border-radius:16px;padding:22px 22px 18px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .auth-title{font-size:18px;font-weight:600;color:#221c4a}
+  .auth-sub{font-size:11px;color:#9aa0b4;margin:6px 0 14px;line-height:1.5}
+  .auth-tabs{display:flex;gap:18px;margin-bottom:12px}
+  .auth-tab{font-size:13px;color:#9aa0b4;cursor:pointer;padding-bottom:4px}
+  .auth-tab.active{color:#221c4a;font-weight:600;border-bottom:2px solid #4f46e5}
+  .auth-input{width:100%;box-sizing:border-box;padding:10px 12px;margin-bottom:10px;border:.5px solid #e3e3ec;border-radius:9px;font-size:13px;outline:none}
+  .auth-input:focus{border-color:#4f46e5}
+  .auth-err{color:#e5484d;font-size:11px;min-height:14px;margin-bottom:8px}
+  .auth-btn{width:100%;padding:10px;font-size:14px}
+  .auth-skip{text-align:center;font-size:11px;color:#9aa0b4;margin-top:10px;cursor:pointer}
+  .user-chip{font-size:11px;color:#3C3489;background:var(--meta-50);border:.5px solid #cfc9ef;padding:3px 9px;border-radius:10px;cursor:pointer}
+  .user-chip:hover{background:#e9e4fb}
+  </style>
 
   <div class="body">
     <div class="sidenav">
@@ -325,6 +359,7 @@
               <div class="t" id="boardProjTitle" style="font-size:15px;font-weight:500">项目看板</div>
               <div class="sub" id="boardProjGoal" style="font-size:12px;color:var(--gray-400);margin-top:2px"></div>
               <div id="boardProjStd" style="font-size:12px;color:var(--meta-700);background:var(--meta-50);border:.5px solid #cfc9ef;border-radius:8px;padding:6px 10px;margin-top:6px;max-width:720px"></div>
+              <div id="boardProjDesign" style="font-size:12px;color:var(--gray-600);background:var(--gray-100);border-radius:8px;padding:6px 10px;margin-top:6px;max-width:720px"></div>
               <!-- v4.2 自主闭环：看板完成度进度条（100% → 自动进下一阶段） -->
               <div id="boardProgWrap" style="display:none;max-width:720px;margin-top:6px">
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-400);margin-bottom:3px">
@@ -400,6 +435,14 @@
             </div>
             <div style="padding:14px;overflow:auto;height:calc(100% - 44px)">
               <div id="pvNarrative" style="font-size:13px;line-height:1.7"></div>
+              <!-- v5.8 绑定进度：把"通用工具人"炼成"用户自己的数字克隆体" -->
+              <div id="pvBinding" style="margin:12px 0 4px;padding:10px;background:var(--gray-100);border-radius:8px">
+                <div style="display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:6px">
+                  <span>🔗 绑定进度</span><span id="pvBindingPct" style="color:var(--meta-700)">0%</span>
+                </div>
+                <div style="height:10px;background:var(--gray-200);border-radius:5px;overflow:hidden"><div id="pvBindingBar" style="height:100%;width:0%;background:linear-gradient(90deg,#34c98e,#1D9E75);border-radius:5px;transition:width .4s"></div></div>
+                <div id="pvBindingHint" style="font-size:11px;color:var(--gray-400);margin-top:6px">蒸馏炼制后，元神会从「通用工具人」变成「你的」数字克隆体——利益、决策、情感、价值观、沟通都像你。</div>
+              </div>
               <div id="pvBars" style="margin-top:12px"></div>
               <!-- v4.2 蒸馏二期：镜像校验（预测→反馈闭环） -->
               <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px">
@@ -747,6 +790,12 @@
         <div class="field"><label>项目名称</label><input id="wName" placeholder="例如：高考志愿评测平台"></div>
         <div class="field"><label>一句话目标</label><input id="wGoal" placeholder="这个项目要交付什么"></div>
         <div class="field"><label>完成标准（验收准则）</label><textarea id="wStandards" rows="3" placeholder="例如：微信登录可用 / 课程可浏览下单 / 微信支付回调落单 / 测试覆盖≥80% / 扫码可开。未达标团队继续推进，不反复问你"></textarea></div>
+        <div class="field"><label>UI 设计规范（可选，建项后前端/产品角色按此规范产出）</label>
+          <select id="wDesign" style="width:100%;padding:7px 8px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff">
+            <option value="">不指定（默认）</option>
+          </select>
+          <div id="wDesignDesc" style="font-size:11px;color:var(--gray-400);margin-top:4px"></div>
+        </div>
       </div>
       <div id="wz2" style="display:none">
         <label style="font-size:11px;color:var(--gray-400)">为团队选择角色（元神据此拉起 agent）</label>
@@ -852,6 +901,15 @@
   </div>
 </div>
 
+<!-- 模块文件浏览（v5.8 P1：点看板模块开文件） -->
+<div class="mask" id="fileMask">
+  <div class="modal" style="width:520px;max-width:94vw">
+    <div class="mh"><span id="fileHead">📂 模块文件</span>
+      <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="closeFileMask()">✕</span></div>
+    <div class="mb" style="max-height:60vh;overflow:auto;padding:10px 14px" id="fileList"></div>
+  </div>
+</div>
+
 <!-- 标注录入 -->
 <div class="mask" id="annotMask">
   <div class="modal" style="width:380px">
@@ -881,6 +939,7 @@ let rooms = [];        // /api/projects
 let curRoom = null;    // 当前选中项目 id
 let roles = [];        // /api/roles
 let resources = [];    // /api/resources
+let designSpecs = [];  // v5.8 P2 /api/design-specs
 const META_PID = '__meta__';
 
 const STATUS_LABEL = { green:'运行中', red:'阻塞中', amber:'已暂停' };
@@ -929,10 +988,58 @@ function errText(e){
   return e.message||String(e);
 }
 // 统一的接口调用：HTTP 层出错也要抛出来，不能静默
+let SESSION = localStorage.getItem('fs_session') || '';
+function sessHeaders(extra){ const h=extra||{}; if(SESSION) h['x-session-token']=SESSION; return h; }
 async function apiJson(url, opts){
-  const r=await fetch(url, opts||{});
+  opts = opts||{};
+  opts.headers = sessHeaders(opts.headers||{});
+  const r=await fetch(url, opts);
   if(!r.ok) throw new Error('接口 '+r.status+' '+(r.statusText||''));
   return await r.json();
+}
+
+/* ── 账号体系（v5.7：手机号+密码，本地持久登录）── */
+let _authMode='login';
+function checkAuth(){
+  if(!SESSION){ showAuthModal(); return; }
+  fetch('/api/auth/status', {headers: sessHeaders()}).then(r=>r.json()).then(j=>{
+    if(j.logged_in){ renderUserBar(j.user); } else { SESSION=''; localStorage.removeItem('fs_session'); showAuthModal(); }
+  }).catch(()=>{ showAuthModal(); });
+}
+function renderUserBar(u){
+  const el=document.getElementById('userChip');
+  el.style.display='inline-block';
+  const phone=(u.phone||'').replace(/(\d{3})\d{4}(\d{4})/,'$1****$2');
+  el.innerHTML='👤 '+phone+' · <span style="color:#7c74c9">退出</span>';
+  el.onclick=doLogout;
+}
+function showAuthModal(){ const m=document.getElementById('authMask'); if(m) m.style.display='flex'; const e=document.getElementById('authErr'); if(e) e.textContent=''; }
+function hideAuthModal(){ const m=document.getElementById('authMask'); if(m) m.style.display='none'; }
+function authSwitch(m){ _authMode=m;
+  document.getElementById('tabLogin').classList.toggle('active',m==='login');
+  document.getElementById('tabReg').classList.toggle('active',m==='register');
+  document.getElementById('authSubmit').textContent = m==='login'?'登录':'注册';
+  document.getElementById('authErr').textContent=''; }
+async function authSubmit(){
+  const phone=document.getElementById('authPhone').value.trim();
+  const pwd=document.getElementById('authPwd').value;
+  const err=document.getElementById('authErr');
+  if(!/^1[3-9]\d{9}$/.test(phone)){ err.textContent='请输入正确的 11 位手机号'; return; }
+  if(pwd.length<6){ err.textContent='密码至少 6 位'; return; }
+  const url = _authMode==='login' ? '/api/auth/login' : '/api/auth/register';
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,password:pwd})});
+    const j=await r.json();
+    if(!j.ok){ err.textContent=j.error||'操作失败'; return; }
+    SESSION=j.token; localStorage.setItem('fs_session',SESSION);
+    hideAuthModal(); renderUserBar(j.user); toast(_authMode==='login'?'✅ 已登录':'✅ 注册成功，已登录');
+  }catch(e){ err.textContent='网络错误：'+errText(e); }
+}
+async function doLogout(){
+  try{ await fetch('/api/auth/logout',{method:'POST',headers:sessHeaders()}); }catch(e){}
+  SESSION=''; localStorage.removeItem('fs_session');
+  const el=document.getElementById('userChip'); if(el){ el.style.display='none'; el.innerHTML=''; }
+  toast('已退出登录'); showAuthModal();
 }
 /* 长耗时操作统一处理：发起时禁用按钮 + 换忙碌文案，
    结束（成功或失败）都恢复；失败一定给出可读提示，不静默。 */
@@ -985,7 +1092,9 @@ function renderRooms(){ const el=document.getElementById('roomList'); el.innerHT
 async function loadChat(pid){ const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
   const r=rooms.find(x=>x.id===pid); document.getElementById('chatTitle').textContent=r?r.name:''; document.getElementById('chatSub').textContent=r?STATUS_LABEL[r.status]||'':'';
   const gb=document.getElementById('chatGoalBar');
-  if(r){ gb.style.display='block'; gb.innerHTML='🎯 '+(escapeHtml(r.goal||'未设目标'))+'　&nbsp;　✅ 完成标准：'+(escapeHtml(r.standards||'未设'));
+  if(r){ gb.style.display='block';
+    const dsName = (r.design_standard && designSpecs.length) ? (designSpecs.find(x=>x.id===r.design_standard)?.name || r.design_standard) : '';
+    gb.innerHTML='🎯 '+(escapeHtml(r.goal||'未设目标'))+'　&nbsp;　✅ 完成标准：'+(escapeHtml(r.standards||'未设'))+'　&nbsp;　🎨 设计规范：'+(escapeHtml(dsName||'未指定'));
     // v5.0 移动端：目标条点击展开/折叠
     gb.onclick=()=>gb.classList.toggle('goal-open');
   }
@@ -1213,14 +1322,23 @@ async function submitInterview(btn){ const a=document.getElementById('ivAnswer')
 }
 async function showProfile(){ try{ const d=await apiJson('/api/meta/profile');
   document.getElementById('pvNarrative').innerHTML='<div>'+ escapeBr(d.narrative||'') +'</div>';
-  const dims={fact:'身份',personality:'人格',preference:'偏好',knowledge:'知识',workflow:'工作流',relationship:'关系',secret:'私密',expectation:'期望'};
+  // v5.8 绑定进度
+  const bp=(d.binding)||{progress:0,bound_dims:0,total_dims:5};
+  const pct=Math.round((bp.progress||0)*100);
+  document.getElementById('pvBindingPct').textContent=pct+'%';
+  document.getElementById('pvBindingBar').style.width=pct+'%';
+  document.getElementById('pvBindingHint').textContent = pct>=100 ? '✅ 已深度绑定——这就是「你的」数字克隆体。'
+    : (pct===0 ? '蒸馏炼制后，元神会从「通用工具人」变成「你的」数字克隆体——利益、决策、情感、价值观、沟通都像你。'
+               : '绑定进行中——元神正在变成「你的」数字克隆体（'+ (bp.bound_dims||0) +' / '+(bp.total_dims||5)+' 维已沉淀）。');
+  // 绑定五维充足度
+  const dims={interest:'利益关切',decision:'决策倾向',emotion:'情感信号',value:'价值观锚点',comm:'沟通风格'};
   const suff=d.dim_sufficiency||{};
-  let h='<div style="font-size:12px;color:var(--gray-400);margin-bottom:6px">维度充足度（条数·置信度，达标=了解充分）</div>';
+  let h='<div style="font-size:12px;color:var(--gray-400);margin-bottom:6px">绑定维度充足度（条数·置信度，达标=了解充分）</div>';
   for(const k in dims){ const c=d.dim_confidence? (d.dim_confidence[k]||0):0;
     const s=suff[k]||{count:0,avg:0,sufficient:false};
     const ok=s.sufficient?'<span style="color:#34c98e;font-size:10px">✓充足</span>':`<span style="color:var(--gray-400);font-size:10px">${s.count}条</span>`;
-    h+='<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px"><div style="width:42px">'+dims[k]+'</div><div style="flex:1;height:8px;background:var(--gray-200);border-radius:4px"><div style="width:'+Math.round(c*100)+'%;height:100%;background:'+(s.sufficient?'#34c98e':'var(--meta-700)')+';border-radius:4px"></div></div><div style="width:64px;text-align:right">'+Math.round(c*100)+'% '+ok+'</div></div>'; }
-  h+='<div style="font-size:11px;color:var(--gray-400);margin-top:4px">已了解 '+escapeHtml(d.sufficient_dims||0)+' / '+escapeHtml(d.total_dims||8)+' 个维度'+(d.completeness?(' · 总体 '+Math.round(d.completeness*100)+'%'):'')+'</div>';
+    h+='<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px"><div style="width:64px">'+dims[k]+'</div><div style="flex:1;height:8px;background:var(--gray-200);border-radius:4px"><div style="width:'+Math.round(c*100)+'%;height:100%;background:'+(s.sufficient?'#34c98e':'var(--meta-700)')+';border-radius:4px"></div></div><div style="width:64px;text-align:right">'+Math.round(c*100)+'% '+ok+'</div></div>'; }
+  h+='<div style="font-size:11px;color:var(--gray-400);margin-top:4px">已绑定 '+escapeHtml(d.sufficient_dims||0)+' / '+escapeHtml(d.total_dims||5)+' 个维度'+(d.completeness?(' · 事实 '+Math.round(d.completeness*100)+'%'):'')+'</div>';
   document.getElementById('pvBars').innerHTML=h;
   document.getElementById('pvFacts').innerHTML='<div style="font-size:12px;color:var(--gray-400);margin:10px 0 4px">已蒸馏 '+escapeHtml(d.total)+' 条关于你的事实</div>'+(d.facts||[]).map(f=>'<div style="font-size:12px;margin:3px 0"><b>'+escapeHtml(f.field)+'</b>：'+escapeHtml(f.value)+'</div>').join('');
 }catch(e){ toast('画像加载失败：'+errText(e),'err'); } }
@@ -1453,8 +1571,16 @@ function openWizard(){
   document.getElementById('ws1').classList.add('on'); document.getElementById('ws2').classList.remove('on'); document.getElementById('ws3').classList.remove('on');
   document.getElementById('wNext').textContent='下一步'; document.getElementById('wizardMask').classList.add('show');
   const rp=document.getElementById('rolePick'); rp.innerHTML=''; roles.forEach(r=>{ const s=document.createElement('div'); s.className='rp'; s.textContent=r.name; s.dataset.id=r.id; s.onclick=()=>s.classList.toggle('sel'); rp.appendChild(s); });
-  modRows=defaultModRows(); renderModRows(); loadTemplates(); }
+  modRows=defaultModRows(); renderModRows(); loadTemplates(); loadDesignSpecs(); }
 function closeWizard(){ document.getElementById('wizardMask').classList.remove('show'); }
+async function loadDesignSpecs(){
+  try{ const r=await fetch('/api/design-specs'); const j=await r.json(); designSpecs=j.specs||[]; }
+  catch(e){ designSpecs=[]; }
+  const sel=document.getElementById('wDesign'); if(!sel) return;
+  sel.innerHTML='<option value="">不指定（默认）</option>'+designSpecs.map(s=>`<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
+  sel.onchange=()=>{ const d=designSpecs.find(x=>x.id===sel.value); document.getElementById('wDesignDesc').textContent=d?(d.desc||''):''; };
+  document.getElementById('wDesignDesc').textContent='';
+}
 function renderModRows(){
   const el=document.getElementById('modEditor'); el.innerHTML='';
   modRows.forEach((m,i)=>{
@@ -1487,9 +1613,10 @@ async function wizardNext(){ if(wStep===1){ if(!document.getElementById('wName')
   else if(wStep===2){ wStep=3; document.getElementById('wz2').style.display='none'; document.getElementById('wz3').style.display=''; document.getElementById('ws3').classList.add('on'); document.getElementById('wNext').textContent='成立团队'; renderModRows(); if(!wTemplates.length) loadTemplates(); }
   else { const name=document.getElementById('wName').value.trim(); const goal=document.getElementById('wGoal').value.trim();
     const standards=document.getElementById('wStandards').value.trim();
+    const design_standard=document.getElementById('wDesign')?.value||'';
     const modules=collectModRows();
     const roles=[...document.querySelectorAll('#rolePick .rp.sel')].map(r=>r.dataset.id);
-    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal,standards,modules,roles})});
+    await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,goal,standards,design_standard,modules,roles})});
     await postMsg('NEW','分身 · 元神','meta',`项目「${name}」已成立，团队已拉起，已按 ${modules.length} 个模块建立看板，开始工作。`);
     closeWizard(); await loadRooms();
     // 选中新建项目
@@ -1883,6 +2010,8 @@ async function loadBoard(){
     document.getElementById('boardProjTitle').textContent=j.name||'项目看板';
     document.getElementById('boardProjGoal').textContent=j.goal?('🎯 目标：'+j.goal):'';
     document.getElementById('boardProjStd').textContent=j.standards?('✅ 完成标准：'+j.standards):'（未设完成标准）';
+    const bdEl=document.getElementById('boardProjDesign');
+    if(bdEl){ const dn=(j.design_standard && designSpecs.length)?(designSpecs.find(x=>x.id===j.design_standard)?.name||j.design_standard):''; bdEl.textContent=dn?('🎨 设计规范：'+dn):'（未指定设计规范）'; }
     // v4.2 自主闭环：完成度进度条 + 当前阶段
     const c=j.completion||{};
     const wrap=document.getElementById('boardProgWrap');
@@ -1945,6 +2074,7 @@ function renderBoard(){
         <div style="font-size:12px;font-weight:500">${escapeHtml(m.name)}</div>
         <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${escapeHtml(m.owner_role||'')} · 依赖 ${escapeHtml(deps)}</div>
         <div style="font-size:10px;color:var(--meta);margin-top:4px">💬 进话题对话组 →</div>
+        <button class="btn sm" style="margin-top:5px;width:100%;font-size:10px;padding:2px 4px" onclick="event.stopPropagation();openModuleFiles('${jsStr(m.id)}')">📂 打开文件</button>
       </div>
       ${cells}
     </div>`;
@@ -1954,6 +2084,32 @@ function renderBoard(){
   const done=curTasks.filter(t=>t.status==='done').length;
   msg.textContent=`共 ${curMods.length} 个模块 · ${curTasks.length} 个任务 · 已完成 ${done} 个 · 点模块名进话题对话组，讨论后「提炼为任务」自动进待办列`;
 }
+/* v5.8 P1：点看板模块 → 打开该模块成果文件夹 */
+async function openModuleFiles(mid){
+  if(!curRoom){ toast('先选择项目'); return; }
+  try{
+    const d=await apiJson('/api/projects/'+curRoom+'/files?module_id='+encodeURIComponent(mid));
+    if(!d.ok){ toast('❌ '+d.error); return; }
+    document.getElementById('fileHead').textContent='📂 模块文件 · '+(curMods.find(x=>x.id===mid)?.name||mid);
+    let h=`<div style="font-size:11px;color:var(--gray-400);margin-bottom:8px;word-break:break-all">目录：${escapeHtml(d.dir||'')}</div>`;
+    const all=[...(d.indexed||[]),...(d.disk||[])];
+    if(!all.length){ h+='<div style="font-size:12px;color:var(--gray-400);padding:10px 0">该模块暂无文件。角色执行任务后，产出会自动落到此模块的成果文件夹。</div>'; }
+    else{
+      all.forEach(f=>{
+        h+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:.5px solid var(--gray-200);font-size:12px">
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${escapeHtml(f.name)}</span>
+          <span style="color:var(--gray-400);font-size:10px;white-space:nowrap">${escapeHtml((f.owner_member||'')+' · '+(f.size||0)+'B')}</span>
+          <button class="btn sm" onclick="copyPath('${jsStr(f.abs_path)}')">复制路径</button>
+          <a class="btn sm primary" href="/api/file?path=${encodeURIComponent(f.abs_path)}" target="_blank" download>下载</a>
+        </div>`;
+      });
+    }
+    document.getElementById('fileList').innerHTML=h;
+    document.getElementById('fileMask').style.display='flex';
+  }catch(e){ toast('打开失败：'+errText(e)); }
+}
+function closeFileMask(){ document.getElementById('fileMask').style.display='none'; }
+function copyPath(p){ try{ navigator.clipboard.writeText(p).then(()=>toast('✅ 路径已复制'),()=>toast('复制失败')); }catch(e){ toast('复制失败'); } }
 async function createMod(){
   const name=document.getElementById('newModNameB').value.trim();
   if(!name){ toast('填写模块名'); return; }
@@ -2377,13 +2533,13 @@ async function loadContextBadge(){
 }
 
 /* init */
-loadRooms(); renderRoles(); renderResources(); loadMeta(); renderModels();
+loadRooms(); renderRoles(); renderResources(); loadMeta(); renderModels(); checkAuth();
 loadCleanupPreview(); loadMemory(); loadContextBadge(); loadSkills();
 
 /* ── v5.1 首次使用引导：元神软门槛（3 步，可跳过）── */
 let onbStep=0;
 const ONB_STEPS=[
-  {t:'1 · 了解元神', body:`<div style="font-size:13px;line-height:1.8;color:var(--gray-600)">元神是你的数字分身：它代表你和团队沟通、按你的风格做决策、盯着每个项目的看板直到完成。<br><br>手机端更容易养成它——用聊天的方式说话，它都在听、在记、在变像你。</div>`},
+  {t:'1 · 了解元神', body:`<div style="font-size:13px;line-height:1.8;color:var(--gray-600)">元神是你的数字克隆体总管：默认形态就是一个<b>技术出身的项目经理</b>工具人——开箱即用，能直接帮你拆项目、派角色（架构/后端/前端/测试）、追进度、出交付，<b>不用任何炼制就能干活</b>。<br><br>当你通过<b>访谈 / 上传资料 / 闲聊</b>喂养它，它会把你的<b>利益关切 · 决策倾向 · 情感信号 · 价值观 · 沟通风格</b>学进去，从"通用工具人"变成"<b>你的</b>数字克隆体"。手机端最容易养成它——用聊天说话，它都在听、在记、在变像你。</div>`},
   {t:'2 · 让元神更懂你', body:`<div style="font-size:12px;color:var(--gray-600);margin-bottom:8px">给元神一点原料（至少 3 条关于你的事实）：</div>
     <div style="display:flex;gap:6px;margin-bottom:10px">
       <div style="flex:1;background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer" onclick="onbGo('interview')"><div style="font-size:12px">回答访谈</div><div style="font-size:9px;color:var(--gray-400)">最省事</div></div>
@@ -2391,7 +2547,7 @@ const ONB_STEPS=[
       <div style="flex:1;background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer" onclick="onbGo('talk')"><div style="font-size:12px">和元神说话</div><div style="font-size:9px;color:var(--gray-400)">闲聊几句</div></div>
     </div>
     <div id="onbFacts" style="font-size:12px;color:var(--gray-400)"></div>`},
-  {t:'3 · 完成基础画像', body:`<div style="font-size:13px;line-height:1.8;color:var(--gray-600)">完成以上任意一步后，点「完成，开始建项目」——元神基础画像就绪，可以解锁建项目了。<br><br>以后随时可以在元神头像里继续访谈、上传资料、镜像校验，让它越来越像你。</div>`},
+  {t:'3 · 开始用，随时炼', body:`<div style="font-size:13px;line-height:1.8;color:var(--gray-600)">元神<b>默认就能干活</b>（技术 PM 工具人），不需要先炼制。<br><br>你喂得越多、炼制得越深，它越像你——这是「<b>你的</b>」数字克隆体，不是通用 bot。以后随时在元神头像里继续访谈、上传资料、镜像校验，把绑定越做越牢。</div>`},
 ];
 async function checkOnboarding(){
   try{
@@ -2425,7 +2581,7 @@ async function finishOnboarding(){
   try{ await apiJson('/api/meta/onboarding',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"action":"done"}'}); }catch(e){}
   document.getElementById('onboardMask').style.display='none';
   window.__ONB_PENDING__=false;
-  toast('✅ 元神基础画像已就绪，可以建项目了','ok');
+  toast('✅ 元神开箱即用，已能干活；炼制得越多越像你','ok');
 }
 async function skipOnboarding(){
   try{ await apiJson('/api/meta/onboarding',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"action":"skip"}'}); }catch(e){}
