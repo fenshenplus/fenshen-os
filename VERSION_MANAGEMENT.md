@@ -5,7 +5,7 @@
 > 当前版本：**v6.1**（`0.61.0` / release `v6.1`，矩阵看板 M1 + 元神长续航调度器 M2/M3/M4 + 6 meta 端点 + autopilot 控制台；v6.0 新 UI 外壳已收口）
 > 基于：`v4.1`（git `f5b1929`）
 > 分支：`fix/v4.0-audit`
-> 最后更新：2026-08-14
+> 最后更新：2026-08-14（v6.1 已发布：8002 切换新二进制 · git tag `v6.1` · dmg 已生成 · S4 官网推送待网络恢复）
 
 ---
 
@@ -201,7 +201,7 @@
 | 2026-08-11 | v5.0 移动端体验闭环（异步派单/PWA/移动看板）+ 安装包 v5.0 + 官网推送 | `backend/main.py`, `frontend/*`, `dist-stage/分身-v1/*`, `site/分身-v5.0-macOS.zip` | 线上备份 `/var/www/fenshen-backup-20260811-1040`；v4.2 下架（404）；demo.mp4 更新 v5.0 演示视频 |
 | 2026-08-10 | 安装包重建 v4.2 + 官网推送 | `dist-stage/分身-v1/*`, `site/分身-v4.2-macOS.zip`, `site/index.html`, `deliverables/gstack/v4.2-signoff.md` | 线上备份 `/var/www/fenshen-backup-20260810-1958`；v4.1 包下架（404）；v4.2 包 200 完整 |
 | 2026-08-14 | v5.8 四项重构收口 + 安装包 v5.8 macOS dmg + 官网推送 | `backend/main.py`, `frontend/index.html`, `backend/design_specs/*`, `migrate_storage_v58.py`, `tests/smoke_v40.py`, `packaging/macos/run_app.py`, `site/分身-v5.8-macOS.dmg`, `site/index.html`, `deliverables/gstack/v5.8-signoff.md` | 线上备份 `/var/www/fenshen-backup-20260814-1021`；v5.5 macOS dmg 下架（404）；v5.8 dmg 200 在线；版本号 0.58.0/v5.8；冒烟 76/0 |
-| 2026-08-14 | v6.0 新 UI 外壳落地 + 全功能测试 + 安装包 v6.0 macOS dmg + 官网推送 | `backend/main.py`, `frontend/index.html`, `packaging/macos/run_app.py`, `tests/smoke_v40.py`, `site/分身-v6.0-macOS.dmg`, `site/index.html`, `deliverables/gstack/v6.0-signoff.md` | 线上备份 `/var/www/fenshen-backup-20260814-1343`；v5.9 dmg 下架（404）；v6.0 dmg 200 在线（66MB）；版本号 0.60.0/v6.0；jsdom 端到端 0 报错；冒烟 76/0 |
+| 2026-08-14 | v6.0 新 UI 外壳落地 + 全功能测试 + 安装包 v6.0 macOS dmg + 官网推送 | `backend/main.py`, `frontend/index.html`, `packaging/macos/run_app.py`, `tests/smoke_v40.py`, `site/分身-v6.0-macOS.dmg`, `site/index.html`, `deliverables/gstack/v6.0-signoff.md` | 线上备份 `/var/www/fenshen-backup-20260814-1343`；v5.9 dmg 下架（404）；v6.0 dmg 200 在线（66MB） | 2026-08-14 | v6.1 矩阵看板 M1 + 元神长续航调度器 M2/M3/M4 + 6 meta 端点 + autopilot 控制台 + 安装包 v6.1 macOS dmg + 官网推送（S4 待推送） | `backend/main.py`, `frontend/index.html`, `frontend/fenshen.png`, `tests/smoke_v40.py`, `migrate_matrix_v61.py`, `packaging/macos/run_app.py`, `site/分身-v6.1-macOS.dmg`, `site/index.html`, `deliverables/gstack/v6.1-signoff.md`, `VERSION_MANAGEMENT.md` | 8002 切换新二进制（pid 62768）health=v6.1；v6.1 dmg 21.4MB 已生成；git commit `652093a` + tag `v6.1`；冒烟 76/0 · 调度单测 28/28 · jsdom 9/9 · meta/autopilot HTTP 全绿；S4（39.105.6.135）当前不可达，官网推送待网络恢复后执行 |；版本号 0.60.0/v6.0；jsdom 端到端 0 报错；冒烟 76/0 |
 
 ---
 
