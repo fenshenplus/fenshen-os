@@ -25,3 +25,4 @@ site/*.dmg
 dist/
 build/
 *.spec
+分身.app/

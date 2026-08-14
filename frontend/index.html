@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>分身 · v6.0</title>
-<meta name="theme-color" content="#6d5bd0">
+<title>分身 · v6.1</title>
+<meta name="theme-color" content="#000000">
 <link rel="manifest" href="/manifest.json">
-<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="fenshen.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -54,7 +55,7 @@
 
   /* 顶栏 */
   .topbar { height:48px; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:0.5px solid var(--gray-200); background:var(--gray-50); }
-  .logo { width:26px; height:26px; border-radius:7px; background:var(--meta-700); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600; font-size:13px; }
+  .logo { width:28px; height:28px; border-radius:7px; object-fit:cover; flex:0 0 auto; box-shadow:0 0 0 0.5px rgba(0,0,0,.08); }
   .brand { font-size:14px; font-weight:500; }
   .brand small { color:var(--gray-400); font-weight:400; font-size:11px; margin-left:6px; }
   .topbar .spacer { flex:1; }
@@ -256,10 +257,10 @@
 
 <div class="app">
   <div class="topbar">
-    <div class="logo">分</div>
-    <div class="brand">分身 <small>coding 版 · 群聊团队</small></div>
+    <img src="fenshen.png" class="logo" alt="分身">
+    <div class="brand">分身 <small>v6.1 · 模块×阶段矩阵</small></div>
     <div class="spacer"></div>
-    <span class="ver">v6.0</span>
+    <span class="ver">v6.1</span>
     <span id="userChip" class="user-chip" style="display:none"></span>
     <button class="btn" id="btnAnnot">标注模式：关</button>
     <button class="btn" onclick="showAbout()">原型说明</button>
@@ -332,6 +333,7 @@
         <div class="navitem" data-sec="skills"><span class="dotk"></span>技能库</div>
         <div class="navitem" data-sec="experiences"><span class="dotk"></span>经验库</div>
         <div class="navitem" data-sec="evolution"><span class="dotk"></span>进化中心</div>
+        <div class="navitem meta" data-sec="autopilot"><span class="dotk"></span>元神续航</div>
         <div class="navitem" data-sec="about"><span class="dotk"></span>关于分身</div>
         <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
       </div>
@@ -491,7 +493,18 @@
               <button class="btn sm" style="background:#6d5bd0;color:#fff;border:none" onclick="runPlan()">🚀 自动拆解</button>
             </div>
           </div>
-          <div id="boardGridInline" style="flex:1;overflow:auto;min-height:280px"></div>
+            <div style="display:flex;gap:8px;align-items:center;margin:6px 0 8px;flex-wrap:wrap">
+              <div style="display:inline-flex;border:.5px solid var(--gray-200);border-radius:8px;overflow:hidden">
+                <button id="viewMatrix" class="btn sm" onclick="setBoardView('matrix')" style="border:none;background:var(--meta);color:#fff;font-size:11px;padding:3px 12px">📊 矩阵看板</button>
+                <button id="viewStatus" class="btn sm" onclick="setBoardView('status')" style="border:none;background:#fff;color:var(--gray-500);font-size:11px;padding:3px 12px">🗂 状态看板</button>
+              </div>
+              <div id="boardTrackTabs" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+              <div style="margin-left:auto">
+                <button class="btn sm" style="background:#6d5bd0;color:#fff;border:none;font-size:11px;padding:3px 12px" onclick="fillBlanks()">🧩 补空白格</button>
+              </div>
+            </div>
+            <div id="boardMatrix" style="flex:1;overflow:auto;min-height:280px"></div>
+            <div id="boardGridInline" style="flex:1;overflow:auto;min-height:280px;display:none"></div>
           <div id="boardMsgInline" style="font-size:11px;color:var(--gray-400);margin-top:8px"></div>
         </div>
       </div>
@@ -747,7 +760,7 @@
       <div class="section" id="sec-skills">
         <div style="padding:16px 20px;flex:1;overflow-y:auto">
           <div class="grid-head"><span class="t">技能库</span><span class="rl" style="font-size:11px;color:var(--gray-400)">可复用的标准化工作流，跨项目共享 · 支持版本迭代与回滚</span></div>
-          <div style="font-size:11px;color:var(--gray-500);margin:12px 0">预装 12 项 coding 核心技能（必要且充分，自动可用）</div>
+          <div style="font-size:11px;color:var(--gray-500);margin:12px 0">预装 13 项核心技能（12 项 coding + 上下文「磨」）：出厂即启用、命中触发词自动装配 · 技能位上限 20（含预装，余 7 位供选配）</div>
           <div id="skillList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
           <!-- 技能编辑弹窗 -->
           <div class="mask" id="skillMask" style="display:none">
@@ -874,6 +887,17 @@
       <!-- 原型说明 -->
       <div class="section" id="sec-about">
         <div class="about" id="aboutBody"></div>
+      </div>
+      <div class="section" id="sec-autopilot">
+        <div class="grid-head"><span class="t">元神续航 · 长续航调度器 <span style="font-size:11px;color:var(--gray-400);font-weight:400;margin-left:6px">元神替代你持续推进项目：自动驾驶 / 正常 / 休息，自动补空白、关键路径优先、按作息休眠</span></span></div>
+        <div style="padding:14px">
+          <div id="apMode" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
+          <div style="margin-bottom:10px"><b style="font-size:13px">实时指标</b><div id="apMetrics" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-top:6px"></div></div>
+          <div style="margin-bottom:10px"><b style="font-size:13px">Token 预算护栏</b><div id="apBudget" style="margin-top:6px"></div></div>
+          <div style="margin-bottom:10px"><b style="font-size:13px">作息休息窗口（M4）</b><div id="apRest" style="margin-top:6px"></div></div>
+          <div style="margin-bottom:10px"><b style="font-size:13px">关键路径焦点（元神正在优先打通）</b><div id="apFocus" style="margin-top:6px"></div></div>
+          <div><b style="font-size:13px">项目级暂停</b><div id="apPause" style="margin-top:6px"></div></div>
+        </div>
       </div>
     </div>
   </div>
@@ -1239,7 +1263,7 @@ function closeDrawer(){ const m=document.getElementById('drawerMask'), d=documen
 function filterDrawer(q){ q=(q||'').trim().toLowerCase(); document.querySelectorAll('#drawerNav .navitem').forEach(it=>{ const t=it.textContent.toLowerCase(); it.style.display=(!q||t.includes(q))?'':'none'; }); }
 function toggleSplit(){ const p=document.getElementById('splitPanel'); if(!p)return; const open=p.style.display!=='none'; if(open){ p.style.display='none'; window.__splitOpen=false; } else { p.style.display='flex'; window.__splitOpen=true; switchSplit('traj'); } }
 function switchSplit(tab){ const t1=document.getElementById('tabTraj'),t2=document.getElementById('tabBoard'),tp=document.getElementById('trajPane'),bp=document.getElementById('boardPane'); if(t1)t1.classList.toggle('active',tab==='traj'); if(t2)t2.classList.toggle('active',tab==='board'); if(tp)tp.style.display=tab==='traj'?'block':'none'; if(bp)bp.style.display=tab==='board'?'block':'none'; if(tab==='traj') loadTrajPanel(); else loadSplitBoard(); }
-async function loadSplitBoard(){ if(!curRoom) return; try{ await loadBoard(); }catch(e){} const src=document.getElementById('boardGridInline'), dst=document.getElementById('splitBoard'); if(src&&dst) dst.innerHTML=src.innerHTML; }
+async function loadSplitBoard(){ if(!curRoom) return; try{ await loadBoard(); }catch(e){} const src=(window._boardView==='status')?document.getElementById('boardGridInline'):document.getElementById('boardMatrix'); const dst=document.getElementById('splitBoard'); if(src&&dst) dst.innerHTML=src.innerHTML; }
 function renderEv(ev){
   let meta=ev.meta; try{ if(typeof meta==='string') meta=JSON.parse(meta); }catch(e){ meta={}; }
   const detail = (meta && (meta.detail||meta.tool||meta.plan||meta.thought)) ? (meta.detail||meta.tool||meta.plan||meta.thought) : (ev.text||'');
@@ -1537,6 +1561,66 @@ async function mirrorJudge(btn, pred, agree){
   });
 }
 
+/* ── 元神续航控制台（v6.1：M2/M3/M4 长续航调度器前端）── */
+let _apTimer=null;
+async function loadAutopilot(){
+  try{
+    const d=await apiJson('/api/autopilot/state');
+    renderAutopilot(d);
+  }catch(e){ console.error('autopilot', e); }
+}
+function renderAutopilot(d){
+  if(!d||!d.ok) return;
+  const modes=d.modes||['autopilot','normal','rest'];
+  const modeLabel={autopilot:'🚀 自动驾驶',normal:'⚙️ 正常',rest:'🌙 休息'};
+  let mh='';
+  modes.forEach(m=>{
+    const on=d.mode===m;
+    mh+=`<button class="btn sm" onclick="setAutopilot({mode:'${m}'})" style="${on?'background:var(--meta);color:#fff;border:none':'background:#fff;color:var(--gray-500);border:.5px solid var(--gray-200)'}">${modeLabel[m]||m}</button>`;
+  });
+  if(!d.autonomy_enabled) mh+=' <span style="font-size:11px;color:#e05656">（全局自主已关闭，元神不自动派单）</span>';
+  document.getElementById('apMode').innerHTML=mh;
+  const m=[['当前模式',d.mode],['派单中',d.inflight],['并发峰值',d.inflight_peak],
+    ['累计派单',d.dispatched_total],['累计补卡',d.filled_total],['回收卡死',d.recycled_total],
+    ['调度轮次',d.ticks],['连败',d.fail_streak],['熔断',d.circuit_open?'是':'否'],
+    ['休息窗口',d.rest_window_active?'激活':'未激活']];
+  document.getElementById('apMetrics').innerHTML=m.map(([k,v])=>`<div style="background:var(--gray-100);border-radius:8px;padding:8px"><div style="font-size:10px;color:var(--gray-400)">${k}</div><div style="font-size:15px;font-weight:600;color:var(--gray-700)">${v}</div></div>`).join('');
+  const b=d.token_budget||{};
+  document.getElementById('apBudget').innerHTML=`
+    <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">小时：已用 ${b.used_hour||0} / 预算 ${b.hour||'∞'} ｜ 日：已用 ${b.used_day||0} / 预算 ${b.day||'∞'}</div>
+    <input id="apBh" placeholder="小时预算(0=不限)" style="width:140px;padding:5px 8px;border:.5px solid var(--gray-200);border-radius:6px;font-size:12px">
+    <input id="apBd" placeholder="日预算(0=不限)" style="width:140px;padding:5px 8px;border:.5px solid var(--gray-200);border-radius:6px;font-size:12px;margin-left:6px">
+    <button class="btn sm meta" onclick="setAutopilot({token_budget_hour:(+document.getElementById('apBh').value||0),token_budget_day:(+document.getElementById('apBd').value||0)})" style="margin-left:6px">保存预算</button>`;
+  const rs=d.rest_schedule||{};
+  document.getElementById('apRest').innerHTML=`
+    <label style="font-size:12px"><input type="checkbox" id="apRsChk" ${rs.enabled?'checked':''} onchange="setAutopilot({rest_schedule:{enabled:this.checked,start:document.getElementById('apRs').value,end:document.getElementById('apRe').value}})"> 启用夜间自动休眠（休息窗口内停派单/补空白，但照常回收卡死任务）</label>
+    <div style="margin-top:6px;font-size:12px;color:var(--gray-600)">休息时段（支持跨午夜，如 23:00–08:00）：
+      <input id="apRs" value="${rs.start||'23:00'}" style="width:70px;padding:4px 6px;border:.5px solid var(--gray-200);border-radius:6px;font-size:12px">
+      – <input id="apRe" value="${rs.end||'08:00'}" style="width:70px;padding:4px 6px;border:.5px solid var(--gray-200);border-radius:6px;font-size:12px">
+      <button class="btn sm meta" onclick="setAutopilot({rest_schedule:{enabled:document.getElementById('apRsChk').checked,start:document.getElementById('apRs').value,end:document.getElementById('apRe').value}})" style="margin-left:6px">保存时段</button>
+    </div>`;
+  const fp=d.focus_paths||{};
+  const fpk=Object.keys(fp);
+  document.getElementById('apFocus').innerHTML = fpk.length
+    ? fpk.map(pid=>`<div style="font-size:12px;margin:3px 0"><b>${pid}</b>：⚡ ${(fp[pid]||[]).join(' → ')||'—'}</div>`).join('')
+    : '<div style="font-size:12px;color:var(--gray-400)">暂无在跑项目</div>';
+  const paused=d.paused_projects||[];
+  let ph = paused.length
+    ? paused.map(pid=>`<span style="display:inline-block;font-size:12px;background:#fff1f0;border:.5px solid #ffccc7;border-radius:8px;padding:3px 8px;margin:3px">${pid} <a style="cursor:pointer;color:#cf1322" onclick="setAutopilot({resume:['${pid}']})">恢复</a></span>`).join(' ')
+    : '<span style="font-size:12px;color:var(--gray-400)">无暂停项目</span>';
+  if(curRoom && !paused.includes(curRoom)){
+    ph+=` <button class="btn sm" onclick="setAutopilot({paused:['${curRoom}']})" style="margin-left:6px">⏸ 暂停当前项目(${curRoom})</button>`;
+  }
+  document.getElementById('apPause').innerHTML=ph;
+}
+async function setAutopilot(payload){
+  try{
+    const j=await apiJson('/api/autopilot/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(j.ok){ await loadAutopilot(); toast('已更新续航设置'); }
+    else toast('❌ '+(j.error||'失败'));
+  }catch(e){ toast('请求失败：'+e); }
+}
+
 /* ── 元神总看板（v3.5 元神睁眼） ── */
 let metaBoardVisible=false;
 function toggleMetaView(){
@@ -1786,6 +1870,8 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
   }
   // v5.1 应用市场：切过来加载上架产品列表
   if(n.dataset.sec==='market'){ loadMarket(); }
+  // v6.1 元神续航：切过来拉取调度器实时状态
+  if(n.dataset.sec==='autopilot'){ loadAutopilot(); }
 });
 
 // v5.0 移动端首页：手机默认进「项目群聊」（最常用），桌面保持元神窗
@@ -2175,9 +2261,10 @@ async function loadBoard(){
       document.getElementById('boardProgBar').style.width=pct+'%';
       document.getElementById('boardProgLabel').textContent=`完成度 ${pct}%（${c.done}/${c.total} 卡）${pct>=100?' 🎉 已达 100%，等待进入下一阶段':''}`;
       document.getElementById('boardPhaseLabel').textContent='阶段：'+(j.phase||'requirement');
-      // 项目级自主推进开关（v4.2）
+      // 项目级自主推进开关：统一走 autopilot paused_projects（与续航控制台一致）
       const ab=document.getElementById('boardAutoBtn');
-      const paused=!!j.autonomy_paused;
+      let paused=!!j.autonomy_paused;
+      try{ const aps=await apiJson('/api/autopilot/state'); if((aps.paused_projects||[]).includes(curRoom)) paused=true; }catch(e){}
       window._autoPaused=paused;
       ab.textContent=paused?'▶ 恢复自主推进':'⏸ 暂停自主推进';
       ab.style.background=paused?'#34c98e':'var(--gray-100)';
@@ -2185,17 +2272,141 @@ async function loadBoard(){
       ab.style.border='none';
     } else wrap.style.display='none';
   }catch(e){ console.error(e); curMods=[]; curTasks=[]; curTopics=[]; }
-  renderBoard();
+  if((window._boardView||'matrix')==='status'){ renderBoard(); }
+  else { loadMatrix(); }
 }
 async function toggleBoardAutonomy(){
   if(!curRoom){ toast('先选择项目'); return; }
+  const pausing=!window._autoPaused;
   try{
-    const r=await fetch(`/api/projects/${curRoom}/autonomy`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paused:!(window._autoPaused)})});
+    const j=await apiJson('/api/autopilot/set',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(pausing?{paused:[curRoom]}:{resume:[curRoom]})});
+    if(j.ok){ window._autoPaused=pausing; toast(pausing?'⏸ 已暂停该项目（元神不再自动派单）':'▶ 已恢复该项目'); await loadBoard(); }
+    else toast('❌ '+(j.error||'失败'));
+  }catch(e){ toast('请求失败：'+e); }
+}
+/* ── v6.1 矩阵看板（模块 × 阶段） ── */
+window._boardView = window._boardView || 'matrix';
+window._curTrack = window._curTrack || 'web';
+const CELL_BG = {blank:'#ffffff', todo:'#fafafa', doing:'#fff7e6', review:'#e6f4ff', done:'#f6ffed', blocked:'#fff1f0'};
+const CELL_LABEL = {blank:'空白', todo:'待办', doing:'进行中', review:'待审核', done:'已完成', blocked:'阻塞'};
+const MATRIX_COLS = ['idea','todo','doing','review','done'];
+
+function setBoardView(v){
+  window._boardView = v;
+  const a=document.getElementById('viewMatrix'), b=document.getElementById('viewStatus');
+  a.style.background = v==='matrix'?'var(--meta)':'#fff'; a.style.color = v==='matrix'?'#fff':'var(--gray-500)';
+  b.style.background = v==='status'?'var(--meta)':'#fff'; b.style.color = v==='status'?'#fff':'var(--gray-500)';
+  document.getElementById('boardMatrix').style.display = v==='matrix'?'block':'none';
+  document.getElementById('boardGridInline').style.display = v==='status'?'block':'none';
+  if(v==='matrix') loadMatrix(); else renderBoard();
+}
+
+async function loadMatrix(){
+  if(!curRoom) return;
+  try{
+    const j = await (await fetch('/api/projects/'+curRoom+'/matrix?track='+encodeURIComponent(window._curTrack))).json();
+    window._mx = j; renderTrackTabs(j.tracks||['web']); renderMatrix(j);
+  }catch(e){ console.error(e); document.getElementById('boardMatrix').innerHTML='<div style="padding:40px;color:var(--gray-400)">矩阵加载失败：'+(e.message||e)+'</div>'; }
+}
+function trackName(t){ return ({web:'网站制作',h5:'H5页面',app:'APP封装',mp:'小程序',generic:'通用'})[t]||t; }
+function renderTrackTabs(tracks){
+  const el=document.getElementById('boardTrackTabs');
+  if(!tracks||tracks.length<=1){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display='flex';
+  el.innerHTML = tracks.map(t=>`<button class="btn sm" onclick="switchTrack('${jsStr(t)}')" style="font-size:10px;padding:3px 10px;border:.5px solid var(--gray-200);border-radius:8px;${t===window._curTrack?'background:var(--meta);color:#fff;border-color:var(--meta)':'background:#fff;color:var(--gray-500)'}">${trackName(t)}</button>`).join('');
+}
+function switchTrack(t){ window._curTrack=t; loadMatrix(); }
+
+function renderMatrix(j){
+  const g=document.getElementById('boardMatrix');
+  if(!j.modules||!j.modules.length){ g.innerHTML='<div style="padding:40px;color:var(--gray-400);font-size:13px;width:100%;text-align:center">还没有模块 —— 用上方输入框添加第一个模块，或成立项目时解构</div>'; return; }
+  const stages=j.stages||[];
+  let h='<div style="min-width:max-content">';
+  h+='<div style="display:flex;align-items:flex-end;margin-bottom:6px">';
+  h+='<div style="width:160px;flex-shrink:0;font-size:10px;color:var(--gray-400)">模块 ＼ 阶段</div>';
+  h+=stages.map(s=>`<div style="flex:1;min-width:120px;text-align:center;font-size:11px;color:var(--gray-500);padding:4px 0;line-height:1.3">${escapeHtml(s==='__uncat__'?'未分环节':s)}<br><span style="color:var(--meta);font-weight:600">${j.row_pct[s]||0}%</span></div>`).join('');
+  h+='</div>';
+  j.modules.forEach(m=>{
+    const isCrit=(j.critical_path||[]).includes(m.id);
+    h+='<div style="display:flex;align-items:stretch;margin-bottom:8px">';
+    h+=`<div onclick="openModuleFiles('${jsStr(m.id)}')" style="width:160px;flex-shrink:0;border:.5px solid var(--gray-200);border-radius:8px;padding:6px 8px;margin-right:6px;background:${isCrit?'#fff7e6':'var(--gray-100)'};cursor:pointer;position:relative">
+      <div style="font-size:12px;font-weight:500">${escapeHtml(m.name)}</div>
+      <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${escapeHtml(m.owner_role||'')} · ${j.column_pct[m.id]||0}%</div>
+      ${isCrit?'<div style="font-size:9px;color:#fa8c16;margin-top:2px">⚡关键路径</div>':''}
+    </div>`;
+    stages.forEach(s=>{
+      const c=(j.cells[m.id]&&j.cells[m.id][s])||{status:'blank',pct:0,done:0,total:0,tasks:[]};
+      const inner = c.status==='blank'
+        ? '<div style="font-size:10px;color:var(--gray-400);text-align:center;padding:10px 0">＋ 空白</div>'
+        : `<div style="font-size:10px;font-weight:600;color:#333">${c.pct}% · ${c.done}/${c.total}</div>`
+          + c.tasks.slice(0,3).map(t=>`<div style="font-size:9px;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">• ${escapeHtml(t.name)}</div>`).join('')
+          + (c.tasks.length>3?`<div style="font-size:9px;color:var(--gray-400)">+${c.tasks.length-3}</div>`:'');
+      h+=`<div onclick="openCellDlg('${jsStr(m.id)}','${jsStr(s)}')" style="flex:1;min-width:120px;background:${CELL_BG[c.status]||'#fff'};border:.5px solid var(--gray-200);border-radius:8px;padding:5px;margin:0 3px;cursor:pointer">${inner}</div>`;
+    });
+    h+='</div>';
+  });
+  h+=`<div style="font-size:11px;color:var(--gray-400);margin-top:6px">项目进度 <b style="color:var(--gray-600)">${j.project_pct}%</b> · 任务 ${j.task_total} / 已完成 ${j.task_done} · 空白格 <b style="color:#fa8c16">${j.blank_count}</b>（可补）${j.uncat_count?(' · <span style="color:#bfbfbf">未分环节 '+j.uncat_count+'（建议运行迁移整理）</span>'):''}</div>`;
+  h+='</div>';
+  g.innerHTML=h;
+}
+
+function openCellDlg(mid,stage){
+  const j=window._mx; if(!j) return;
+  const m=j.modules.find(x=>x.id===mid); if(!m) return;
+  const c=(j.cells[mid]&&j.cells[mid][stage])||{status:'blank',tasks:[]};
+  const stageName=stage==='__uncat__'?'未分环节':stage;
+  const tasksHtml = c.tasks.length ? c.tasks.map(t=>`
+    <div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:.5px solid var(--gray-200)">
+      <div style="flex:1;overflow:hidden"><div style="font-size:12px">${escapeHtml(t.name)}</div><div style="font-size:10px;color:var(--gray-400)">${escapeHtml(t.owner_role||'')} · ${CELL_LABEL[t.status]||t.status}</div></div>
+      <select style="padding:2px 4px;border:.5px solid var(--gray-200);border-radius:6px;font-size:10px;background:#fff" onchange="moveTask('${jsStr(t.id)}',this.value);setTimeout(loadMatrix,300)">
+        ${MATRIX_COLS.map(x=>`<option value="${x}" ${x===t.status?'selected':''}>${CELL_LABEL[x]||x}</option>`).join('')}
+      </select>
+    </div>`).join('') : '<div style="padding:12px;color:var(--gray-400);font-size:12px">该格子暂无任务</div>';
+  let ov=document.getElementById('cellOverlay'); if(ov) ov.remove();
+  ov=document.createElement('div'); ov.id='cellOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:300;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:#fff;border-radius:14px;width:min(560px,92vw);max-height:84vh;overflow:auto;padding:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:15px;font-weight:600">${escapeHtml(m.name)} · ${escapeHtml(stageName)} <span style="font-size:11px;color:var(--gray-400)">(${CELL_LABEL[c.status]||c.status})</span></div>
+      <button class="btn sm" onclick="closeCellDlg()">✕</button>
+    </div>
+    <div id="cellTasks">${tasksHtml}</div>
+    <div style="display:flex;gap:6px;margin-top:12px">
+      <input id="cellTaskName" placeholder="在「${escapeHtml(stageName)}」新建任务（回车提交）" style="flex:1;padding:6px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px" onkeydown="if(event.key==='Enter')createCellTask('${jsStr(mid)}','${jsStr(stage)}')">
+      <button class="btn sm meta" onclick="createCellTask('${jsStr(mid)}','${jsStr(stage)}')">＋ 补卡</button>
+    </div>
+  </div>`;
+  ov.onclick=e=>{ if(e.target===ov) closeCellDlg(); };
+  document.body.appendChild(ov);
+  const inp=document.getElementById('cellTaskName'); if(inp) inp.focus();
+}
+function closeCellDlg(){ const o=document.getElementById('cellOverlay'); if(o) o.remove(); }
+async function createCellTask(mid,stage){
+  const inp=document.getElementById('cellTaskName'); const name=(inp&&inp.value||'').trim();
+  if(!name){ toast('请输入任务名'); return; }
+  try{
+    const r=await fetch(`/api/projects/${curRoom}/cell/tasks`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({module_id:mid,stage:stage==='__uncat__'?'':stage,name})});
     const j=await r.json();
-    if(j.ok){ window._autoPaused=j.paused; toast(j.paused?'⏸ 已暂停自主推进（此项目看板任务由人工推进）':'▶ 已恢复自主推进'); await loadBoard(); }
+    if(j.ok){ toast('✅ 已在该格子建任务'); await loadMatrix(); openCellDlg(mid,stage); }
     else toast('❌ '+j.error);
   }catch(e){ toast('请求失败：'+e); }
 }
+async function fillBlanks(){
+  if(!curRoom){ toast('先选择项目'); return; }
+  try{
+    const r=await fetch(`/api/projects/${curRoom}/fill-blanks`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({track:window._curTrack,dry_run:true})});
+    const j=await r.json();
+    if(!j.ok){ toast('❌ '+j.error); return; }
+    if(!j.count){ toast('✅ 没有可补的空白格（前置阶段都未完成或已填满）'); return; }
+    if(!confirm(`元神可补 ${j.count} 个空白格（前一阶段已 done、当前空白）。\n\n是否创建这些待办任务？`)) return;
+    const r2=await fetch(`/api/projects/${curRoom}/fill-blanks`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({track:window._curTrack,dry_run:false})});
+    const j2=await r2.json();
+    if(j2.ok){ toast(`✅ 已补 ${j2.created} 张卡`); await loadMatrix(); }
+    else toast('❌ '+j2.error);
+  }catch(e){ toast('请求失败：'+e); }
+}
+
 function renderBoard(){
   const g=document.getElementById('boardGridInline');
   if(!curMods.length){ g.innerHTML='<div style="padding:40px;color:var(--gray-400);font-size:13px;width:100%;text-align:center">还没有模块 —— 用上方输入框添加第一个模块，或成立项目时解构</div>'; return; }

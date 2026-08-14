@@ -231,7 +231,7 @@ def test_batch_b():
     code, h = call("GET", "/api/health")
     check("批次B：approval_mode 默认 danger", isinstance(h, dict) and h.get("approval_mode") == "danger",
           str(h.get("approval_mode")))
-    check("批次B：release 版本 v6.0", isinstance(h, dict) and h.get("release") == "v6.0",
+    check("批次B：release 版本 v6.1", isinstance(h, dict) and h.get("release") == "v6.1",
           str(h.get("release")) + "/" + str(h.get("version")))
 
     # ── v5.6 借鉴 DeepSeek Harness：工作区限定 + PTC 批处理 ──
@@ -297,7 +297,14 @@ def test_batch_b():
 def test_batch_c():
     """批次 C：预设技能活配件 / 角色动态加载 / 并行上限动态。"""
     print("\n── 7. 批次 C：技能活配件 / 角色动态加载 / 并行上限 ──")
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    # 支持在隔离测试实例（独立 DB）上运行：FENSHEN_TEST_APP_DIR 指向测试项目根，
+    # 使直接 import 的 backend.main 与 HTTP 服务端使用同一份 DB（默认仍指向源码根，保持原行为）。
+    _app_dir = os.environ.get("FENSHEN_TEST_APP_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    sys.path.insert(0, _app_dir)
+    if os.environ.get("FENSHEN_TEST_APP_DIR"):
+        # 批次B 已从源码根缓存 backend.main，需清除后强制从测试目录重新解析，否则仍读源码 DB。
+        for _m in ("backend", "backend.main"):
+            sys.modules.pop(_m, None)
 
     # P3-2 预设技能：GET /api/skills 应有 12 条内置且全部启用
     code, sk = call("GET", "/api/skills")
@@ -334,7 +341,7 @@ def test_batch_c():
         check("批次C：角色动态加载验证", False, str(e)[:80])
     # 清场：直接删角色（roles 无 DELETE 接口，用 sqlite 直删）
     try:
-        conn = __import__("sqlite3").connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "fenshen.db"))
+        conn = __import__("sqlite3").connect(os.path.join(_app_dir, "data", "fenshen.db"))
         conn.execute("DELETE FROM roles WHERE id=?", (test_role,))
         conn.commit()
         conn.close()

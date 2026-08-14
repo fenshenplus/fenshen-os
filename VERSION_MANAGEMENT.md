@@ -2,7 +2,7 @@
 
 > 产品：分身 · 群聊形态 AI 团队总管（桌面端引擎 + H5/LAN 终端）
 > 工作区：`/Users/a13401098230/WorkBuddy/fenshen-v1/`
-> 当前版本：**v6.0**（`0.60.0` / release `v6.0`，新 UI 外壳：图标栏+设置抽屉+联系人列+分栏进程轨迹/看板+聊天内思考链；v5.9 候选增强已收口）
+> 当前版本：**v6.1**（`0.61.0` / release `v6.1`，矩阵看板 M1 + 元神长续航调度器 M2/M3/M4 + 6 meta 端点 + autopilot 控制台；v6.0 新 UI 外壳已收口）
 > 基于：`v4.1`（git `f5b1929`）
 > 分支：`fix/v4.0-audit`
 > 最后更新：2026-08-14
@@ -27,9 +27,10 @@
 | **v5.5** | 2026-08-13 | 待打 tag | **待签字** | 战略修正 P0（首启不阻塞/技能只读/市场折叠/局域网一键开关）+ P1 token 节约（自主 60s）+ 双平台 v5.5 包；冒烟 72/0 | Windows 跨平台：start.bat 启动器 + PowerShell 审批弹窗 + paramiko 部署（实测 S4 备份+上传）；官网 macOS/Windows 双平台安装包；冒烟 72/0 | 运营中心转正（公开反馈→转看板 + SEO）+ 12 技能执行验证（番茄钟全链路真实产出）+ 测试产物落盘规范 + 移动端真机清单；冒烟 72/0 | 移动端遥控器（群聊首页/元神置顶/左滑看板/语音）+ 部署一键化 + 监控自动兜底 + 首登引导/软门槛；12 技能核对 12/12；冒烟 72/0 | 应用市场上架（内测）：一键上架/公开产品页/访问统计；审批超时可配置（≤3s fail-closed 直接拒绝）；冒烟 72/0 | 移动端体验闭环：异步派单+进度轮询 / PWA 可安装离线 / 移动端看板快捷操作 / 手机默认群聊；WAL 并发写修复；演示视频 v4 重录 | 自主闭环：立项自动拆解（/plan）+ 看板完成度 + 阶段自动流转 + 团队自主推进循环（元神不提问）+ 派单并行化；DeepSeek 迁移 v4-flash + 关闭思考模式；安装包 v4.2 已上线官网 |
 | **v5.6** | 2026-08-14 | `b41fc24` | 已合入（未单独签字） | 借鉴 DeepSeek Harness——工作区限定 + PTC 批处理（落地+评估） | — | — | — | — | — | — | — |
 | **v5.7** | 2026-08-14 | 未打 tag | 已合入（未单独签字） | 元神 PM 定位 + 蒸馏重排为绑定（利益/情感，非增强能力）+ 手机号+密码长效登录（v5.7）+ 「磨」skill 分段（以话题边界为主）；架构基线就绪，待 v5.8 一并收口 | — | — | — | — | — | — | — |
-| **v5.8** | 2026-08-14 | tag `v5.8` | **⏳ 待签字** | 四项重构收口：P0-A 元神PM定位+蒸馏绑定 ✅、P0-B 磨skill分段 ✅、P1 双维度存储（项目/成员/模块文件夹+点模块开文件+旧项目迁移）✅、P2 UI 设计规范库（apple_hig/wechat，建项自选无默认，注入角色执行）✅；安装包 v5.8 macOS dmg + 官网推送；冒烟 76/0 | — | — | — | — | — | — | — |
-| **v5.9** | 2026-08-14 | tag `v5.9`（已推送 S4） | **⏳ 待签字** | 候选增强收口：Trajectory 事件级回放（一次派单/对话=一个 run，run 内记录 run_start/plan/role_start/tool×N/role_done；/api/projects/{pid}/runs + /trajectory?run_id=，前端「🎬 回放」面板）✅、底部实时 token 条（进程级 LIVE_TOKENS 累加器 + /api/token/usage + /api/token/reset，前端 2.5s 轮询展示 输入/输出/合计/调用）✅、扩展内置供方（通义 qwen / 月之暗面 moonshot / 智谱 zhipu，均 OpenAI 兼容，PROVIDER_PRESETS 新增 3 项）✅、model_usage 补 input_tokens/output_tokens 列迁移 ✅；安装包 v5.9 macOS dmg + 官网推送（v5.8 dmg 下架）✅；冒烟 76/0 | — | — | — | — | — | — | — |
-| **v6.0** | 2026-08-14 | tag `v6.0`（待打） | **⏳ 待签字** | 新 UI 外壳落地真实前端（图标栏+设置抽屉13项+联系人列元神置顶+分栏进程轨迹/看板+聊天内思考链 inline）；保留全部既有 ~120 JS 函数/~84 fetch 调用逐字不变（最小回归）；版本 0.60.0/v6.0；安装包 v6.0 macOS dmg + 官网推送（v5.9 dmg 下架）✅；jsdom 端到端 0 报错 + 冒烟 76/0 | — | — | — | — | — | — | — |
+| **v5.8** | 2026-08-14 | tag `v5.8` | **✅ 已签字（2026-08-14 随 v6.0 一并签字）** | 四项重构收口：P0-A 元神PM定位+蒸馏绑定 ✅、P0-B 磨skill分段 ✅、P1 双维度存储（项目/成员/模块文件夹+点模块开文件+旧项目迁移）✅、P2 UI 设计规范库（apple_hig/wechat，建项自选无默认，注入角色执行）✅；安装包 v5.8 macOS dmg + 官网推送；冒烟 76/0 | — | — | — | — | — | — | — |
+| **v5.9** | 2026-08-14 | tag `v5.9`（已推送 S4） | **✅ 已签字（2026-08-14 随 v6.0 一并签字）** | 候选增强收口：Trajectory 事件级回放（一次派单/对话=一个 run，run 内记录 run_start/plan/role_start/tool×N/role_done；/api/projects/{pid}/runs + /trajectory?run_id=，前端「🎬 回放」面板）✅、底部实时 token 条（进程级 LIVE_TOKENS 累加器 + /api/token/usage + /api/token/reset，前端 2.5s 轮询展示 输入/输出/合计/调用）✅、扩展内置供方（通义 qwen / 月之暗面 moonshot / 智谱 zhipu，均 OpenAI 兼容，PROVIDER_PRESETS 新增 3 项）✅、model_usage 补 input_tokens/output_tokens 列迁移 ✅；安装包 v5.9 macOS dmg + 官网推送（v5.8 dmg 下架）✅；冒烟 76/0 | — | — | — | — | — | — | — |
+| **v6.0** | 2026-08-14 | tag `v6.0`（已打，commit `313f6e4`） | **✅ 已签字（2026-08-14 岳衡「我签」，含 v5.8 / v5.9 一并收口）** | 新 UI 外壳落地真实前端（图标栏+设置抽屉13项+联系人列元神置顶+分栏进程轨迹/看板+聊天内思考链 inline）；保留全部既有 ~120 JS 函数/~84 fetch 调用逐字不变（最小回归）；版本 0.60.0/v6.0；安装包 v6.0 macOS dmg + 官网推送（v5.9 dmg 下架）✅；jsdom 端到端 0 报错 + 冒烟 76/0 | — | — | — | — | — | — | — | — |
+| **v6.1** | 2026-08-14 | tag `v6.1`（待打 commit） | **✅ 已签字（2026-08-14 岳衡「发布」指令）** | 矩阵看板 M1（模块×阶段数据模型 + `/matrix` + 前端矩阵默认视图）+ 元神长续航调度器 M2（三模式 autopilot/normal/rest + 事件回调 + 护栏）+ M3 关键路径优先级 + M4 多轨道补空白 + 休息窗口 + 6 meta 端点（interview/ingest/profile/mirror，LLM 可选降级）+ autopilot 控制台（前端 sec-autopilot + 后端 state/set）；版本 0.61.0/v6.1；安装包 v6.1 macOS dmg + 官网推送（v6.0 dmg 下架）；单测 28/28 + 冒烟 76/0 + jsdom 9/9 + 6 meta 端点 HTTP 端到端全绿 | — | — | — | — | — | — | — | — |✅；jsdom 端到端 0 报错 + 冒烟 76/0 | — | — | — | — | — | — | — |
 
 ---
 
@@ -134,11 +135,49 @@
 
 ---
 
+## v6.1 改造清单（2026-08-14，来源：M1 矩阵看板 + M2/M3/M4 元神长续航调度器 + meta 蒸馏端点 + autopilot 控制台）
+
+### M1 矩阵看板数据模型（模块×阶段）
+- [x] `tasks` 表新增 `stage` / `track` 列；`modules` 表新增 `track` / `weight` 列；`projects` 表新增 `tracks` / `stage_chains` 列（`init_db` 启动自动迁移，兼容旧库；线上库已含这些列）
+- [x] `GET /api/projects/{pid}/matrix`：返回模块×阶段矩阵（阶段集按轨道预设 `STAGE_PRESETS` 配置 web/h5/app/mp/generic）
+- [x] `GET /api/projects/{pid}/matrix/cell/tasks`：格子任务列表；`fill-blanks`：仅补「前置阶段已 done」的空白格
+- [x] 前端矩阵默认视图（可切回状态看板）；格子状态由 tasks 派生，逐层聚合 格子→列(按 module_weight)→行→项目
+- [x] `migrate_matrix_v61.py`：旧库数据回填空脚本（默认 --dry-run；--apply 前自动备份；本轮未对线上库 --apply，留待人工归位）
+
+### M2 元神长续航调度器（三模式 + 事件回调 + 护栏）
+- [x] 三模式：`autopilot`（15s·并发3·自动补空白）/ `normal`（60s·并发1）/ `rest`（300s·只巡检）
+- [x] 由「定时轮询」改「事件回调」：任务转 done 即触发派单、执行返回即触发 tick，卡间毫秒级
+- [x] 护栏：全局并发 / 小时+日 token 预算 / 连败熔断 / 卡死超时回收 / 单轮补空白上限 / 项目级暂停（`AUTONOMY_STATE` + `meta_settings`）
+- [x] `GET /api/autopilot/state` + `POST /api/autopilot/set`（mode / 预算 / 休息窗口 / 项目暂停）
+
+### M3 关键路径优先级
+- [x] `_project_critical_map`：按模块依赖推导关键路径；调度优先派关键路径模块（非关键模块仅在前置 done 后推进）
+
+### M4 多轨道补空白 + 休息窗口
+- [x] `_blank_proposals` 按轨道（web+app+…）遍历补空白；每轨道独立上限
+- [x] 休息窗口（`rest_window_active`）：窗口内不派单、不补空白；关闭后恢复派单
+
+### meta 蒸馏端点（LLM 可选降级）
+- [x] `GET /api/meta/interview/next` + `POST /api/meta/interview/answer`（qid+answer）
+- [x] `POST /api/meta/ingest`（多源资料摄取）
+- [x] `GET /api/meta/profile`（画像叙述）
+- [x] `POST /api/meta/mirror/generate`（镜像预测，LLM 可选降级）+ `POST /api/meta/mirror/judge`（agree+prediction 或 correction 强化画像）
+
+### 前端 autopilot 控制台
+- [x] 导航项「元神续航」`data-sec="autopilot"` + `sec-autopilot` 区块；`loadAutopilot` / `renderAutopilot` / `setAutopilot`
+- [x] 旧 per-project `/api/projects/{pid}/autonomy` 端点移除，统一走 `/api/autopilot/*`
+
+### 版本号
+- [x] backend `FastAPI(version="0.61.0")` + `/api/health` 返回 `release: v6.1`
+- [x] 前端 `<title>` + 版本徽标 `v6.1`
+- [x] `tests/smoke_v40.py`：release 断言校正为 `v6.1`
+
 ## 验收测试结果
 
-- 测试脚本：`tests/smoke_v40.py`
-- 结果：**39 / 39 通过**
-- 覆盖：全部 23 个 GET 接口、P0 安全 6 项、`/api/exec` 真实性 3 项、任务状态流转 6 项
+- 测试脚本：`tests/smoke_v40.py`（全回归）、`/tmp/sched_test.py`（M2-M4 调度器单测）、`/tmp/jsdom_frontend_check.js`（前端 jsdom 端到端）
+- 结果：**冒烟 76 / 0 · 调度器单测 28 / 28 · 前端 jsdom 9 / 9 · 6 meta 端点 + autopilot HTTP 端到端全绿**
+- 覆盖：全部 GET 接口、P0 安全、exec 真实性、任务/阶段流转、矩阵看板、调度器三模式/护栏/关键路径/休息窗口、meta 蒸馏端点、autopilot 控制台
+- 验证方式：隔离测试实例（独立端口 8011 + 独立 DB 副本）跑全量，避免误测线上运行实例
 
 ---
 

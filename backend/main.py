@@ -96,7 +96,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.60.0")
+app = FastAPI(title="分身 v1 后端", version="0.61.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -612,6 +612,10 @@ def init_db():
     # ── 兼容迁移：projects 增加 autonomy_paused 列（项目级自主推进暂停开关，v4.2）──
     if "autonomy_paused" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN autonomy_paused INTEGER DEFAULT 0")
+    # ── 兼容迁移：tasks 增加 updated_at 列（M2 卡死回收：检测 doing 长时间无进展）──
+    tcols = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "updated_at" not in tcols:
+        cur.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT DEFAULT ''")
     # ── 兼容迁移：应用市场上架字段（v5.1：publish 状态 + 产品元数据 + 访问统计）──
     if "published" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN published INTEGER DEFAULT 0")
@@ -669,6 +673,22 @@ def init_db():
     mcols2 = {r[1] for r in cur.execute("PRAGMA table_info(modules)").fetchall()}
     if "file_path" not in mcols2:
         cur.execute("ALTER TABLE modules ADD COLUMN file_path TEXT DEFAULT ''")
+    # ── v6.1 矩阵看板：tasks 增加阶段坐标，modules 增加轨道/权重，projects 增加轨道/阶段链配置 ──
+    tcols2 = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "stage" not in tcols2:
+        cur.execute("ALTER TABLE tasks ADD COLUMN stage TEXT DEFAULT ''")
+    if "track" not in tcols2:
+        cur.execute("ALTER TABLE tasks ADD COLUMN track TEXT DEFAULT 'web'")
+    mcols3 = {r[1] for r in cur.execute("PRAGMA table_info(modules)").fetchall()}
+    if "track" not in mcols3:
+        cur.execute("ALTER TABLE modules ADD COLUMN track TEXT DEFAULT 'web'")
+    if "weight" not in mcols3:
+        cur.execute("ALTER TABLE modules ADD COLUMN weight REAL DEFAULT 1.0")
+    pcols4 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
+    if "tracks" not in pcols4:
+        cur.execute("ALTER TABLE projects ADD COLUMN tracks TEXT DEFAULT '[\"web\"]'")
+    if "stage_chains" not in pcols4:
+        cur.execute("ALTER TABLE projects ADD COLUMN stage_chains TEXT DEFAULT '{}'")
     # 角色种子数据
     cur.execute("SELECT COUNT(*) FROM roles")
     if cur.fetchone()[0] == 0:
@@ -765,6 +785,7 @@ init_db()
 async def _start_patrol():
     asyncio.create_task(_patrol_loop())
     # v4.2 自主闭环：团队自主推进看板任务直到 100%
+    _autopilot_load_config()  # M2：启动恢复续航模式/token 预算/项目暂停
     asyncio.create_task(_autonomy_loop())
     # v5.8 P2：初始化用户级 UI 设计规范目录（首次从内置副本复制）
     _ensure_design_specs()
@@ -1222,6 +1243,59 @@ PHASE_GATES = {
     "done": {"from": "test", "hint": "测试通过并验收后才能标记完成"},
 }
 
+# ── v6.1 矩阵看板：按「交付轨道」配置的阶段链（轨道不同，阶段链不同） ──
+# 横轴=功能模块，纵轴=阶段链（时间轴自上而下单调推进）。阶段权重默认全 1。
+STAGE_PRESETS = {
+    "web":     ["策划", "原型", "前端", "后端", "联调", "测试", "发布"],
+    "h5":      ["策划", "原型", "H5开发", "接口对接", "测试", "发布"],
+    "app":     ["策划", "原型", "前端", "后端", "封装", "测试", "上架"],
+    "mp":      ["策划", "原型", "页面", "云函数", "测试", "提审", "发布"],
+    "generic": ["策划", "设计", "实现", "测试", "发布"],
+}
+
+
+def get_stage_chain(conn, pid: str, track: str = "web"):
+    """返回项目某轨道的阶段链；项目未配置 → 回退 STAGE_PRESETS[track]；track 不存在 → web 预设。"""
+    proj = conn.execute("SELECT stage_chains, tracks FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        return list(STAGE_PRESETS.get(track, STAGE_PRESETS["web"]))
+    try:
+        chains = json.loads(proj["stage_chains"] or "{}") or {}
+    except Exception:
+        chains = {}
+    try:
+        tracks = json.loads(proj["tracks"] or '["web"]') or ["web"]
+    except Exception:
+        tracks = ["web"]
+    if track not in chains:
+        return list(STAGE_PRESETS.get(track, STAGE_PRESETS["web"]))
+    return list(chains[track])
+
+
+def ensure_stage_chains(conn, pid: str, tracks=None):
+    """项目创建/更新时保证 stage_chains 含各轨道链（缺失填预设）。"""
+    proj = conn.execute("SELECT stage_chains, tracks FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        return
+    try:
+        chains = json.loads(proj["stage_chains"] or "{}") or {}
+    except Exception:
+        chains = {}
+    if not tracks:
+        try:
+            tracks = json.loads(proj["tracks"] or '["web"]') or ["web"]
+        except Exception:
+            tracks = ["web"]
+    changed = False
+    for t in tracks:
+        if t not in chains:
+            chains[t] = list(STAGE_PRESETS.get(t, STAGE_PRESETS["web"]))
+            changed = True
+    if changed:
+        conn.execute("UPDATE projects SET stage_chains=? WHERE id=?",
+                     (json.dumps(chains, ensure_ascii=False), pid))
+
+
 
 def create_snapshot(pid: str, name: str, desc: str = "", auto: bool = False):
     """生成项目当前状态的版本快照（项目信息+角色+消息摘要）。"""
@@ -1390,7 +1464,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.60.0", "release": "v6.0", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.61.0", "release": "v6.1", "port": PORT, "llm": llm,
             "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
 
 
@@ -1936,11 +2010,24 @@ async def create_project(req: Request):
     # v5.8 P1：双维度存储根目录（~/.fenshen/projects/<pid>）+ 设计规范（P2 用，建项自选）
     storage_root = os.path.expanduser(f"~/.fenshen/projects/{pid}")
     design_std = data.get("design_standard", "") or ""
+    # v6.1 矩阵看板：建项即按所选轨道配置阶段链（默认 web）
+    tracks = data.get("tracks") or ["web"]
+    if isinstance(tracks, str):
+        try:
+            tracks = json.loads(tracks) or ["web"]
+        except Exception:
+            tracks = ["web"]
+    if not isinstance(tracks, list) or not tracks:
+        tracks = ["web"]
+    chains = {}
+    for t in tracks:
+        chains[t] = list(STAGE_PRESETS.get(t, STAGE_PRESETS["web"]))
     conn = get_db()
     conn.execute(
-        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen,storage_root,design_standard) VALUES (?,?,?,?,?,?,?,0,?,?)",
+        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen,storage_root,design_standard,tracks,stage_chains) VALUES (?,?,?,?,?,?,?,0,?,?,?,?)",
         (pid, data.get("name", ""), data.get("goal", ""), data.get("standards", ""), "green", datetime.now().isoformat(),
-         data.get("phase", "requirement"), storage_root, design_std),
+         data.get("phase", "requirement"), storage_root, design_std,
+         json.dumps(tracks, ensure_ascii=False), json.dumps(chains, ensure_ascii=False)),
     )
     # 解构引导：projects.modules 数组 → 批量创建模块（支持一次成立项目即拆模块）
     mods = data.get("modules") or []
@@ -4134,7 +4221,7 @@ def _task_status(task_id: str, status: str, pid: str = "", note: str = "") -> No
         return
     try:
         conn = get_db()
-        conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+        conn.execute("UPDATE tasks SET status=?, updated_at=? WHERE id=?", (status, datetime.now().isoformat(), task_id))
         if note and pid:
             conn.execute(
                 "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
@@ -4149,6 +4236,8 @@ def _task_status(task_id: str, status: str, pid: str = "", note: str = "") -> No
             # v4.2 自主闭环：看板 100% → 自动推进下一阶段
             if pid:
                 _auto_advance_phase(conn, pid)
+                # M2：任务完成 → 立即唤醒元神调度器补位（毫秒级）
+                _kick_autonomy()
         conn.close()
     except Exception as e:
         print(f"[task-status] {task_id} -> {status} 失败: {e}")
@@ -4431,9 +4520,9 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
                     (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
                 )
         conn.execute(
-            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat()),
+            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat(), datetime.now().isoformat()),
         )
         conn.commit()
         conn.close()
@@ -4640,9 +4729,9 @@ async def plan_project(pid: str, req: Request):
             if not tname:
                 continue
             conn.execute(
-                "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (f"tk{time.time_ns()}", pid, mid, tid, tname[:60], owner, "todo",
-                 (t.get("done_criteria") or "").strip()[:300], now),
+            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (f"tk{time.time_ns()}", pid, mid, tid, tname[:60], owner, "todo",
+             (t.get("done_criteria") or "").strip()[:300], now, now),
             )
             task_count += 1
     conn.commit()
@@ -4817,6 +4906,278 @@ def list_tasks(pid: str):
     return [dict(r) for r in rows]
 
 
+# ── v6.1 矩阵看板：模块 × 阶段 接口 ──────────────────────────────────
+# 阶段 → 责任角色（用于格子补卡时自动指定 owner_role）
+STAGE_ROLE = {
+    "策划": "产品", "原型": "前端", "前端": "前端", "H5开发": "前端", "页面": "前端",
+    "后端": "后端", "接口对接": "后端", "云函数": "后端", "联调": "后端", "封装": "后端",
+    "测试": "测试", "提审": "测试", "发布": "后端", "上架": "后端", "设计": "前端", "实现": "后端",
+}
+
+
+def _cell_status(tasks):
+    if not tasks:
+        return "blank"
+    st = {t["status"] for t in tasks}
+    if "blocked" in st:
+        return "blocked"
+    if "doing" in st:
+        return "doing"
+    if "review" in st:
+        return "review"
+    if all(s == "done" for s in st):
+        return "done"
+    if all(s in ("todo", "idea") for s in st):
+        return "todo"
+    return "doing"  # 混合态（部分 done + 部分 todo）按进行中处理
+
+
+def _matrix_critical_path(mods, cells_by_m):
+    """沿 depends_on 计算最长「未完成」依赖链，返回模块 id 列表（关键路径高亮用）。"""
+    done = {}
+    for m in mods:
+        cs = cells_by_m.get(m["id"], [])
+        done[m["id"]] = bool(cs) and all(c["status"] == "done" for c in cs)
+
+    def long_path(mid, seen):
+        if mid in seen:
+            return []
+        seen = seen | {mid}
+        m = next((x for x in mods if x["id"] == mid), None)
+        if not m:
+            return [mid]
+        best = []
+        for dep in (m.get("depends_on") or []):
+            p = long_path(dep, seen)
+            if len(p) > len(best):
+                best = p
+        return best + [mid]
+
+    roots = [m["id"] for m in mods if not (m.get("depends_on") or [])]
+    chains = [long_path(r, set()) for r in roots]
+    cand = [c for c in chains if any(not done.get(x, False) for x in c)] or chains
+    cand.sort(key=len, reverse=True)
+    return cand[0] if cand else []
+
+
+@app.get("/api/projects/{pid}/matrix")
+def project_matrix(pid: str, track: str = "web"):
+    """返回模块×阶段矩阵：stages / modules / cells / 行·列·项目进度 / 空白格数 / 关键路径。
+    legacy 任务（stage 为空）汇总进末列「未分环节」，保证 0 丢失。"""
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "项目不存在"})
+    stages = get_stage_chain(conn, pid, track)
+    mods = [_module_dict(r) for r in
+            conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort, created_at", (pid,)).fetchall()]
+    tasks = [dict(r) for r in
+             conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()]
+    conn.close()
+
+    # 轨道筛模块：多轨道项目只看当前轨道；单轨道兜底全部
+    tmods = [m for m in mods if (m.get("track") or "web") == track]
+    if not tmods:
+        tmods = mods
+    # legacy 无 stage 任务 → 末列「未分环节」
+    uncat = [t for t in tasks if not (t.get("stage") or "")]
+    if uncat:
+        stages = stages + ["__uncat__"]
+
+    cells = {}
+    cells_by_m = {}
+    for m in tmods:
+        cells[m["id"]] = {}
+        cells_by_m[m["id"]] = []
+        for s in stages:
+            if s == "__uncat__":
+                tk = [t for t in uncat if t["module_id"] == m["id"]]
+            else:
+                tk = [t for t in tasks if t["module_id"] == m["id"] and (t.get("stage") or "") == s]
+            total = len(tk)
+            done_n = sum(1 for t in tk if t["status"] == "done")
+            pct = round(done_n * 100 / total) if total else 0
+            c = {"stage": s, "status": _cell_status(tk), "pct": pct,
+                 "total": total, "done": done_n,
+                 "task_ids": [t["id"] for t in tk],
+                 "tasks": [{"id": t["id"], "name": t["name"], "owner_role": t.get("owner_role", ""),
+                            "status": t["status"], "done_criteria": t.get("done_criteria", "")} for t in tk]}
+            cells[m["id"]][s] = c
+            cells_by_m[m["id"]].append(c)
+
+    # 聚合：列(模块)进度 / 行(阶段)进度 / 项目进度（blank 不计入分母）
+    column_pct, row_pct = {}, {}
+    for m in tmods:
+        cs = [cells[m["id"]][s] for s in stages if cells.get(m["id"], {}).get(s)]
+        nb = [c for c in cs if c["status"] != "blank"]
+        column_pct[m["id"]] = round(sum(c["pct"] for c in nb) / len(nb)) if nb else 0
+    for s in stages:
+        cs = [cells[m["id"]][s] for m in tmods if cells.get(m["id"], {}).get(s)]
+        nb = [c for c in cs if c["status"] != "blank"]
+        row_pct[s] = round(sum(c["pct"] for c in nb) / len(nb)) if nb else 0
+    tot_w = sum((m.get("weight") or 1) for m in tmods) or 1
+    project_pct = round(sum(column_pct.get(m["id"], 0) * (m.get("weight") or 1) for m in tmods) / tot_w)
+
+    blank_count = sum(1 for m in tmods for s in stages
+                      if stages and cells.get(m["id"], {}).get(s, {}).get("status") == "blank")
+    # 未分环节列不计入空白（那是 legacy，不是「该做没做」的空白）
+    blank_count -= sum(1 for m in tmods if cells[m["id"]].get("__uncat__", {}).get("status") == "blank")
+    blank_count = max(blank_count, 0)
+
+    crit = _matrix_critical_path(tmods, cells_by_m)
+    return {
+        "track": track,
+        "tracks": json.loads(proj["tracks"] or '["web"]') if proj["tracks"] else ["web"],
+        "stages": stages,
+        "modules": tmods,
+        "cells": cells,
+        "column_pct": column_pct,
+        "row_pct": row_pct,
+        "project_pct": project_pct,
+        "blank_count": blank_count,
+        "uncat_count": len(uncat),
+        "critical_path": crit,
+        "task_total": len(tasks),
+        "task_done": sum(1 for t in tasks if t["status"] == "done"),
+    }
+
+
+@app.get("/api/stage-presets")
+def stage_presets():
+    return {"ok": True, "presets": STAGE_PRESETS}
+
+
+@app.get("/api/projects/{pid}/stage-chain")
+def get_stage_chain_api(pid: str, track: str = "web"):
+    conn = get_db()
+    proj = conn.execute("SELECT stage_chains, tracks FROM projects WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    if not proj:
+        return {"ok": False, "error": "项目不存在"}
+    try:
+        chains = json.loads(proj["stage_chains"] or "{}") or {}
+    except Exception:
+        chains = {}
+    tracks = json.loads(proj["tracks"] or '["web"]') or ["web"]
+    return {"ok": True, "tracks": tracks, "track": track,
+            "chain": chains.get(track, STAGE_PRESETS.get(track, STAGE_PRESETS["web"]))}
+
+
+@app.put("/api/projects/{pid}/stage-chain")
+async def put_stage_chain_api(pid: str, req: Request):
+    data = await req.json()
+    track = data.get("track", "web")
+    chain = data.get("chain") or []
+    conn = get_db()
+    proj = conn.execute("SELECT stage_chains FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    try:
+        chains = json.loads(proj["stage_chains"] or "{}") or {}
+    except Exception:
+        chains = {}
+    chains[track] = [str(x) for x in chain]
+    conn.execute("UPDATE projects SET stage_chains=? WHERE id=?", (json.dumps(chains, ensure_ascii=False), pid))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/cell/tasks")
+async def create_cell_task(pid: str, req: Request):
+    """在指定格子（module × stage）建任务。"""
+    data = await req.json()
+    mid = data.get("module_id") or ""
+    stage = data.get("stage") or ""
+    name = (data.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "任务名不能为空"}
+    if not mid:
+        return {"ok": False, "error": "缺少 module_id"}
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone():
+        conn.close()
+        return {"ok": False, "error": "模块不存在"}
+    tid = f"tk{int(datetime.now().timestamp() * 1000)}"
+    conn.execute(
+        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (tid, pid, mid, "", name, data.get("owner_role", "后端"), "todo",
+         (data.get("done_criteria") or "").strip()[:300], stage, data.get("track", "web"),
+         datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "task_id": tid}
+
+
+def _blank_proposals(conn, pid: str, track: str = "web") -> list:
+    """计算补空白格建议（纯计算，不落库）：前一阶段同模块已 done、当前格空白 → 生成待补卡。
+    供 HTTP 接口 fill_blanks 与 M2 调度器 _fill_blanks_internal 共用。"""
+    stages = get_stage_chain(conn, pid, track)
+    mods = [_module_dict(r) for r in
+            conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort, created_at", (pid,)).fetchall()]
+    tasks = [dict(r) for r in
+             conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()]
+    tmods = [m for m in mods if (m.get("track") or "web") == track] or mods
+    mod_tasks = {}
+    for m in tmods:
+        mod_tasks[m["id"]] = {}
+        for s in stages:
+            mod_tasks[m["id"]][s] = [t for t in tasks if t["module_id"] == m["id"] and (t.get("stage") or "") == s]
+    proposals = []
+    for m in tmods:
+        for i, s in enumerate(stages):
+            tk = mod_tasks[m["id"]][s]
+            if tk:
+                continue  # 非空白格跳过
+            prev_stage = stages[i - 1] if i > 0 else None
+            prev_tasks = mod_tasks[m["id"]][prev_stage] if prev_stage else []
+            # 前置阶段必须「有任务且全部 done」才算就绪（空白/未全 done 都视为未到点，防提前刷屏）
+            prev_done = (i == 0) or (len(prev_tasks) > 0 and all(t["status"] == "done" for t in prev_tasks))
+            if not prev_done:
+                continue  # 前一阶段没 done → 还没到点
+            proposals.append({
+                "module_id": m["id"], "module_name": m["name"], "stage": s,
+                "name": f"{s}：{m['name']}", "owner_role": STAGE_ROLE.get(s, "后端"),
+            })
+    return proposals
+
+
+@app.post("/api/projects/{pid}/fill-blanks")
+async def fill_blanks(pid: str, req: Request):
+    """元神补空白格：找「前一阶段同模块已 done、当前格空白」的格子，生成待办卡。
+    dry_run=true 只返回建议不落库；否则创建 todo 任务。"""
+    data = await req.json()
+    track = data.get("track", "web")
+    dry_run = bool(data.get("dry_run", True))
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    proposals = _blank_proposals(conn, pid, track)
+    conn.close()
+    if dry_run:
+        return {"ok": True, "dry_run": True, "count": len(proposals), "proposals": proposals}
+    created = []
+    conn = get_db()
+    for p in proposals:
+        tid = f"tk{int(datetime.now().timestamp() * 1000)}_{len(created)}"
+        conn.execute(
+            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (tid, pid, p["module_id"], "", p["name"], p["owner_role"], "todo", "",
+             p["stage"], track, datetime.now().isoformat(), datetime.now().isoformat()),
+        )
+        created.append(tid)
+    conn.commit()
+    conn.close()
+    return {"ok": True, "dry_run": False, "created": len(created), "task_ids": created}
+
+
 @app.post("/api/topics/{tid}/tasks")
 async def distill_task(tid: str, req: Request):
     """话题 → 任务（R2：任务必有来源；提炼后自动进看板待办）。"""
@@ -4832,9 +5193,9 @@ async def distill_task(tid: str, req: Request):
     tid2 = f"tk{int(datetime.now().timestamp() * 1000)}"
     done_criteria = (data.get("done_criteria") or "").strip()[:300]
     conn.execute(
-        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (tid2, topic["project_id"], topic["module_id"], tid, name,
-         data.get("owner_role", "后端"), "todo", done_criteria, datetime.now().isoformat()),
+         data.get("owner_role", "后端"), "todo", done_criteria, datetime.now().isoformat(), datetime.now().isoformat()),
     )
     # 同步：话题内落一条系统消息
     conn.execute(
@@ -4859,7 +5220,7 @@ async def move_task(task_id: str, req: Request):
     if not row:
         conn.close()
         return {"ok": False, "error": "任务不存在"}
-    conn.execute("UPDATE tasks SET status=? WHERE id=?", (to, task_id))
+    conn.execute("UPDATE tasks SET status=?, updated_at=? WHERE id=?", (to, datetime.now().isoformat(), task_id))
     conn.commit()
     # Phase D：任务完成 → 自动沉淀（经验 + 技能草稿 + 模块摘要更新）
     settled = False
@@ -4868,6 +5229,8 @@ async def move_task(task_id: str, req: Request):
         settled = _settle_task_done(conn, dict(row))
         # v4.2 自主闭环：看板 100% → 自动推进下一阶段
         advanced = _auto_advance_phase(conn, row["project_id"])
+        # M2：任务完成 → 立即唤醒元神调度器补位（毫秒级）
+        _kick_autonomy()
     conn.close()
     return {"ok": True, "status": to, "settled": settled, "advanced_phase": advanced}
 
@@ -5881,58 +6244,706 @@ async def _patrol_loop():
             pass
 
 
+# ── M2 元神长续航调度器 ──────────────────────────────────────────────
+# 三模式：autopilot（自动驾驶长续航）/ normal（常驻）/ rest（休息·只巡检）
+# 由「定时点一下」改为「事件回调」：任务 done 即唤醒派单、执行返回即唤醒下一轮。
+FAIL_BREAKER = 5              # 连续派单失败达此值 → 熔断
+FAIL_BREAKER_COOLDOWN = 300   # 熔断冷却秒数（到点自动半开）
+
+AUTONOMY_MODES = {
+    "autopilot": {"interval": 15,  "concurrency": 3, "auto_fill": True,  "dispatch": True,  "blank_cap": 5},
+    "normal":    {"interval": 60,  "concurrency": 1, "auto_fill": False, "dispatch": True,  "blank_cap": 0},
+    "rest":      {"interval": 300, "concurrency": 0, "auto_fill": False, "dispatch": False, "blank_cap": 0},
+}
+
+AUTONOMY_STATE = {
+    "mode": "normal",
+    "paused_projects": set(),
+    "running_projects": set(),
+    "inflight_peak": 0,
+    "fail_streak": 0,
+    "circuit_open_until": 0.0,
+    "last_fail_ts": 0.0,
+    "last_success_ts": 0.0,
+    "token_budget_hour": 200000,
+    "token_budget_day": 2000000,
+    "token_used_hour": 0,
+    "token_used_day": 0,
+    "stuck_timeout_min": 30,
+    "ticks": 0,
+    "dispatched_total": 0,
+    "recycled_total": 0,
+    "filled_total": 0,
+    "last_tick": 0.0,
+    # M4 休息时段：每日作息窗口自动停止派单/补空白（仍回收卡死任务）
+    "rest_schedule": {},
+    "rest_window_active": False,
+}
+_AUTONOMY_WAKE = asyncio.Event()
+
+
+def _autopilot_load_config():
+    """启动/设置变更时从 meta_settings 恢复调度器配置。"""
+    m = get_setting("autopilot_mode", "normal")
+    if m in AUTONOMY_MODES:
+        AUTONOMY_STATE["mode"] = m
+    try:
+        AUTONOMY_STATE["token_budget_hour"] = int(get_setting("autopilot_budget_hour", "200000"))
+        AUTONOMY_STATE["token_budget_day"] = int(get_setting("autopilot_budget_day", "2000000"))
+    except Exception:
+        pass
+    try:
+        AUTONOMY_STATE["paused_projects"] = set(json.loads(get_setting("autopilot_paused", "[]") or "[]"))
+    except Exception:
+        AUTONOMY_STATE["paused_projects"] = set()
+    # M4 休息时段配置
+    try:
+        rs = json.loads(get_setting("autopilot_rest_schedule", "{}") or "{}")
+        AUTONOMY_STATE["rest_schedule"] = rs if isinstance(rs, dict) else {}
+    except Exception:
+        AUTONOMY_STATE["rest_schedule"] = {}
+
+
+def _kick_autonomy():
+    """事件回调：任务完成（move_task / _task_status done）→ 立即唤醒调度器补位（毫秒级）。"""
+    try:
+        loop = asyncio.get_event_loop()
+        loop.call_soon_threadsafe(_AUTONOMY_WAKE.set)
+    except Exception:
+        try:
+            _AUTONOMY_WAKE.set()
+        except Exception:
+            pass
+
+
+def _autonomy_budget_exceeded() -> bool:
+    """token 预算护栏：最近 1h / 24h 用量超预算 → 暂停派单。"""
+    bh = AUTONOMY_STATE["token_budget_hour"]
+    bd = AUTONOMY_STATE["token_budget_day"]
+    if bh <= 0 and bd <= 0:
+        return False
+    try:
+        conn = get_db()
+        now = datetime.now()
+        used_h = used_d = 0
+        if bh > 0:
+            since = (now - timedelta(hours=1)).isoformat()
+            r = conn.execute(
+                "SELECT COALESCE(SUM(input_tokens),0)+COALESCE(SUM(output_tokens),0) FROM model_usage WHERE ts>=?",
+                (since,)).fetchone()
+            used_h = int(r[0]) if r else 0
+        if bd > 0:
+            since = (now - timedelta(days=1)).isoformat()
+            r = conn.execute(
+                "SELECT COALESCE(SUM(input_tokens),0)+COALESCE(SUM(output_tokens),0) FROM model_usage WHERE ts>=?",
+                (since,)).fetchone()
+            used_d = int(r[0]) if r else 0
+        conn.close()
+        AUTONOMY_STATE["token_used_hour"] = used_h
+        AUTONOMY_STATE["token_used_day"] = used_d
+        if bh > 0 and used_h >= bh:
+            return True
+        if bd > 0 and used_d >= bd:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _in_rest_window(sched: dict) -> bool:
+    """M4 自动作息休息：判断当前时刻是否落在休息窗口内。
+    sched={"enabled":bool,"start":"HH:MM","end":"HH:MM"}；支持跨午夜（如 23:00–08:00）。"""
+    if not sched or not sched.get("enabled"):
+        return False
+    try:
+        sh, sm = (int(x) for x in str(sched.get("start", "23:00")).split(":"))
+        eh, em = (int(x) for x in str(sched.get("end", "08:00")).split(":"))
+        s, e = sh * 60 + sm, eh * 60 + em
+        if s == e:
+            return False
+        cur = datetime.now().hour * 60 + datetime.now().minute
+        return (s <= cur < e) if s < e else (cur >= s or cur < e)
+    except Exception:
+        return False
+
+
+def _recycle_stuck(timeout_min: int = 30) -> int:
+    """卡死回收：doing 且 updated_at 早于 cutoff 的任务 → 退回 todo（避免永久占坑）。返回回收数。"""
+    try:
+        cutoff = (datetime.now() - timedelta(minutes=timeout_min)).isoformat()
+        conn = get_db()
+        stuck = conn.execute(
+            "SELECT id, project_id, name FROM tasks WHERE status='doing' AND updated_at IS NOT NULL "
+            "AND updated_at != '' AND updated_at < ?", (cutoff,)
+        ).fetchall()
+        n = 0
+        for r in stuck:
+            conn.execute("UPDATE tasks SET status='todo', updated_at=? WHERE id=?",
+                         (datetime.now().isoformat(), r["id"]))
+            conn.execute(
+                "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                (r["project_id"], "系统", "sys",
+                 f"♻️ 任务「{r['name']}」卡死超时（> {timeout_min} 分钟无更新），已退回待办重新排队",
+                 "progress", datetime.now().isoformat()),
+            )
+            n += 1
+        conn.commit()
+        conn.close()
+        return n
+    except Exception as e:
+        print(f"[recycle-stuck] 失败: {e}")
+        return 0
+
+
+def _fill_blanks_internal(pid: str, cap: int = 5, track: str = None) -> int:
+    """M2/M4 自动补空白：为项目补充最多 cap 张空白格待办卡（autopilot 模式）。返回建卡数。
+    track=None → 遍历项目所有 tracks（web/app/mp…）分别补空白（M4 多轨道）；track 指定 → 仅该轨道。"""
+    if cap <= 0:
+        return 0
+    try:
+        conn = get_db()
+        proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if not proj:
+            conn.close()
+            return 0
+        tracks = json.loads(proj["tracks"] or '["web"]') if proj["tracks"] else ["web"]
+        if track:
+            tracks = [track]
+        created = 0
+        total_cap = cap * len(tracks)  # 总上限：每轨道最多 cap 张
+        for tr in tracks:
+            if created >= total_cap:
+                break
+            proposals = _blank_proposals(conn, pid, tr)[:max(0, cap)]
+            for p in proposals:
+                if created >= total_cap:
+                    break
+                tid = f"tk{int(datetime.now().timestamp()*1000)}_{created}_{len(proposals)}"
+                conn.execute(
+                    "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (tid, pid, p["module_id"], "", p["name"], p["owner_role"], "todo", "",
+                     p["stage"], tr, datetime.now().isoformat(), datetime.now().isoformat()),
+                )
+                created += 1
+        conn.commit()
+        conn.close()
+        return created
+    except Exception as e:
+        print(f"[fill-blanks-internal] {pid} 失败: {e}")
+        return 0
+
+
+async def _dispatch_and_track(pid: str, t: dict, prompt: str):
+    """并发派单包装：执行完成后回收并发槽并立即唤醒调度器（毫秒级补位）。"""
+    try:
+        await _execute_project_chat(pid, prompt)
+        AUTONOMY_STATE["fail_streak"] = 0
+        AUTONOMY_STATE["last_success_ts"] = time.time()
+    except Exception as e:
+        print(f"[autonomy] {pid} 派单失败: {e}")
+        AUTONOMY_STATE["fail_streak"] += 1
+        AUTONOMY_STATE["last_fail_ts"] = time.time()
+    finally:
+        AUTONOMY_STATE["running_projects"].discard(pid)
+        _AUTONOMY_WAKE.set()  # 执行返回即触发下一轮 tick
+
+
+def _project_critical_map(pid: str) -> dict:
+    """项目关键路径模块 → 优先级位置（0 起始，越小越优先）；沿 depends_on 跨轨道取最小位置。
+    供 M3 调度器优先派单：先打关键路径上的卡，避免其阻塞下游模块。
+    与矩阵 _matrix_critical_path 不同：此处计算「含下游」的最长未完成链（memoized 最长链终止于各模块），
+    使 B(依赖A) 也进入关键集，从而 A 与 B 都被优先。"""
+    conn = get_db()
+    proj = conn.execute("SELECT tracks FROM projects WHERE id=?", (pid,)).fetchone()
+    tracks = json.loads(proj["tracks"] or '["web"]') if proj and proj["tracks"] else ["web"]
+    mods = [_module_dict(r) for r in
+            conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort, created_at", (pid,)).fetchall()]
+    tasks = [dict(r) for r in
+             conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()]
+    conn.close()
+    crit_pos = {}
+    for tr in tracks:
+        c2 = get_db()
+        stages = get_stage_chain(c2, pid, tr)
+        c2.close()
+        tmods = [m for m in mods if (m.get("track") or "web") == tr] or mods
+        cells_by_m = {}
+        for m in tmods:
+            cells_by_m[m["id"]] = [{"stage": s, "status": _cell_status(
+                [tk for tk in tasks if tk["module_id"] == m["id"] and (tk.get("stage") or "") == s])} for s in stages]
+        done = {m["id"]: bool(cells_by_m[m["id"]]) and all(c["status"] == "done" for c in cells_by_m[m["id"]])
+                for m in tmods}
+        # memoized 最长「终止于 mid」的依赖链（含下游：mid 自身即链尾）
+        memo = {}
+        def longest(mid):
+            if mid in memo:
+                return memo[mid]
+            m = next((x for x in tmods if x["id"] == mid), None)
+            best = []
+            if m:
+                for dep in (m.get("depends_on") or []):
+                    p = longest(dep)
+                    if len(p) > len(best):
+                        best = p
+            res = best + [mid]
+            memo[mid] = res
+            return res
+        chains = [longest(m["id"]) for m in tmods]
+        cand = [c for c in chains if any(not done.get(x, False) for x in c)] or chains
+        cand.sort(key=len, reverse=True)
+        cp = cand[0] if cand else []
+        for i, mid in enumerate(cp):
+            if mid not in crit_pos or i < crit_pos[mid]:
+                crit_pos[mid] = i
+    return crit_pos
+
+
 async def _autonomy_loop():
-    """v4.2 自主闭环：团队自主推进——后台循环按看板顺序派单执行，直到看板 100% 再自动进下一阶段。
-    - 扫描 phase != done 的项目；每轮最多推进 1 张卡（限速防抖，autonomy_interval 秒）
-    - 按 created_at 顺序取 todo 任务（"按顺序先后完成"）；已有 doing 任务则等它完成
-    - 复用 _execute_project_chat 执行链（元神自主调度，不问用户）
-    - autonomy_enabled 默认开启；任务全部 done 后由 _auto_advance_phase 自动流转阶段"""
+    """M2 元神长续航调度器：三模式 + 事件回调驱动。
+    - autopilot：15s 心跳·并发 3·自动补空白；normal：60s·并发 1；rest：300s·只巡检（不派单）。
+    - 任务 done（move_task/_task_status）即唤醒；执行返回即唤醒下一轮。
+    - 护栏：全局并发 / 小时+日 token 预算 / 连败熔断 / 卡死超时回收 / 单轮补空白上限 / 项目级暂停。
+    - M3 关键路径优先级：派单排序 (on_critical, crit_pos, stage_idx, created_at)，优先打通阻塞下游的链。
+    - M4 休息时段：rest_schedule 窗口内自动停止派单/补空白（仍回收卡死），窗口外无缝恢复；多轨道补空白遍历全 tracks。"""
+    _first_tick = True
     while True:
         try:
-            await asyncio.sleep(max(15, int(get_setting("autonomy_interval", "60"))))
+            mode = AUTONOMY_STATE["mode"]
+            cfg = AUTONOMY_MODES.get(mode, AUTONOMY_MODES["normal"])
+            # 首轮立即扫描（避免切换模式后空等一个完整间隔）；之后等间隔或被事件唤醒（毫秒级响应）
+            if _first_tick:
+                _first_tick = False
+            else:
+                try:
+                    await asyncio.wait_for(_AUTONOMY_WAKE.wait(), timeout=cfg["interval"])
+                except asyncio.TimeoutError:
+                    pass  # 间隔到期，进入本轮扫描
+            # 注意：CancelledError 不在此捕获，交由外层在关闭时优雅退出
+            _AUTONOMY_WAKE.clear()
+            AUTONOMY_STATE["last_tick"] = time.time()
+            AUTONOMY_STATE["ticks"] += 1
+
             if get_setting("autonomy_enabled", "1") != "1":
                 continue
+            # M4 自动作息休息：每 tick 更新窗口状态；处于窗口 → 跳过派单/补空白（卡死回收已在上方执行）
+            AUTONOMY_STATE["rest_window_active"] = _in_rest_window(AUTONOMY_STATE.get("rest_schedule", {}))
+            if not cfg["dispatch"]:
+                continue  # rest 模式：仅巡检（由 _patrol_loop 负责），调度器空转
+            if AUTONOMY_STATE["rest_window_active"]:
+                continue  # 自动作息窗口：元神休眠，停止派单与补空白
+
+            # 连败熔断：冷却中跳过
+            if AUTONOMY_STATE.get("circuit_open_until", 0.0) > time.time():
+                continue
+            if AUTONOMY_STATE["fail_streak"] >= FAIL_BREAKER:
+                AUTONOMY_STATE["circuit_open_until"] = time.time() + FAIL_BREAKER_COOLDOWN
+                AUTONOMY_STATE["fail_streak"] = 0
+                continue
+
+            # token 预算护栏
+            if _autonomy_budget_exceeded():
+                continue
+
+            # 卡死回收
+            recycled = _recycle_stuck(AUTONOMY_STATE.get("stuck_timeout_min", 30))
+            AUTONOMY_STATE["recycled_total"] += recycled
+
             conn = get_db()
             projects = conn.execute(
                 "SELECT * FROM projects WHERE phase != 'done' ORDER BY created_at DESC"
             ).fetchall()
             conn.close()
+
             for p in projects:
                 if p["id"] == META_PID:
                     continue
-                # v4.2：项目级自主推进暂停开关（autonomy_paused=1 → 该项目的看板任务交由人工推进）
-                # 注意：projects 行是 sqlite3.Row，无 .get()，用 keys() 判断
+                if p["id"] in AUTONOMY_STATE["paused_projects"]:
+                    continue
                 if "autonomy_paused" in p.keys() and p["autonomy_paused"]:
                     continue
-                # 跳过占位种子项目（goal 是状态描述而非真实目标，如"完成 · 首页已上线"）
                 _g = (p["goal"] or "").strip()
                 if not (p["standards"] or "").strip() and (
                     not _g or _g.startswith(("完成 ·", "运行中 ·", "阻塞 ·", "暂停 ·"))
                 ):
                     continue
+                # 全局并发上限
+                if len(AUTONOMY_STATE["running_projects"]) >= cfg["concurrency"]:
+                    break
+                # 该项目已在执行中（含 meta 计划阶段未落 doing 的窗口）→ 跳过防重复派单
+                if p["id"] in AUTONOMY_STATE["running_projects"]:
+                    continue
+
+                # 自动补空白（仅 autopilot）
+                if cfg["auto_fill"] and cfg["blank_cap"] > 0:
+                    filled = _fill_blanks_internal(p["id"], cfg["blank_cap"])
+                    if filled:
+                        AUTONOMY_STATE["filled_total"] += filled
+                        _AUTONOMY_WAKE.set()  # 新卡已建 → 本轮继续派单
+
+                # M3 关键路径优先级：优先派「关键路径模块、且模块链最早未完成阶段」的卡
+                crit_pos = _project_critical_map(p["id"])
+                _stage_idx_cache = {}
+                def _stage_idx(tr, st):
+                    if tr not in _stage_idx_cache:
+                        c2 = get_db()
+                        _stage_idx_cache[tr] = {s: i for i, s in enumerate(get_stage_chain(c2, p["id"], tr))}
+                        c2.close()
+                    return _stage_idx_cache[tr].get(st, 999)
+                def _rank(tk):
+                    mid = tk.get("module_id") or ""
+                    on_crit = mid in crit_pos
+                    return (0 if on_crit else 1, crit_pos.get(mid, 999),
+                            _stage_idx(tk.get("track") or "web", tk.get("stage") or ""),
+                            tk.get("created_at") or "")
+
                 conn = get_db()
                 doing = conn.execute(
                     "SELECT id FROM tasks WHERE project_id=? AND status='doing' LIMIT 1", (p["id"],)
                 ).fetchone()
-                t = conn.execute(
-                    "SELECT id,name,done_criteria FROM tasks WHERE project_id=? AND status='todo' ORDER BY created_at LIMIT 1",
-                    (p["id"],),
-                ).fetchone()
+                todos = [dict(r) for r in conn.execute(
+                    "SELECT id,name,done_criteria,module_id,stage,track,created_at FROM tasks "
+                    "WHERE project_id=? AND status='todo'", (p["id"],)
+                ).fetchall()]
                 conn.close()
-                if doing or not t:
-                    continue
+                if doing:
+                    continue  # 该项目仍有进行中任务
+                if not todos:
+                    continue  # 无可派卡片
+                todos.sort(key=_rank)
+                t = todos[0]
+
                 criteria = (t["done_criteria"] or "").strip()
+                on_crit = (t.get("module_id") or "") in crit_pos
                 prompt = (f"团队自主推进：请按看板顺序执行任务「{t['name']}」。"
                           + (f"完成标准：{criteria}。" if criteria else "")
+                          + ("【该任务位于关键路径，请优先保障其推进，避免阻塞下游模块。】" if on_crit else "")
                           + "自主决策安排执行，不要向用户提问；完成后汇报结果。")
-                try:
-                    await _execute_project_chat(p["id"], prompt)
-                except Exception as e:
-                    print(f"[autonomy] {p['id']} 派单失败: {e}")
-                break  # 每轮只推进 1 张卡，避免长时间占用事件循环
+                # 并发派单（不 await，立即让出事件循环）
+                AUTONOMY_STATE["running_projects"].add(p["id"])
+                AUTONOMY_STATE["inflight_peak"] = max(
+                    AUTONOMY_STATE.get("inflight_peak", 0), len(AUTONOMY_STATE["running_projects"]))
+                AUTONOMY_STATE["dispatched_total"] += 1
+                asyncio.create_task(_dispatch_and_track(p["id"], t, prompt))
         except Exception as e:
             print(f"[autonomy] 循环异常: {e}")
             await asyncio.sleep(5)
+
+
+def _autopilot_state_dict() -> dict:
+    cfg = AUTONOMY_MODES.get(AUTONOMY_STATE["mode"], AUTONOMY_MODES["normal"])
+    return {
+        "ok": True,
+        "mode": AUTONOMY_STATE["mode"],
+        "modes": list(AUTONOMY_MODES.keys()),
+        "dispatch": cfg["dispatch"],
+        "interval": cfg["interval"],
+        "concurrency": cfg["concurrency"],
+        "auto_fill": cfg["auto_fill"],
+        "blank_cap": cfg["blank_cap"],
+        "running_projects": list(AUTONOMY_STATE["running_projects"]),
+        "paused_projects": list(AUTONOMY_STATE["paused_projects"]),
+        "inflight": len(AUTONOMY_STATE["running_projects"]),
+        "inflight_peak": AUTONOMY_STATE.get("inflight_peak", 0),
+        "fail_streak": AUTONOMY_STATE["fail_streak"],
+        "circuit_open": AUTONOMY_STATE.get("circuit_open_until", 0.0) > time.time(),
+        "token_budget": {
+            "hour": AUTONOMY_STATE["token_budget_hour"],
+            "day": AUTONOMY_STATE["token_budget_day"],
+            "used_hour": AUTONOMY_STATE.get("token_used_hour", 0),
+            "used_day": AUTONOMY_STATE.get("token_used_day", 0),
+        },
+        "stuck_timeout_min": AUTONOMY_STATE["stuck_timeout_min"],
+        "ticks": AUTONOMY_STATE["ticks"],
+        "dispatched_total": AUTONOMY_STATE["dispatched_total"],
+        "recycled_total": AUTONOMY_STATE["recycled_total"],
+        "filled_total": AUTONOMY_STATE["filled_total"],
+        "last_tick": AUTONOMY_STATE["last_tick"],
+        "rest_window_active": AUTONOMY_STATE.get("rest_window_active", False),
+        "rest_schedule": AUTONOMY_STATE.get("rest_schedule", {}),
+        "autonomy_enabled": get_setting("autonomy_enabled", "1") == "1",
+        # M3 可观测：当前在跑项目的「关键路径模块」有序列表（元神正在优先打通的链）
+        "focus_paths": {
+            pid: [m for m, _ in sorted(_project_critical_map(pid).items(), key=lambda kv: kv[1])]
+            for pid in AUTONOMY_STATE["running_projects"]
+        },
+    }
+
+
+@app.get("/api/autopilot/state")
+def autopilot_state():
+    """返回元神续航调度器实时状态：模式 / 在岗矩阵 / 护栏用量。"""
+    return _autopilot_state_dict()
+
+
+@app.post("/api/autopilot/set")
+async def autopilot_set(req: Request):
+    """切换续航模式 / 暂停·恢复项目 / 设置 token 预算。变更即时生效。"""
+    data = await req.json()
+    changed = []
+    if "mode" in data:
+        m = data["mode"]
+        if m not in AUTONOMY_MODES:
+            return {"ok": False, "error": f"mode 必须是 {list(AUTONOMY_MODES.keys())}"}
+        AUTONOMY_STATE["mode"] = m
+        set_setting("autopilot_mode", m)
+        changed.append("mode")
+    if "enabled" in data:
+        set_setting("autonomy_enabled", "1" if data["enabled"] else "0")
+        changed.append("enabled")
+    if "paused" in data:
+        for pid in (data["paused"] or []):
+            AUTONOMY_STATE["paused_projects"].add(pid)
+        set_setting("autopilot_paused", json.dumps(list(AUTONOMY_STATE["paused_projects"]), ensure_ascii=False))
+        changed.append("paused")
+    if "resume" in data:
+        for pid in (data["resume"] or []):
+            AUTONOMY_STATE["paused_projects"].discard(pid)
+        set_setting("autopilot_paused", json.dumps(list(AUTONOMY_STATE["paused_projects"]), ensure_ascii=False))
+        changed.append("resume")
+    if "token_budget_hour" in data:
+        try:
+            v = int(data["token_budget_hour"])
+            AUTONOMY_STATE["token_budget_hour"] = max(0, v)
+            set_setting("autopilot_budget_hour", str(v))
+            changed.append("token_budget_hour")
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "token_budget_hour 必须是整数"}
+    if "token_budget_day" in data:
+        try:
+            v = int(data["token_budget_day"])
+            AUTONOMY_STATE["token_budget_day"] = max(0, v)
+            set_setting("autopilot_budget_day", str(v))
+            changed.append("token_budget_day")
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "token_budget_day 必须是整数"}
+    if "stuck_timeout_min" in data:
+        try:
+            AUTONOMY_STATE["stuck_timeout_min"] = max(5, int(data["stuck_timeout_min"]))
+            changed.append("stuck_timeout_min")
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "stuck_timeout_min 必须是整数"}
+    if "rest_schedule" in data:
+        try:
+            s = data["rest_schedule"]
+            if not isinstance(s, dict):
+                return {"ok": False, "error": "rest_schedule 必须是对象 {enabled,start,end}"}
+            if s.get("enabled"):
+                for k in ("start", "end"):
+                    if k in s:
+                        hhmm = str(s[k])
+                        if hhmm.count(":") != 1:
+                            return {"ok": False, "error": f"rest_schedule.{k} 格式应为 HH:MM"}
+                        h, m = hhmm.split(":")
+                        if not (0 <= int(h) <= 23 and 0 <= int(m) <= 59):
+                            return {"ok": False, "error": f"rest_schedule.{k} 时间超出范围"}
+            AUTONOMY_STATE["rest_schedule"] = s
+            set_setting("autopilot_rest_schedule", json.dumps(s, ensure_ascii=False))
+            changed.append("rest_schedule")
+        except Exception as e:
+            return {"ok": False, "error": f"rest_schedule 校验失败: {e}"}
+    _AUTONOMY_WAKE.set()  # 配置变更立即生效
+    return {"ok": True, "changed": changed, "state": _autopilot_state_dict()}
+
+
+# ── v5.8 元神个人化（v6.1 全面自检补齐：前端早已引用，审计分支曾缺失后端实现）──
+META_DIMS = ["interest", "decision", "emotion", "value", "comm"]
+META_DIM_NAMES = {"interest": "利益关切", "decision": "决策倾向", "emotion": "情感信号",
+                  "value": "价值观锚点", "comm": "沟通风格"}
+META_QUESTION_BANK = [
+    {"qid": "q_interest_1", "dim": "interest", "q": "你最在意的事情是什么？事业成就、家庭、自由、影响力，还是别的？",
+     "probes": ["可以举一个具体的例子吗？", "这件事当下对你意味着什么？"]},
+    {"qid": "q_interest_2", "dim": "interest", "q": "如果有一整年不用为钱发愁，你会把时间花在什么上？",
+     "probes": ["有没有一直想做但没做的？"]},
+    {"qid": "q_decision_1", "dim": "decision", "q": "做重大决定时，你更靠直觉还是数据分析？",
+     "probes": ["最近一次重要决定是怎么做的？"]},
+    {"qid": "q_decision_2", "dim": "decision", "q": "面对风险，你通常偏向稳妥还是激进？",
+     "probes": ["能接受一个会失败但高回报的尝试吗？"]},
+    {"qid": "q_emotion_1", "dim": "emotion", "q": "什么情境下你会明显焦虑或烦躁？",
+     "probes": ["身体或情绪上有什么信号？"]},
+    {"qid": "q_emotion_2", "dim": "emotion", "q": "你靠什么方式恢复状态？（运动、独处、聊天、消费……）",
+     "probes": ["哪种对你最有效？"]},
+    {"qid": "q_value_1", "dim": "value", "q": "你最不能接受的人和事是什么？",
+     "probes": ["为什么这件事触碰了你的底线？"]},
+    {"qid": "q_value_2", "dim": "value", "q": "你希望别人怎么评价你？",
+     "probes": ["你欣赏的人有什么共同点？"]},
+    {"qid": "q_comm_1", "dim": "comm", "q": "你更喜欢文字还是语音沟通？长文还是短句？",
+     "probes": ["什么沟通方式会让你想跳过？"]},
+    {"qid": "q_comm_2", "dim": "comm", "q": "别人跟你说话时，你最在意对方的态度还是内容？",
+     "probes": ["哪种表达会让你立刻失去信任？"]},
+    {"qid": "q_value_3", "dim": "value", "q": "工作/合作里，你最看重结果、过程还是关系？",
+     "probes": ["三者冲突时你通常怎么取舍？"]},
+    {"qid": "q_interest_3", "dim": "interest", "q": "你希望十年后的自己是什么样？",
+     "probes": ["哪一步是你现在就能迈的？"]},
+]
+
+
+def _ensure_interview_row():
+    conn = get_db()
+    row = conn.execute("SELECT * FROM meta_interview LIMIT 1").fetchone()
+    if not row:
+        conn.execute("INSERT INTO meta_interview (asked,answers,updated_at) VALUES (?,?,?)",
+                     ('[]', '{}', datetime.now().isoformat()))
+        conn.commit()
+        row = conn.execute("SELECT * FROM meta_interview LIMIT 1").fetchone()
+    conn.close()
+    return row
+
+
+def _iv_state():
+    row = _ensure_interview_row()
+    asked = json.loads(row["asked"] or "[]")
+    answers = json.loads(row["answers"] or "{}")
+    return row, asked, answers
+
+
+def _add_user_fact(dim, field, value, source="manual", qid=None, confidence=0.5):
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO user_model (dim,field,value,confidence,source,qid,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (dim, field[:120], value[:1000], confidence, source, qid,
+             datetime.now().isoformat(), datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[meta-fact] 写入失败: {e}")
+
+
+def _build_narrative(rows):
+    if not rows:
+        return "元神还没有足够了解你。点「了解我」回答几个问题，或上传你的笔记/聊天记录，它会越来越像你。"
+    by_dim = {}
+    for r in rows:
+        by_dim.setdefault(r["dim"], []).append(r["value"])
+    parts = [f"{META_DIM_NAMES.get(d, d)}：{'；'.join(by_dim[d][:3])}"
+             for d in META_DIMS if by_dim.get(d)]
+    return "根据目前了解，" + " ".join(parts) + "。"
+
+
+@app.get("/api/meta/interview/next")
+def meta_interview_next():
+    row, asked, answers = _iv_state()
+    remaining = [q for q in META_QUESTION_BANK if q["qid"] not in answers]
+    total = len(META_QUESTION_BANK)
+    done = total - len(remaining)
+    if not remaining:
+        return {"phase": "complete", "question": "", "qid": "", "probes": [],
+                "progress": total, "total": total,
+                "reflection": "元神已经比较了解你了，也可以随时补充，或上传资料让它更懂你。"}
+    prev_unanswered = [x for x in asked if x in {q["qid"] for q in remaining} and x not in answers]
+    q = next((x for x in META_QUESTION_BANK if x["qid"] == prev_unanswered[0]), remaining[0]) \
+        if prev_unanswered else remaining[0]
+    return {"phase": "ask", "question": q["q"], "qid": q["qid"], "probes": q.get("probes", []),
+            "progress": done, "total": total,
+            "reflection": "谢谢你的分享，元神正在把你讲的东西沉淀成「你的」数字分身。"}
+
+
+@app.post("/api/meta/interview/answer")
+async def meta_interview_answer(req: Request):
+    data = await req.json()
+    qid = data.get("qid")
+    answer = (data.get("answer") or "").strip()
+    if not qid or not answer:
+        return {"ok": False, "error": "qid 与 answer 必填"}
+    row, asked, answers = _iv_state()
+    q = next((x for x in META_QUESTION_BANK if x["qid"] == qid), None)
+    if not q:
+        return {"ok": False, "error": "未知问题"}
+    answers[qid] = answer
+    if qid not in asked:
+        asked.append(qid)
+    conn = get_db()
+    conn.execute(
+        "UPDATE meta_interview SET asked=?, answers=?, updated_at=? WHERE id=?",
+        (json.dumps(asked, ensure_ascii=False), json.dumps(answers, ensure_ascii=False),
+         datetime.now().isoformat(), row["id"]))
+    conn.commit()
+    conn.close()
+    _add_user_fact(q["dim"], q["q"], answer[:300], source="interview", qid=qid)
+    return {"ok": True, "next": meta_interview_next()}
+
+
+@app.post("/api/meta/ingest")
+async def meta_ingest(req: Request):
+    data = await req.json()
+    filename = (data.get("filename") or "未命名")
+    text = (data.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "text 不能为空"}
+    conn = get_db()
+    conn.execute("INSERT INTO meta_files (name,ts) VALUES (?,?)", (filename[:200], datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    _add_user_fact("note", "资料·" + filename[:60], text[:1000], source="ingest", confidence=0.4)
+    return {"ok": True, "stored": True}
+
+
+@app.get("/api/meta/profile")
+def meta_profile():
+    conn = get_db()
+    rows = conn.execute("SELECT dim,field,value,confidence FROM user_model").fetchall()
+    conn.close()
+    facts = [{"field": r["field"], "value": r["value"]} for r in rows]
+    total = len(rows)
+    suff, conf = {}, {}
+    for d in META_DIMS:
+        dr = [r for r in rows if r["dim"] == d]
+        cnt = len(dr)
+        avg = sum(r["confidence"] for r in dr) / cnt if cnt else 0
+        suff[d] = {"count": cnt, "avg": round(avg, 2), "sufficient": cnt >= 3}
+        conf[d] = round(avg, 2)
+    sufficient_dims = sum(1 for d in META_DIMS if suff[d]["sufficient"])
+    binding_progress = min(1.0, sufficient_dims / len(META_DIMS))
+    return {
+        "narrative": _build_narrative(rows),
+        "binding": {"progress": binding_progress, "bound_dims": sufficient_dims, "total_dims": len(META_DIMS)},
+        "dim_sufficiency": suff,
+        "dim_confidence": conf,
+        "sufficient_dims": sufficient_dims,
+        "total_dims": len(META_DIMS),
+        "completeness": min(1.0, total / 15.0),
+        "total": total,
+        "facts": facts,
+    }
+
+
+@app.post("/api/meta/mirror/generate")
+async def meta_mirror_generate(req: Request):
+    data = await req.json()
+    count = int(data.get("count", 3))
+    prof = meta_profile()
+    sys_prompt = (
+        "你是「分身」元神，基于下方关于用户的事实，生成若干「情境预测」：给定生活/工作情境，"
+        "预测用户会怎么做、怎么想。只输出 JSON 数组，每项 {scenario: 情境描述, prediction: 预测用户做法}，"
+        "不要任何解释。\n\n事实：\n"
+        + "\n".join(f"- {f['field']}: {f['value']}" for f in prof["facts"][:20]))
+    try:
+        raw = call_llm(META_PID,
+                       [{"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": f"请生成 {count} 条预测。"}],
+                       system_prompt=sys_prompt)
+        items = _parse_json_array(raw) or []
+        return {"ok": True, "items": items[:count]}
+    except Exception as e:
+        return {"ok": False, "error": "生成失败（可能未配置模型）：" + str(e)[:120]}
+
+
+@app.post("/api/meta/mirror/judge")
+async def meta_mirror_judge(req: Request):
+    data = await req.json()
+    agree = bool(data.get("agree", False))
+    pred = (data.get("prediction") or "").strip()
+    corr = (data.get("correction") or "").strip()
+    if agree and pred:
+        _add_user_fact("value", "镜像确认", "元神预测「" + pred[:200] + "」正确，符合我的做法",
+                       source="mirror", confidence=0.6)
+    elif corr:
+        _add_user_fact("value", "镜像纠正", corr[:500], source="mirror", confidence=0.7)
+    else:
+        return {"ok": False, "error": "需 agree 或 correction"}
+    return {"ok": True, "result": "已强化画像" if agree else "已记录纠正"}
 
 
 # ── API：元神对话（改用多模型 call_llm）──────────────────────────
