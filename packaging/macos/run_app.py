@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 分身 v5.8 · macOS 应用入口（PyInstaller 打进 .app 的 MacOS/分身）
+# 分身 v6.0 · macOS 应用入口（PyInstaller 打进 .app 的 MacOS/分身）
 # 启动 uvicorn 服务 backend.main:app，待 health 后自动打开浏览器。
 import os
 import sys

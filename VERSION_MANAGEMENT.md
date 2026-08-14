@@ -2,7 +2,7 @@
 
 > 产品：分身 · 群聊形态 AI 团队总管（桌面端引擎 + H5/LAN 终端）
 > 工作区：`/Users/a13401098230/WorkBuddy/fenshen-v1/`
-> 当前版本：**v5.9**（`0.59.0` / release `v5.9`，候选增强：Trajectory 回放 + 实时 token 条 + 扩展内置供方；v5.8 四项重构已收口）
+> 当前版本：**v6.0**（`0.60.0` / release `v6.0`，新 UI 外壳：图标栏+设置抽屉+联系人列+分栏进程轨迹/看板+聊天内思考链；v5.9 候选增强已收口）
 > 基于：`v4.1`（git `f5b1929`）
 > 分支：`fix/v4.0-audit`
 > 最后更新：2026-08-14
@@ -28,7 +28,8 @@
 | **v5.6** | 2026-08-14 | `b41fc24` | 已合入（未单独签字） | 借鉴 DeepSeek Harness——工作区限定 + PTC 批处理（落地+评估） | — | — | — | — | — | — | — |
 | **v5.7** | 2026-08-14 | 未打 tag | 已合入（未单独签字） | 元神 PM 定位 + 蒸馏重排为绑定（利益/情感，非增强能力）+ 手机号+密码长效登录（v5.7）+ 「磨」skill 分段（以话题边界为主）；架构基线就绪，待 v5.8 一并收口 | — | — | — | — | — | — | — |
 | **v5.8** | 2026-08-14 | tag `v5.8` | **⏳ 待签字** | 四项重构收口：P0-A 元神PM定位+蒸馏绑定 ✅、P0-B 磨skill分段 ✅、P1 双维度存储（项目/成员/模块文件夹+点模块开文件+旧项目迁移）✅、P2 UI 设计规范库（apple_hig/wechat，建项自选无默认，注入角色执行）✅；安装包 v5.8 macOS dmg + 官网推送；冒烟 76/0 | — | — | — | — | — | — | — |
-| **v5.9** | 2026-08-14 | tag `v5.9`（待打） | **⏳ 待签字** | 候选增强收口：Trajectory 事件级回放（一次派单/对话=一个 run，run 内记录 run_start/plan/role_start/tool×N/role_done；/api/projects/{pid}/runs + /trajectory?run_id=，前端「🎬 回放」面板）✅、底部实时 token 条（进程级 LIVE_TOKENS 累加器 + /api/token/usage + /api/token/reset，前端 2.5s 轮询展示 输入/输出/合计/调用）✅、扩展内置供方（通义 qwen / 月之暗面 moonshot / 智谱 zhipu，均 OpenAI 兼容，PROVIDER_PRESETS 新增 3 项）✅、model_usage 补 input_tokens/output_tokens 列迁移 ✅；安装包 v5.9 macOS dmg + 官网推送（v5.8 dmg 下架）✅；冒烟 76/0 | — | — | — | — | — | — | — |
+| **v5.9** | 2026-08-14 | tag `v5.9`（已推送 S4） | **⏳ 待签字** | 候选增强收口：Trajectory 事件级回放（一次派单/对话=一个 run，run 内记录 run_start/plan/role_start/tool×N/role_done；/api/projects/{pid}/runs + /trajectory?run_id=，前端「🎬 回放」面板）✅、底部实时 token 条（进程级 LIVE_TOKENS 累加器 + /api/token/usage + /api/token/reset，前端 2.5s 轮询展示 输入/输出/合计/调用）✅、扩展内置供方（通义 qwen / 月之暗面 moonshot / 智谱 zhipu，均 OpenAI 兼容，PROVIDER_PRESETS 新增 3 项）✅、model_usage 补 input_tokens/output_tokens 列迁移 ✅；安装包 v5.9 macOS dmg + 官网推送（v5.8 dmg 下架）✅；冒烟 76/0 | — | — | — | — | — | — | — |
+| **v6.0** | 2026-08-14 | tag `v6.0`（待打） | **⏳ 待签字** | 新 UI 外壳落地真实前端（图标栏+设置抽屉13项+联系人列元神置顶+分栏进程轨迹/看板+聊天内思考链 inline）；保留全部既有 ~120 JS 函数/~84 fetch 调用逐字不变（最小回归）；版本 0.60.0/v6.0；安装包 v6.0 macOS dmg + 官网推送（v5.9 dmg 下架）✅；jsdom 端到端 0 报错 + 冒烟 76/0 | — | — | — | — | — | — | — |
 
 ---
 
@@ -161,6 +162,7 @@
 | 2026-08-11 | v5.0 移动端体验闭环（异步派单/PWA/移动看板）+ 安装包 v5.0 + 官网推送 | `backend/main.py`, `frontend/*`, `dist-stage/分身-v1/*`, `site/分身-v5.0-macOS.zip` | 线上备份 `/var/www/fenshen-backup-20260811-1040`；v4.2 下架（404）；demo.mp4 更新 v5.0 演示视频 |
 | 2026-08-10 | 安装包重建 v4.2 + 官网推送 | `dist-stage/分身-v1/*`, `site/分身-v4.2-macOS.zip`, `site/index.html`, `deliverables/gstack/v4.2-signoff.md` | 线上备份 `/var/www/fenshen-backup-20260810-1958`；v4.1 包下架（404）；v4.2 包 200 完整 |
 | 2026-08-14 | v5.8 四项重构收口 + 安装包 v5.8 macOS dmg + 官网推送 | `backend/main.py`, `frontend/index.html`, `backend/design_specs/*`, `migrate_storage_v58.py`, `tests/smoke_v40.py`, `packaging/macos/run_app.py`, `site/分身-v5.8-macOS.dmg`, `site/index.html`, `deliverables/gstack/v5.8-signoff.md` | 线上备份 `/var/www/fenshen-backup-20260814-1021`；v5.5 macOS dmg 下架（404）；v5.8 dmg 200 在线；版本号 0.58.0/v5.8；冒烟 76/0 |
+| 2026-08-14 | v6.0 新 UI 外壳落地 + 全功能测试 + 安装包 v6.0 macOS dmg + 官网推送 | `backend/main.py`, `frontend/index.html`, `packaging/macos/run_app.py`, `tests/smoke_v40.py`, `site/分身-v6.0-macOS.dmg`, `site/index.html`, `deliverables/gstack/v6.0-signoff.md` | 线上备份 `/var/www/fenshen-backup-20260814-1343`；v5.9 dmg 下架（404）；v6.0 dmg 200 在线（66MB）；版本号 0.60.0/v6.0；jsdom 端到端 0 报错；冒烟 76/0 |
 
 ---
 
