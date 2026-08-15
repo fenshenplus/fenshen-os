@@ -306,6 +306,9 @@
       <div class="rail-item navitem active" data-sec="chat" title="对话">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.6-.8L3 21l1.9-5.5A8.5 8.5 0 1 1 21 11.5z"/></svg>
       </div>
+      <div class="rail-item navitem" data-sec="cockpit" title="元神驾驶舱">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/><path d="M12 2v2M4 12H2M22 12h-2"/></svg>
+      </div>
       <div class="rail-sep"></div>
       <div class="rail-item" onclick="openDrawer()" title="设置">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -322,6 +325,7 @@
       <div class="drawer-search"><input id="drawerSearch" placeholder="搜索功能…" oninput="filterDrawer(this.value)"></div>
       <div class="drawer-nav" id="drawerNav">
         <div class="navitem meta" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
+        <div class="navitem meta" data-sec="cockpit"><span class="dotk"></span>元神驾驶舱</div>
         <div class="navitem" data-sec="roles"><span class="dotk"></span>角色库</div>
         <div class="navitem" data-sec="resources"><span class="dotk"></span>公共资源库</div>
         <div class="navitem" data-sec="models"><span class="dotk"></span>模型设置</div>
@@ -1872,6 +1876,8 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
   if(n.dataset.sec==='market'){ loadMarket(); }
   // v6.1 元神续航：切过来拉取调度器实时状态
   if(n.dataset.sec==='autopilot'){ loadAutopilot(); }
+  // v6.2 元神驾驶舱：切过来渲染状态卡 + 项目 + 战队
+  if(n.dataset.sec==='cockpit'){ renderCockpit(); }
 });
 
 // v5.0 移动端首页：手机默认进「项目群聊」（最常用），桌面保持元神窗
@@ -2318,8 +2324,8 @@ function renderTrackTabs(tracks){
 }
 function switchTrack(t){ window._curTrack=t; loadMatrix(); }
 
-function renderMatrix(j){
-  const g=document.getElementById('boardMatrix');
+function renderMatrix(j, elId){
+  const g=document.getElementById(elId||'boardMatrix');
   if(!j.modules||!j.modules.length){ g.innerHTML='<div style="padding:40px;color:var(--gray-400);font-size:13px;width:100%;text-align:center">还没有模块 —— 用上方输入框添加第一个模块，或成立项目时解构</div>'; return; }
   const stages=j.stages||[];
   let h='<div style="min-width:max-content">';
@@ -3188,6 +3194,157 @@ async function loadTrajectory(rid){
 // token 条定时刷新
 loadTokenBar();
 setInterval(loadTokenBar, 2500);
+
+/* ══════════════════════════════════════════════════════════════
+   v6.2 元神驾驶舱（Cockpit）+ 成员详情抽屉
+   ══════════════════════════════════════════════════════════════ */
+const WM = {online: ['在线', '#52c41a'], offline: ['离线', '#bfbfbf'], busy: ['忙碌', '#fa8c16'], idle: ['空闲', '#1890ff']};
+const CK_STATE_NAME = {init: '初始化', idle: '待命', dispatching: '调度中', supervising: '监管中', autopilot: '自动驾驶', rest: '休息中', upgrading: '升级中', blocked: '需决策'};
+const CK_DOT_COLOR = {init: '#bfbfbf', idle: '#52c41a', dispatching: '#1890ff', supervising: '#722ed1', autopilot: '#fa8c16', rest: '#8c8c8c', upgrading: '#eb2f96', blocked: '#f5222d'};
+let ckFocus = '';
+
+async function renderCockpit(){
+  // 状态卡
+  let s = {state: 'idle'};
+  try { s = await apiJson('/api/meta/state'); } catch(e){}
+  document.getElementById('ckState').textContent = (CK_STATE_NAME[s.state] || s.state) + (s.flags && s.flags.length ? ' · ' + s.flags.map(f=>({upgrading:'升级中',blocked:'需决策'}[f]||f)).join(' · ') : '');
+  document.getElementById('ckDot').style.background = CK_DOT_COLOR[s.state] || '#bfbfbf';
+  document.getElementById('ckFocus').textContent = '聚焦：' + (s.focus_project || '—') + (s.rest_window_active ? ' · 休息窗激活' : '');
+  const b = s.token_budget || {};
+  document.getElementById('ckMetrics').innerHTML = [
+    ['今日派单', s.today_dispatched || 0], ['模式', s.mode || '-'],
+    ['token/时', (b.used_hour||0) + '/' + (b.hour||'∞')], ['休息窗', s.rest_window_active ? '激活' : '关']
+  ].map(([k,v])=>`<div><div style="font-size:10px;color:var(--gray-400)">${k}</div><div style="font-size:14px;font-weight:600;color:var(--gray-700)">${v}</div></div>`).join('');
+  // 蒸馏充足度环
+  try { const sf = await apiJson('/api/meta/sufficiency'); if(sf.ok){ renderSuffRing(sf); } } catch(e){}
+  // 项目列表
+  let ps = [];
+  try { ps = await apiJson('/api/projects'); } catch(e){ ps = []; }
+  const pl = document.getElementById('ckProjects');
+  if(!ps.length){ pl.innerHTML = '<div style="padding:20px;color:var(--gray-400);font-size:12px">还没有产品。去「对话」说一句"做个 XX 产品"即可建项。</div>'; }
+  else {
+    pl.innerHTML = ps.map(p=>{
+      const pct = (p.completion && p.completion.percent) || 0;
+      return `<div onclick="ckSelect('${p.id}')" style="padding:10px;border:.5px solid ${ckFocus===p.id?'var(--meta)':'var(--gray-200)'};border-radius:10px;margin-bottom:8px;cursor:pointer;background:${ckFocus===p.id?'var(--meta-50,#eef0fb)':'#fff'}">
+        <div style="font-size:13px;font-weight:600;color:var(--gray-800)">${escapeHtml(p.name||p.id)}</div>
+        <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${pct}% · ${escapeHtml((p.last_msg||'').slice(0,24)||'无消息')}</div>
+        <div style="height:4px;background:var(--gray-100);border-radius:3px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#6d5bd0,#34c98e)"></div></div>
+      </div>`;
+    }).join('');
+    if(!ckFocus) ckFocus = ps[0].id;
+  }
+  if(ckFocus) loadCockpitProject(ckFocus);
+}
+function ckSelect(pid){ ckFocus = pid; renderCockpit(); }
+async function loadCockpitProject(pid){
+  document.getElementById('ckCenterTitle').textContent = '项目看板 · ' + pid;
+  try {
+    const j = await (await fetch('/api/projects/'+pid+'/matrix?track=web')).json();
+    renderMatrix(j, 'cockpitMatrix');
+  } catch(e){ document.getElementById('cockpitMatrix').innerHTML = '<div style="color:var(--gray-400);font-size:12px;padding:20px">看板加载失败</div>'; }
+  try {
+    const m = await apiJson('/api/projects/'+pid+'/members');
+    renderCockpitTeam(m.members || []);
+  } catch(e){ document.getElementById('ckTeam').innerHTML = '<div style="color:var(--gray-400);font-size:12px;padding:10px">成员加载失败</div>'; }
+  try {
+    const ap = await apiJson('/api/autopilot/state');
+    const fp = (ap.focus_paths && ap.focus_paths[pid]) || [];
+    document.getElementById('ckDispatch').innerHTML = '<div style="font-size:11px;color:var(--gray-400);margin-bottom:4px">⚡ 元神调度脑 · 关键路径</div>' +
+      (fp.length ? fp.map(x=>`<span style="display:inline-block;font-size:11px;background:#fff7e6;border:.5px solid #ffd591;border-radius:8px;padding:2px 8px;margin:2px">${escapeHtml(x)}</span>`).join(' → ') : '<span style="font-size:11px;color:var(--gray-400)">暂无在跑任务</span>');
+  } catch(e){}
+}
+function renderCockpitTeam(members){
+  const g = document.getElementById('ckTeam');
+  if(!members.length){ g.innerHTML = '<div style="padding:12px;color:var(--gray-400);font-size:12px">暂无成员。点右上「+ 成员」添加。</div>'; return; }
+  g.innerHTML = members.map(m=>{
+    const w = WM[m.work_mode] || WM.idle;
+    return `<div onclick="openMemberDrawer('${m.id}')" style="display:flex;gap:10px;align-items:center;padding:10px;border:.5px solid var(--gray-200);border-radius:10px;margin-bottom:8px;cursor:pointer;background:#fff">
+      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#6d5bd0,#34c98e);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;flex-shrink:0">${escapeHtml((m.avatar||m.name||'?').slice(0,1))}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;color:var(--gray-800)">${escapeHtml(m.name)} <span style="font-size:10px;color:var(--gray-400);font-weight:400">${escapeHtml(m.role_title||'')}</span></div>
+        <div style="font-size:10px;color:var(--gray-400)">Lv.${m.level||1} · 经验 ${m.experience||0} · v${m.version||1}</div>
+        <div style="font-size:10px;color:var(--gray-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(m.current_task||'待命')}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${w[1]};margin-right:4px"></span><span style="font-size:10px;color:${w[1]}">${w[0]}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+function renderSuffRing(sf){
+  const ring = document.getElementById('ckRing');
+  const pct = Math.round((sf.overall||0) * 100);
+  ring.style.background = `conic-gradient(#6d5bd0 ${pct*3.6}deg, #eee 0)`;
+  document.getElementById('ckRingTxt').textContent = pct + '%';
+}
+async function ckAddMember(){
+  if(!ckFocus){ toast('请先选择一个产品'); return; }
+  const name = prompt('成员名（如：架构师）'); if(!name) return;
+  const t = await apiJson('/api/projects/'+ckFocus+'/members', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, role_title: name})});
+  if(t.ok){ toast('已添加成员'); loadCockpitProject(ckFocus); } else toast('添加失败');
+}
+let mdMid = '';
+async function openMemberDrawer(mid){
+  mdMid = mid;
+  let m;
+  try { m = await apiJson('/api/members/'+mid); } catch(e){ toast('成员加载失败'); return; }
+  if(!m.ok){ toast('成员加载失败'); return; }
+  const d = m.member, mc = d.model_cfg || {};
+  document.getElementById('mdTitle').textContent = d.name + ' · 详情';
+  document.getElementById('mdBody').innerHTML = `
+    <div class="md-row"><label>角色名</label><input id="mdName" value="${escapeHtml(d.name)}"></div>
+    <div class="md-row"><label>一句话定位</label><input id="mdTitle2" value="${escapeHtml(d.role_title||'')}"></div>
+    <div class="md-row"><label>所属轨道</label><select id="mdTrack">${['web','h5','app','mp','generic'].map(t=>`<option ${d.track===t?'selected':''}>${t}</option>`).join('')}</select></div>
+    <div class="md-row"><label>Soul 文件（灵魂：语气 / 边界 / 价值观）</label><textarea id="mdSoul" rows="4">${escapeHtml(d.soul||'')}</textarea></div>
+    <div class="md-row"><label>Rule（行为规则，一行一条）</label><textarea id="mdRule" rows="3">${escapeHtml((d.rule||[]).join('\n'))}</textarea></div>
+    <div class="md-row"><label>工程规范</label><textarea id="mdEng" rows="2">${escapeHtml(d.eng_spec||'')}</textarea></div>
+    <div class="md-row"><label>模型配置</label>
+      模型 <input id="mdModel" value="${escapeHtml(mc.model||'deepseek-v4-flash')}" style="width:150px">
+      温度 <input id="mdTemp" type="number" step="0.1" value="${mc.temp!=null?mc.temp:0.3}" style="width:56px">
+      推理 <input type="checkbox" id="mdReason" ${mc.reason?'checked':''}>
+      上限 <input id="mdTok" type="number" value="${mc.max_tokens||8000}" style="width:74px">
+    </div>
+    <div class="md-row"><label>工作模式 · 时间</label>
+      状态 <select id="mdWork">${['online','offline','busy','idle'].map(w=>`<option value="${w}" ${d.work_mode===w?'selected':''}>${WM[w][0]}</option>`).join('')}</select>
+      时段 <select id="mdHours">${['24h','worktime','follow_meta'].map(h=>`<option ${d.work_hours===h?'selected':''}>${h}</option>`).join('')}</select>
+    </div>
+    <div class="md-row"><label>当前任务</label><input id="mdTask" value="${escapeHtml(d.current_task||'')}"></div>
+    <div class="md-row"><label>技能情况</label><div style="font-size:11px;color:var(--gray-500)">${((d.skills||[]).map(s=>escapeHtml(s.name)+' ('+Math.round((s.proficiency||0)*100)+'%)')).join('、') || '暂无'}</div></div>
+    <div class="md-row"><label>经验 · 进化（系统记录，元神据此升级）</label><div style="font-size:11px;color:var(--gray-500)">Lv.${d.level||1} · 经验 ${d.experience||0} · 版本 v${d.version||1}${((d.evo_tree||[]).length?' · 进化 '+d.evo_tree.length+' 次':'')}</div></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn meta" onclick="saveMember()">保存</button>
+      <button class="btn" onclick="upgradeMember('${d.id}')">⚡ 元神升级</button>
+      <button class="btn sm" style="margin-left:auto;color:#cf1322" onclick="delMember('${d.id}')">删除</button>
+    </div>`;
+  document.getElementById('memberMask').style.display = 'flex';
+}
+function closeMemberDrawer(){ document.getElementById('memberMask').style.display = 'none'; }
+async function saveMember(){
+  if(!mdMid) return;
+  const payload = {
+    name: document.getElementById('mdName').value,
+    role_title: document.getElementById('mdTitle2').value,
+    track: document.getElementById('mdTrack').value,
+    soul: document.getElementById('mdSoul').value,
+    rule: document.getElementById('mdRule').value.split('\n').map(x=>x.trim()).filter(Boolean),
+    eng_spec: document.getElementById('mdEng').value,
+    model_cfg: {model: document.getElementById('mdModel').value, temp: +(document.getElementById('mdTemp').value||0.3), reason: document.getElementById('mdReason').checked, max_tokens: +(document.getElementById('mdTok').value||8000)},
+    work_mode: document.getElementById('mdWork').value,
+    work_hours: document.getElementById('mdHours').value,
+    current_task: document.getElementById('mdTask').value,
+  };
+  const j = await apiJson('/api/members/'+mdMid, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+  if(j.ok){ toast('已保存'); if(ckFocus) loadCockpitProject(ckFocus); } else toast('保存失败');
+}
+async function upgradeMember(mid){
+  const j = await apiJson('/api/members/'+mid+'/upgrade', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({reason:'用户触发升级'})});
+  if(j.ok){ toast('已升级到 v'+j.version+' · Lv.'+j.level); openMemberDrawer(mid); if(ckFocus) loadCockpitProject(ckFocus); } else toast('升级失败');
+}
+async function delMember(mid){
+  if(!confirm('确认删除该成员？')) return;
+  const j = await apiJson('/api/projects/'+ckFocus+'/members/'+mid, {method:'DELETE'});
+  if(j.ok){ closeMemberDrawer(); if(ckFocus) loadCockpitProject(ckFocus); toast('已删除'); } else toast('删除失败');
+}
 </script>
 
 <!-- v6.0：底部实时 token 条 -->
@@ -3223,6 +3380,81 @@ setInterval(loadTokenBar, 2500);
 .traj-t{color:var(--gray-400);font-variant-numeric:tabular-nums}
 .traj-txt{font-size:12px;color:var(--gray-900);white-space:pre-wrap;word-break:break-word;margin-top:2px}
 </style>
+
+<!-- ════════════════════════════════════════════════════════════
+     v6.2 元神驾驶舱（Cockpit）：四区布局 = 状态卡 / 项目列表 / 矩阵看板+调度脑 / 战队面板
+     ════════════════════════════════════════════════════════════ -->
+<style>
+.cockpit{display:flex;flex-direction:column;flex:1;min-height:0;background:var(--gray-50,#f7f7fb)}
+.ck-top{display:flex;align-items:center;gap:18px;padding:12px 18px;background:#fff;border-bottom:.5px solid var(--gray-200);flex-wrap:wrap}
+.ck-status{display:flex;align-items:center;gap:10px}
+.ck-dot{width:12px;height:12px;border-radius:50%;background:#52c41a;box-shadow:0 0 0 4px rgba(82,196,26,.15)}
+.ck-metrics{display:flex;gap:18px;flex:1}
+.ck-metrics>div{min-width:48px}
+.ck-suff{display:flex;align-items:center;gap:8px}
+.ck-ring{width:46px;height:46px;border-radius:50%;background:conic-gradient(#6d5bd0 0deg,#eee 0);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--gray-700)}
+.ck-ring span{background:#fff;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.ck-body{display:flex;flex:1;min-height:0}
+.ck-left{width:240px;border-right:.5px solid var(--gray-200);display:flex;flex-direction:column;background:#fff}
+.ck-center{flex:1;display:flex;flex-direction:column;min-width:0}
+.ck-right{width:300px;border-left:.5px solid var(--gray-200);display:flex;flex-direction:column;background:#fff}
+.ck-h{padding:10px 14px;font-size:13px;font-weight:600;color:var(--gray-800);border-bottom:.5px solid var(--gray-100);flex-shrink:0}
+.ck-tabs{padding:6px 12px;display:flex;gap:6px;flex-wrap:wrap;border-bottom:.5px solid var(--gray-100)}
+.ck-dispatch{padding:10px 14px;border-top:.5px solid var(--gray-100);background:#fafaff;flex-shrink:0}
+.md-row{margin-bottom:12px}
+.md-row label{display:block;font-size:11px;color:var(--gray-500);margin-bottom:4px}
+.md-row input,.md-row textarea,.md-row select{width:100%;box-sizing:border-box;padding:7px 9px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px;outline:none;font-family:inherit}
+.md-row textarea{resize:vertical}
+@media(max-width:900px){ .ck-left,.ck-right{display:none} }
+</style>
+<section id="sec-cockpit" class="section">
+  <div class="cockpit">
+    <!-- 顶部：元神状态卡 + 蒸馏充足度环 -->
+    <div class="ck-top">
+      <div class="ck-status">
+        <span class="ck-dot" id="ckDot"></span>
+        <div>
+          <div id="ckState" style="font-size:15px;font-weight:600;color:var(--gray-800)">待命</div>
+          <div id="ckFocus" style="font-size:11px;color:var(--gray-400)">聚焦：—</div>
+        </div>
+      </div>
+      <div class="ck-metrics" id="ckMetrics"></div>
+      <div class="ck-suff" title="元神懂你多少">
+        <div class="ck-ring" id="ckRing"><span id="ckRingTxt">0%</span></div>
+        <div style="font-size:11px;color:var(--gray-500);line-height:1.3">蒸馏充足度<div id="ckSuffLabel" style="font-size:10px;color:var(--gray-400)">元神懂你多少</div></div>
+      </div>
+    </div>
+    <div class="ck-body">
+      <!-- 左：项目列表 -->
+      <div class="ck-left">
+        <div class="ck-h">我的产品</div>
+        <div id="ckProjects" style="overflow:auto;flex:1;padding:10px"></div>
+      </div>
+      <!-- 中：矩阵看板 + 调度脑 -->
+      <div class="ck-center">
+        <div class="ck-h" id="ckCenterTitle">项目看板</div>
+        <div class="ck-tabs" id="ckTabs"></div>
+        <div id="cockpitMatrix" style="overflow:auto;flex:1;padding:8px"></div>
+        <div class="ck-dispatch" id="ckDispatch"></div>
+      </div>
+      <!-- 右：战队面板 -->
+      <div class="ck-right">
+        <div class="ck-h">战队 · 团队成员 <button class="btn sm meta" onclick="ckAddMember()" style="float:right">+ 成员</button></div>
+        <div id="ckTeam" style="overflow:auto;flex:1;padding:8px"></div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- 成员详情抽屉：可改 soul/rule/模型/状态/技能/经验进化 -->
+<div id="memberMask" class="mask" style="display:none" onclick="if(event.target===this)closeMemberDrawer()">
+  <div class="dialog" style="max-width:560px;width:94vw;height:88vh;display:flex;flex-direction:column">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:.5px solid var(--gray-200)">
+      <div class="t" id="mdTitle" style="font-size:15px;font-weight:600">成员详情</div>
+      <button class="btn sm" onclick="closeMemberDrawer()">关闭</button>
+    </div>
+    <div id="mdBody" style="flex:1;overflow:auto;padding:14px 16px"></div>
+  </div>
+</div>
 
 </body>
 </html>
