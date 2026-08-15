@@ -1397,9 +1397,13 @@ async function sendMsg(){
     if(j.job_id) jobId=j.job_id;
   }catch(e){ toast('发送失败：'+errText(e),'err'); inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; return; }
   if(!jobId){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; await loadChat(curRoom); return; }
-  await pollJob(jobId,()=>{
+  await pollJob(jobId,(res)=>{
     inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false;
     loadChat(curRoom);
+    // P1-A：展示本次调度的爆炸半径（团队级精准路由聚焦的模块），让用户直观看到"不广播全群"
+    if(res && res.blast_radius && res.blast_radius.length){
+      toast('🎯 爆炸半径·精准路由：仅聚焦 '+res.blast_radius.join('、'),'ok');
+    }
   });
 }
 /* v5.0：共享的派单进度轮询（sendMsg / continueBoard 复用）*/
@@ -1416,7 +1420,7 @@ async function pollJob(jobId,onDone,onRunning){
     }
     if(st.status==='failed') toast('执行失败：'+(st.error||'未知错误'),'err');
     else if(st.status==='done') toast('✅ 团队执行完成','ok');
-    if(onDone) onDone();
+    if(onDone) onDone(st.result);
   };
   poll();
 }
@@ -2457,6 +2461,7 @@ function openCellDlg(mid,stage){
       <button class="btn sm" onclick="closeCellDlg()">✕</button>
     </div>
     <div id="cellTasks">${tasksHtml}</div>
+    <div id="cellNarrowcast" style="margin-top:10px;font-size:11px;color:var(--meta-700);background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:6px 8px">🔔 精准定位窄播：计算将通知的成员…</div>
     <div style="display:flex;gap:6px;margin-top:12px">
       <input id="cellTaskName" placeholder="在「${escapeHtml(stageName)}」新建任务（回车提交）" style="flex:1;padding:6px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px" onkeydown="if(event.key==='Enter')createCellTask('${jsStr(mid)}','${jsStr(stage)}')">
       <button class="btn sm meta" onclick="createCellTask('${jsStr(mid)}','${jsStr(stage)}')">＋ 补卡</button>
@@ -2465,6 +2470,8 @@ function openCellDlg(mid,stage){
   ov.onclick=e=>{ if(e.target===ov) closeCellDlg(); };
   document.body.appendChild(ov);
   const inp=document.getElementById('cellTaskName'); if(inp) inp.focus();
+  // P1-C：精准定位窄播——计算本次模块变更将只通知的成员集合（不广播全群）
+  if(curRoom){ fetch('/api/narrowcast/targets?project_id='+encodeURIComponent(curRoom)+'&module_id='+encodeURIComponent(mid)).then(r=>r.json()).then(j=>{ const el=document.getElementById('cellNarrowcast'); if(el&&j.ok){ el.textContent = (j.targets&&j.targets.length) ? ('🔔 精准定位窄播：本次变更将只通知 '+j.targets.join('、')) : '🔔 精准定位窄播：无可通知成员'; } }).catch(()=>{}); }
 }
 function closeCellDlg(){ const o=document.getElementById('cellOverlay'); if(o) o.remove(); }
 async function verifyTask(tid){
@@ -2475,6 +2482,8 @@ async function verifyTask(tid){
     const j=await r.json();
     if(!j.ok){ toast('❌ '+j.error); return; }
     toast(j.pass? '✅ 验收通过：'+j.reason : '🔍 验收未通过：'+j.reason);
+    // P1-C：窄播结果提示（只 @ 受影响成员，而非全群）
+    if(j.narrowcast && j.narrowcast.length) toast('🔔 已窄播通知：'+j.narrowcast.join('、'),'ok');
     if(window._cellMid!==undefined) openCellDlg(window._cellMid, window._cellStage);
   }catch(e){ toast('请求失败：'+e); }
 }
@@ -3443,6 +3452,37 @@ async function metaReport(pid){
     else toast(r.error||'生成失败');
   }catch(e){ toast('生成失败'); }
 }
+/* P1-B 元神潜意识晨报（对齐 OpenHuman Subconscious）：汇总隔夜/自上次查看以来的状态 diff + 主动建议关注 */
+async function openMorningBrief(){
+  const pid = ckFocus || curRoom;
+  if(!pid){ toast('请先选择一个产品'); return; }
+  let ov=document.getElementById('mbOverlay'); if(ov) ov.remove();
+  ov=document.createElement('div'); ov.id='mbOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:400;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:#fff;border-radius:14px;width:min(560px,92vw);max-height:84vh;overflow:auto;padding:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:15px;font-weight:600">🌅 元神潜意识晨报</div>
+      <button class="btn sm" onclick="closeMorningBrief()">✕</button>
+    </div>
+    <div id="mbBody" style="font-size:13px;color:var(--gray-700)">元神正在汇总近期进展…</div>
+  </div>`;
+  ov.onclick=e=>{ if(e.target===ov) closeMorningBrief(); };
+  document.body.appendChild(ov);
+  try{
+    const j=await (await fetch('/api/meta/morning-brief?project_id='+encodeURIComponent(pid))).json();
+    const b=document.getElementById('mbBody');
+    if(!j.ok){ b.innerHTML='<div style="color:var(--gray-400)">'+(j.error||'生成失败')+'</div>'; return; }
+    const s=j.stats||{};
+    const statsHtml = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      ${[['新增',s.new],['完成',s.done],['待复核',s.review],['进行中',s.doing],['待办',s.todo]].map(x=>`<div style="background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:6px 10px;font-size:12px"><b>${x[1]||0}</b> ${x[0]}</div>`).join('')}
+    </div>`;
+    const stuckHtml = (s.stuck&&s.stuck.length)?('<div style="margin-top:8px;color:#d4380d;font-size:12px">⚠️ 卡点：'+escapeHtml(s.stuck.join('、'))+'</div>'):'';
+    const focusHtml = (j.focus&&j.focus.length)?('<div style="margin-top:10px"><div style="font-weight:600;margin-bottom:4px">🎯 元神主动建议关注</div>'+j.focus.map(f=>`<div style="padding:4px 0;border-bottom:.5px solid var(--gray-100)">· ${escapeHtml(f)}</div>`).join('')+'</div>'):'';
+    b.innerHTML = `<div style="color:var(--gray-500);font-size:11px">统计窗口：自 ${escapeHtml((j.since||'').replace('T',' ').slice(0,16))} 以来</div>`+statsHtml+stuckHtml+
+      `<div style="margin-top:12px;line-height:1.6;white-space:pre-wrap">${escapeHtml(j.brief||'')}</div>`+focusHtml;
+  }catch(e){ const b=document.getElementById('mbBody'); if(b) b.innerHTML='<div style="color:var(--gray-400)">生成失败：'+e+'</div>'; }
+}
+function closeMorningBrief(){ const o=document.getElementById('mbOverlay'); if(o) o.remove(); }
 function renderSuffRing(sf){
   const ring = document.getElementById('ckRing');
   const pct = Math.round((sf.overall||0) * 100);
@@ -3659,7 +3699,7 @@ async function delMember(mid){
       </div>
       <!-- 中：矩阵看板 + 调度脑 -->
       <div class="ck-center">
-        <div class="ck-h" style="display:flex;align-items:center;gap:8px"><span id="ckCenterTitle">项目看板</span><button class="btn sm meta" onclick="metaReport(ckFocus)" style="margin-left:auto">📊 元神汇报</button></div>
+        <div class="ck-h" style="display:flex;align-items:center;gap:8px"><span id="ckCenterTitle">项目看板</span><button class="btn sm meta" onclick="openMorningBrief()" style="margin-left:auto">🌅 晨报</button><button class="btn sm meta" onclick="metaReport(ckFocus)">📊 元神汇报</button></div>
         <div id="ckReady" style="font-size:11px;padding:0 8px 6px;color:var(--gray-500)"></div>
         <div id="ckReport" style="font-size:11px;padding:0 8px 8px;color:var(--gray-600)"></div>
         <div class="ck-tabs" id="ckTabs"></div>
