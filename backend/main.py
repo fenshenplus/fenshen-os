@@ -975,6 +975,9 @@ def init_db():
     tcols = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
     if "done_criteria" not in tcols:
         cur.execute("ALTER TABLE tasks ADD COLUMN done_criteria TEXT DEFAULT ''")
+    # ── P0-C：tasks 增加 acceptance_criteria 列（看板验收门：该任务的可验收点）──
+    if "acceptance_criteria" not in tcols:
+        cur.execute("ALTER TABLE tasks ADD COLUMN acceptance_criteria TEXT DEFAULT ''")
     # ── v5.8 P1 双维度存储：projects 增加 storage_root（双维度根目录）+ design_standard（P2 设计规范）──
     pcols3 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
     if "storage_root" not in pcols3:
@@ -4974,6 +4977,9 @@ async def project_chat(pid: str, req: Request):
 # 异步派单任务引用集合（防 GC 吞掉 pending 任务）
 _DISPATCH_TASKS = set()
 
+# P0-A：项目群聊蒸馏节流计数器（每累计 N 条消息触发一次经验蒸馏，对应 OpenHuman 20min cadence）
+_CHAT_DISTILL_CNT = {}
+
 
 async def _run_dispatch_job(job_id: str, pid: str, user_text: str):
     """异步执行一条派单：更新 job 状态 → 跑执行链 → 写结果。异常记录 error，不中断其他任务。"""
@@ -5048,6 +5054,11 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         (pid, "你", "self", user_text, None, datetime.now().isoformat()),
     )
     conn.commit()
+    # ── P0-A：群聊自动蒸馏（记忆树原料）── 节流：每 6 条项目消息触发一次经验蒸馏
+    _CHAT_DISTILL_CNT[pid] = _CHAT_DISTILL_CNT.get(pid, 0) + 1
+    if _CHAT_DISTILL_CNT[pid] >= 6:
+        _CHAT_DISTILL_CNT[pid] = 0
+        asyncio.create_task(_auto_distill_project_chat(pid))
     # ── 项目级上下文 ──
     mods = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort", (pid,)).fetchall()
     tasks = conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
@@ -6047,11 +6058,71 @@ def delete_task(task_id: str):
     return {"ok": True}
 
 
+@app.post("/api/tasks/{task_id}/verify")
+async def verify_task(task_id: str, req: Request):
+    """P0-C 看板验收门：用任务验收标准（或 done_criteria / 项目 standards）对照产出判定；达标转 done，否则标记 review。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    output = (data.get("output") or "").strip()
+    conn = get_db()
+    task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    pid = task["project_id"]
+    proj = conn.execute("SELECT standards FROM projects WHERE id=?", (pid,)).fetchone()
+    project_standards = proj["standards"] if proj else ""
+    acceptance = (task["acceptance_criteria"] or "").strip() or (task["done_criteria"] or "").strip()
+    conn.close()
+    if not output:
+        return {"ok": False, "error": "请提供待验收的产出内容（output）"}
+    status, reason = await _judge_role_output(output, acceptance, project_standards, task["owner_role"])
+    if status == "done":
+        _task_status(task_id, "done", pid, f"✅ 验收通过：{task['name']}（{reason}）")
+        return {"ok": True, "pass": True, "status": "done", "reason": reason}
+    _task_status(task_id, "review", pid, f"🔍 验收未通过：{task['name']}（{reason}）")
+    return {"ok": True, "pass": False, "status": "review", "reason": reason}
+
+
 # ── v5.8「磨」：对话压缩 / 元神材料精炼 ──────────────────────────
-GRIND_SYSTEM = """你是「磨」——一个语意保真压缩器。把你收到的一段或多段对话/资料「磨碎打散」：
+# ── P0-B：磨 / TokenJuice 升级助手 ──────────────────────────────
+GRIND_RULES_PATH = os.path.join(BASE, "..", "data", "grind_rules.json")
+
+
+def _load_grind_rules() -> dict:
+    """分层规则（内置 + 用户，JSON 免编译热加载）。对应 TokenJuice 三层 rules。"""
+    builtin = {
+        "drop_patterns": ["【略】", "（省略）", "同上", "如前述", "（接上）"],
+        "redundant_marks": ["其实", "也就是说", "换句话说", "总的来说", "简而言之"],
+    }
+    rules = dict(builtin)
+    try:
+        if os.path.exists(GRIND_RULES_PATH):
+            with open(GRIND_RULES_PATH, "r", encoding="utf-8") as f:
+                custom = json.load(f)
+            if isinstance(custom, dict):
+                rules.update(custom)
+    except Exception:
+        pass
+    return rules
+
+
+def _est_tokens(s: str) -> int:
+    """token 近似（CJK 按字 ≈1 token；其余字母数字每 3 个 ≈1 token）。用于省 token 量化。"""
+    if not s:
+        return 0
+    cjk = sum(1 for ch in s if "一" <= ch <= "鿿")
+    other = sum(1 for ch in s if ch.isalnum() and not ("一" <= ch <= "鿿"))
+    return cjk + max(1, other // 3)
+
+
+GRIND_SYSTEM = """你是「磨」——一个语意保真压缩器（类 TokenJuice）。把你收到的一段或多段对话/资料「磨碎打散」：
 - 完整保留：事实、决策与结论、用户原话的关键引用、文件路径/命令、绑定维度信号（利益/决策/情感/价值观/沟通）。
 - 坚决删掉：寒暄、重复、口水、与结论无关的铺垫。
 - 在「语意不丢失」前提下压缩到最短，能用短语不用长句。
+- 【CJK / emoji 字形保真硬约束】所有中文、emoji、非 ASCII 字符必须原样保留（按字形，绝不删除、绝不 stripping、绝不转义）。只删冗余口水，不删任何字符内容。
 - 输出纯压缩后的文本，不要解释、不要加「摘要：」之类前缀。"""
 
 GRIND_SEGMENT_GUIDE = (
@@ -6123,7 +6194,7 @@ def _auto_grind_project(pid: str, keep: int = 150) -> dict:
 
 @app.post("/api/grind")
 async def grind(req: Request):
-    """手动磨：传入 segments（对话段落/资料），返回保语意压缩文本。"""
+    """P0-B 手动磨：传入 segments（对话段落/资料），返回保语意压缩文本 + 省 token 量化。"""
     try:
         data = await req.json()
     except Exception:
@@ -6131,10 +6202,45 @@ async def grind(req: Request):
     segments = data.get("segments") or []
     if not isinstance(segments, list) or not segments:
         return JSONResponse({"ok": False, "error": "segments 必须是非空数组"}, status_code=400)
-    compressed = _grind_compress(segments)
+    # P0-B：分层规则预清理（drop 已知样板/冗余标记，免编译热加载）
+    rules = _load_grind_rules()
+    drop = rules.get("drop_patterns") or []
+    cleaned = []
+    for seg in segments:
+        txt = seg if isinstance(seg, str) else (seg.get("content") or seg.get("text") or "")
+        txt = str(txt)
+        for p in drop:
+            txt = txt.replace(p, "")
+        cleaned.append(txt)
+    original_text = "\n\n".join(cleaned)
+    compressed = _grind_compress(cleaned)
+    ot = _est_tokens(original_text)
+    ct = _est_tokens(compressed)
+    saved = round((1 - ct / ot) * 100, 1) if ot else 0.0
     return {"ok": True, "compressed": compressed,
-            "original_len": sum(len(str(s)) for s in segments),
-            "compressed_len": len(compressed)}
+            "original_tokens": ot, "compressed_tokens": ct, "saved_pct": saved,
+            "original_len": len(original_text), "compressed_len": len(compressed)}
+
+
+@app.get("/api/grind/rules")
+def grind_rules_get():
+    """P0-B：读取当前磨分层规则。"""
+    return {"ok": True, "rules": _load_grind_rules()}
+
+
+@app.post("/api/grind/rules")
+async def grind_rules_set(req: Request):
+    """P0-B：写入用户层磨规则（JSON 免编译热加载）。"""
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    try:
+        with open(GRIND_RULES_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.post("/api/messages/cleanup")
@@ -6673,6 +6779,72 @@ async def distill_experiences(req: Request):
     conn.commit()
     conn.close()
     return {"ok": True, "extracted": len(created), "items": created, "method": method}
+
+
+# ── P0-A：项目群聊自动蒸馏（记忆树原料）────────────────────────
+async def _auto_distill_project_chat(pid: str, limit: int = 14):
+    """项目群聊自动蒸馏：取最近项目消息（非话题），LLM 抽取有教训的经验 → experiences(project_id=pid, source='chat')。
+    复用 distill_experiences 的抽取链（_llm_extract + EXPERIENCE_DISTILL_SYSTEM + _refresh_experience_weights）。
+    节流由调用方控制（每 N 条消息触发一次），此处只做单次抽取。分身护城河：自有群聊即最丰富蒸馏语料，零 OAuth 成本。"""
+    if not pid or pid == META_PID:
+        return 0
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT sender,kind,text FROM messages WHERE project_id=? AND (topic_id IS NULL OR topic_id='') "
+        "ORDER BY id DESC LIMIT ?", (pid, limit)).fetchall()
+    convo = "\n".join(f"{r['sender']}: {r['text']}" for r in reversed(rows) if (r['text'] or '').strip())
+    conn.close()
+    if not convo.strip():
+        return 0
+    items, method = await _llm_extract(EXPERIENCE_DISTILL_SYSTEM,
+                                       f"以下是项目群聊记录（项目 {pid}）：\n\n{convo}")
+    if items is None:
+        return 0
+    conn = get_db()
+    existing = {r[0] for r in conn.execute(
+        "SELECT scenario FROM experiences WHERE project_id=?", (pid,)).fetchall()}
+    created = 0
+    for it in items[:5]:
+        scenario = (it.get("scenario") or "").strip()[:60]
+        lesson = (it.get("lesson") or "").strip()
+        if not scenario or scenario in existing or len(lesson) < 6:
+            continue  # 没有教训的不算经验（保持"凑数不入"原则）
+        category = "failure" if it.get("category") == "failure" else "success"
+        cur = conn.execute(
+            "INSERT INTO experiences (category,scenario,goal,attempts,outcome,lesson,project_id,source,ts) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (category, scenario, (it.get("goal") or "")[:200], (it.get("attempts") or "")[:500],
+             (it.get("outcome") or "")[:300], lesson[:500], pid, f"chat·{method}",
+             datetime.now().isoformat()))
+        _refresh_experience_weights(conn, cur.lastrowid)  # 疗效归因：初始化权重
+        existing.add(scenario)
+        created += 1
+    conn.commit()
+    conn.close()
+    return created
+
+
+@app.get("/api/experiences/tree")
+def experiences_tree(project_id: str = ""):
+    """P0-A 经验树：按 源(project_id)→分类→时间 分层分组（walk/drill 检索）。
+    纯查询层，无需新表；project_id 为空则返回全部。"""
+    conn = get_db()
+    if project_id:
+        rows = conn.execute(
+            "SELECT id,category,scenario,lesson,project_id,ts,weight FROM experiences WHERE project_id=? ORDER BY ts DESC",
+            (project_id,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id,category,scenario,lesson,project_id,ts,weight FROM experiences ORDER BY ts DESC").fetchall()
+    conn.close()
+    tree = {}
+    for r in rows:
+        src = r["project_id"] or "全局"
+        cat = r["category"]
+        tree.setdefault(src, {}).setdefault(cat, []).append({
+            "id": r["id"], "scenario": r["scenario"], "lesson": r["lesson"],
+            "ts": (r["ts"] or "")[:10], "weight": round(r["weight"] or 0.5, 2)})
+    return {"ok": True, "tree": tree}
 
 
 # ── API：进化引擎（复盘 → 确认 → 固化，Phase 4）─────────────────
