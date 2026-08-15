@@ -3276,6 +3276,18 @@ function renderSuffRing(sf){
   const pct = Math.round((sf.overall||0) * 100);
   ring.style.background = `conic-gradient(#6d5bd0 ${pct*3.6}deg, #eee 0)`;
   document.getElementById('ckRingTxt').textContent = pct + '%';
+  const lab = document.getElementById('ckSuffLabel');
+  if(lab){ lab.textContent = (sf.sufficient_dims||0)+'/'+(sf.total_dims||5)+' 维达标' + (sf.interview_total?(' · 访谈 '+(sf.interview_answered||0)+'/'+sf.interview_total):''); }
+  // 5 维置信度条
+  let host = document.getElementById('ckSuffDims');
+  if(!host){ host = document.createElement('div'); host.id='ckSuffDims'; host.style.cssText='font-size:10px;color:var(--gray-400);margin-top:4px';
+    ring.parentElement.appendChild(host); }
+  host.innerHTML = (sf.dims||[]).map(d=>{
+    const c = d.sufficient? '#34c98e' : (d.count>0? '#faad14' : '#bfbfbf');
+    return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0"><span style="width:48px;flex-shrink:0">${d.name}</span>`+
+      `<span style="flex:1;height:5px;background:var(--gray-100);border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${Math.round((d.avg||0)*100)}%;background:${c}"></span></span>`+
+      `<span style="width:30px;text-align:right;color:${c}">${Math.round((d.avg||0)*100)}</span></div>`;
+  }).join('');
 }
 async function ckAddMember(){
   if(!ckFocus){ toast('请先选择一个产品'); return; }
@@ -3309,11 +3321,18 @@ async function openMemberDrawer(mid){
       时段 <select id="mdHours">${['24h','worktime','follow_meta'].map(h=>`<option ${d.work_hours===h?'selected':''}>${h}</option>`).join('')}</select>
     </div>
     <div class="md-row"><label>当前任务</label><input id="mdTask" value="${escapeHtml(d.current_task||'')}"></div>
-    <div class="md-row"><label>技能情况</label><div style="font-size:11px;color:var(--gray-500)">${((d.skills||[]).map(s=>escapeHtml(s.name)+' ('+Math.round((s.proficiency||0)*100)+'%)')).join('、') || '暂无'}</div></div>
-    <div class="md-row"><label>经验 · 进化（系统记录，元神据此升级）</label><div style="font-size:11px;color:var(--gray-500)">Lv.${d.level||1} · 经验 ${d.experience||0} · 版本 v${d.version||1}${((d.evo_tree||[]).length?' · 进化 '+d.evo_tree.length+' 次':'')}</div></div>
-    <div style="display:flex;gap:8px;margin-top:10px">
+    <div class="md-row"><label>技能情况</label><div class="md-chips">${((d.skills||[]).map(s=>'<span class="md-chip">'+escapeHtml(s.name||s)+'</span>')).join('') || '<span style="font-size:11px;color:var(--gray-500)">暂无</span>'}</div></div>
+    <div class="md-row"><label>经验 · 进化（系统记录，元神据此自动升级）</label>
+      <div style="font-size:11px;color:var(--gray-500);margin-bottom:4px">Lv.${d.level||1} · 经验 ${d.experience||0} · 版本 v${d.version||1}${((d.evo_tree||[]).length?' · 进化 '+d.evo_tree.length+' 次':'')}</div>
+      <div class="md-evo">${((d.evo_tree||[]).slice().reverse().map(e=>'<div class="md-evo-n"><b>v'+(e.v||'?')+'</b> <span class="md-evo-note">'+escapeHtml(e.note||'')+'</span></div>')).join('') || '<div style="font-size:11px;color:var(--gray-400)">尚无进化记录</div>'}</div>
+    </div>
+    <div class="md-row"><label>经历库（每次任务 / 升级留痕）</label>
+      <div class="md-exp">${((d.experiences||[]).map(e=>'<div class="md-exp-i"><span class="md-exp-k md-exp-'+(e.kind||'general')+'">'+(e.kind||'general')+'</span> <span style="font-size:10px;color:var(--gray-400)">'+escapeHtml((e.created_at||'').slice(0,16))+'</span><div style="font-size:11px;color:var(--gray-700);margin-top:2px">'+escapeHtml(e.note||'')+'</div></div>')).join('') || '<div style="font-size:11px;color:var(--gray-400)">尚无经历</div>'}</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
       <button class="btn meta" onclick="saveMember()">保存</button>
       <button class="btn" onclick="upgradeMember('${d.id}')">⚡ 元神升级</button>
+      <button class="btn" onclick="autoUpgradeMember('${d.id}')">🛠 自动补能力</button>
       <button class="btn sm" style="margin-left:auto;color:#cf1322" onclick="delMember('${d.id}')">删除</button>
     </div>`;
   document.getElementById('memberMask').style.display = 'flex';
@@ -3339,6 +3358,10 @@ async function saveMember(){
 async function upgradeMember(mid){
   const j = await apiJson('/api/members/'+mid+'/upgrade', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({reason:'用户触发升级'})});
   if(j.ok){ toast('已升级到 v'+j.version+' · Lv.'+j.level); openMemberDrawer(mid); if(ckFocus) loadCockpitProject(ckFocus); } else toast('升级失败');
+}
+async function autoUpgradeMember(mid){
+  const j = await apiJson('/api/members/'+mid+'/auto-upgrade', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({reason_type:'manual', context:'用户触发自动补能力'})});
+  if(j.ok){ toast('已自动补能力 → v'+j.version+'：'+(j.added||[]).join('、')); openMemberDrawer(mid); if(ckFocus) loadCockpitProject(ckFocus); } else toast('自动升级失败');
 }
 async function delMember(mid){
   if(!confirm('确认删除该成员？')) return;
@@ -3405,6 +3428,17 @@ async function delMember(mid){
 .md-row label{display:block;font-size:11px;color:var(--gray-500);margin-bottom:4px}
 .md-row input,.md-row textarea,.md-row select{width:100%;box-sizing:border-box;padding:7px 9px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px;outline:none;font-family:inherit}
 .md-row textarea{resize:vertical}
+.md-chips{display:flex;flex-wrap:wrap;gap:6px}
+.md-chip{font-size:11px;background:var(--meta-50,#eef0fb);color:var(--meta-700,#4b3fa8);border:.5px solid #cfc9ef;border-radius:8px;padding:2px 8px}
+.md-evo{max-height:90px;overflow:auto;border:.5px solid var(--gray-100);border-radius:8px;padding:6px 8px;background:#fafaff}
+.md-evo-n{font-size:11px;color:var(--gray-700);padding:3px 0;border-bottom:.5px solid var(--gray-100)}
+.md-evo-n b{color:var(--meta-700,#4b3fa8)}
+.md-evo-note{color:var(--gray-600,#595959)}
+.md-exp{max-height:140px;overflow:auto;border:.5px solid var(--gray-100);border-radius:8px;padding:6px 8px;background:#fff}
+.md-exp-i{padding:5px 0;border-bottom:.5px solid var(--gray-100)}
+.md-exp-k{display:inline-block;font-size:9px;padding:1px 6px;border-radius:6px;background:var(--gray-100);color:var(--gray-500)}
+.md-exp-upgrade{background:#eef0fb;color:var(--meta-700,#4b3fa8)}
+.md-exp-auto-upgrade{background:#e6f7ee;color:#389e5c}
 @media(max-width:900px){ .ck-left,.ck-right{display:none} }
 </style>
 <section id="sec-cockpit" class="section">
