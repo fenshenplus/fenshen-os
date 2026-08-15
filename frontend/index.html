@@ -3251,6 +3251,7 @@ async function loadCockpitProject(pid){
       el.innerHTML = '全链路：' + badge('infra') + badge('release') + badge('ops') + (rd.operational_ready? ' <b style="color:#34c98e">就绪 ✅</b>':' <span style="color:#faad14">未就绪</span>');
     }
   } catch(e){}
+  try { await loadCockpitReport(pid); } catch(e){}
   try {
     const m = await apiJson('/api/projects/'+pid+'/members');
     renderCockpitTeam(m.members || []);
@@ -3279,6 +3280,23 @@ function renderCockpitTeam(members){
       </div>
     </div>`;
   }).join('');
+}
+async function loadCockpitReport(pid){
+  const el = document.getElementById('ckReport'); if(!el || !pid) return;
+  try{
+    const r = await apiJson('/api/projects/'+pid+'/report/latest');
+    const m = r.report;
+    if(!m){ el.innerHTML = '<span style="color:var(--gray-400)">元神尚未发布汇报。点「📊 元神汇报」生成一份进度简报。</span>'; return; }
+    el.innerHTML = '<div style="color:var(--gray-400);margin-bottom:3px">📊 元神最新汇报 · '+escapeHtml((m.ts||'').slice(0,16))+'</div>'+
+                   '<div style="white-space:pre-wrap;line-height:1.5;color:var(--gray-700)">'+escapeHtml(m.text||'')+'</div>';
+  }catch(e){ el.innerHTML=''; }
+}
+async function metaReport(pid){
+  if(!pid){ toast('请先选择一个产品'); return; }
+  try{ const r = await apiJson('/api/meta/report/'+pid,{method:'POST'});
+    if(r.ok){ toast('元神已生成汇报'); loadCockpitProject(pid); }
+    else toast(r.error||'生成失败');
+  }catch(e){ toast('生成失败'); }
 }
 function renderSuffRing(sf){
   const ring = document.getElementById('ckRing');
@@ -3331,9 +3349,17 @@ async function openMemberDrawer(mid){
     </div>
     <div class="md-row"><label>当前任务</label><input id="mdTask" value="${escapeHtml(d.current_task||'')}"></div>
     <div class="md-row"><label>技能情况</label><div class="md-chips">${((d.skills||[]).map(s=>'<span class="md-chip">'+escapeHtml(s.name||s)+'</span>')).join('') || '<span style="font-size:11px;color:var(--gray-500)">暂无</span>'}</div></div>
-    <div class="md-row"><label>经验 · 进化（系统记录，元神据此自动升级）</label>
-      <div style="font-size:11px;color:var(--gray-500);margin-bottom:4px">Lv.${d.level||1} · 经验 ${d.experience||0} · 版本 v${d.version||1}${((d.evo_tree||[]).length?' · 进化 '+d.evo_tree.length+' 次':'')}</div>
-      <div class="md-evo">${((d.evo_tree||[]).slice().reverse().map(e=>'<div class="md-evo-n"><b>v'+(e.v||'?')+'</b> <span class="md-evo-note">'+escapeHtml(e.note||'')+'</span></div>')).join('') || '<div style="font-size:11px;color:var(--gray-400)">尚无进化记录</div>'}</div>
+    <div class="md-row"><label>经验 · 进化树（系统记录，元神据此自动升级）</label>
+      <div style="font-size:11px;color:var(--gray-500);margin-bottom:8px">Lv.${d.level||1} · 经验 ${d.experience||0} · 版本 v${d.version||1}${((d.evo_tree||[]).length?' · 进化 '+d.evo_tree.length+' 次':'')}</div>
+      <div class="evo-tree">${((d.evo_tree||[]).slice().reverse().map(e=>{
+        const tb = ({fail:['自动升级','#f5222d'],weak:['弱项强化','#fa8c16'],manual:['定向强化','#722ed1']})[e.type] || ['进化','#6d5bd0'];
+        const chips = (e.added||[]).map(a=>'<span class="evo-chip">'+escapeHtml(a)+'</span>').join('');
+        return '<div class="evo-node"><div class="evo-dot" style="background:'+tb[1]+'"></div><div class="evo-card">'+
+          '<div class="evo-head"><b>v'+(e.v||'?')+'</b><span class="evo-badge" style="background:'+tb[1]+'1a;color:'+tb[1]+';border:.5px solid '+tb[1]+'55">'+tb[0]+'</span><span class="evo-time">'+escapeHtml((e.at||'').slice(0,16))+'</span></div>'+
+          '<div class="evo-note">'+escapeHtml(e.note||'')+'</div>'+
+          (chips?'<div class="evo-added">+ '+chips+'</div>':'')+
+        '</div></div>';
+      }).join('')) || '<div style="font-size:11px;color:var(--gray-400)">尚无进化记录</div>'}</div>
     </div>
     <div class="md-row"><label>经历库（每次任务 / 升级留痕）</label>
       <div class="md-exp">${((d.experiences||[]).map(e=>'<div class="md-exp-i"><span class="md-exp-k md-exp-'+(e.kind||'general')+'">'+(e.kind||'general')+'</span> <span style="font-size:10px;color:var(--gray-400)">'+escapeHtml((e.created_at||'').slice(0,16))+'</span><div style="font-size:11px;color:var(--gray-700);margin-top:2px">'+escapeHtml(e.note||'')+'</div></div>')).join('') || '<div style="font-size:11px;color:var(--gray-400)">尚无经历</div>'}</div>
@@ -3440,10 +3466,19 @@ async function delMember(mid){
 .md-row textarea{resize:vertical}
 .md-chips{display:flex;flex-wrap:wrap;gap:6px}
 .md-chip{font-size:11px;background:var(--meta-50,#eef0fb);color:var(--meta-700,#4b3fa8);border:.5px solid #cfc9ef;border-radius:8px;padding:2px 8px}
-.md-evo{max-height:90px;overflow:auto;border:.5px solid var(--gray-100);border-radius:8px;padding:6px 8px;background:#fafaff}
-.md-evo-n{font-size:11px;color:var(--gray-700);padding:3px 0;border-bottom:.5px solid var(--gray-100)}
-.md-evo-n b{color:var(--meta-700,#4b3fa8)}
-.md-evo-note{color:var(--gray-600,#595959)}
+.evo-tree{position:relative;padding:2px 0 0 4px}
+.evo-node{position:relative;padding:0 0 14px 18px}
+.evo-node:before{content:'';position:absolute;left:4px;top:7px;bottom:-2px;width:2px;background:var(--gray-200,#e8e8e8)}
+.evo-node:last-child:before{display:none}
+.evo-dot{position:absolute;left:-1px;top:3px;width:11px;height:11px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--gray-200,#e8e8e8)}
+.evo-card{border:.5px solid var(--gray-200,#e8e8e8);border-radius:10px;padding:8px 10px;background:#fff}
+.evo-head{display:flex;align-items:center;gap:6px;font-size:11px}
+.evo-head b{color:var(--meta-700,#4b3fa8)}
+.evo-badge{font-size:10px;border-radius:8px;padding:0 6px}
+.evo-time{margin-left:auto;color:var(--gray-400,#bfbfbf);font-size:10px}
+.evo-note{font-size:11px;color:var(--gray-700,#595959);margin-top:3px;line-height:1.45}
+.evo-added{margin-top:5px}
+.evo-chip{display:inline-block;font-size:10px;background:#f6ffed;border:.5px solid #b7eb8f;color:#389e0d;border-radius:8px;padding:0 6px;margin:1px 4px 1px 0}
 .md-exp{max-height:140px;overflow:auto;border:.5px solid var(--gray-100);border-radius:8px;padding:6px 8px;background:#fff}
 .md-exp-i{padding:5px 0;border-bottom:.5px solid var(--gray-100)}
 .md-exp-k{display:inline-block;font-size:9px;padding:1px 6px;border-radius:6px;background:var(--gray-100);color:var(--gray-500)}
@@ -3476,8 +3511,9 @@ async function delMember(mid){
       </div>
       <!-- 中：矩阵看板 + 调度脑 -->
       <div class="ck-center">
-        <div class="ck-h" id="ckCenterTitle">项目看板</div>
+        <div class="ck-h" style="display:flex;align-items:center;gap:8px"><span id="ckCenterTitle">项目看板</span><button class="btn sm meta" onclick="metaReport(ckFocus)" style="margin-left:auto">📊 元神汇报</button></div>
         <div id="ckReady" style="font-size:11px;padding:0 8px 6px;color:var(--gray-500)"></div>
+        <div id="ckReport" style="font-size:11px;padding:0 8px 8px;color:var(--gray-600)"></div>
         <div class="ck-tabs" id="ckTabs"></div>
         <div id="cockpitMatrix" style="overflow:auto;flex:1;padding:8px"></div>
         <div class="ck-dispatch" id="ckDispatch"></div>
