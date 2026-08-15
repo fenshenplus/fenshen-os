@@ -1027,6 +1027,18 @@ def init_db():
             created_at TEXT DEFAULT ''
         )"""
     )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS direct_msgs (
+            id TEXT PRIMARY KEY,
+            peer TEXT DEFAULT '',
+            project_id TEXT DEFAULT '',
+            sender TEXT DEFAULT '',
+            kind TEXT DEFAULT 'text',
+            text TEXT DEFAULT '',
+            ts TEXT DEFAULT '',
+            synced INTEGER DEFAULT 0
+        )"""
+    )
     # users 增加恢复密钥哈希（脱离手机号的所有权证明）
     ucols = {r[1] for r in cur.execute("PRAGMA table_info(users)").fetchall()}
     if "recovery_key_hash" not in ucols:
@@ -1594,7 +1606,15 @@ STAGE_PRESETS = {
     "app":     ["策划", "原型", "前端", "后端", "封装", "测试", "上架"],
     "mp":      ["策划", "原型", "页面", "云函数", "测试", "提审", "发布"],
     "generic": ["策划", "设计", "实现", "测试", "发布"],
+    # v6.2 P2：生命周期轨道（覆盖 idea → 可运行可运营）
+    "infra":   ["服务器", "域名HTTPS", "带宽", "备案", "监控告警"],
+    "release": ["打包构建", "签名公证", "灰度发布", "全量上线"],
+    "ops":     ["内容运营", "社群运营", "投放获客", "数据看板", "迭代优化"],
 }
+
+# 生命周期轨道（与交付轨道 web/h5/app/mp 正交）：验收 = infra+release done 且 ops started
+LIFE_TRACKS = ["infra", "release", "ops"]
+LIFE_LABELS = {"infra": "基础设施", "release": "发布", "ops": "运营"}
 
 
 def get_stage_chain(conn, pid: str, track: str = "web"):
@@ -1616,7 +1636,7 @@ def get_stage_chain(conn, pid: str, track: str = "web"):
 
 
 def ensure_stage_chains(conn, pid: str, tracks=None):
-    """项目创建/更新时保证 stage_chains 含各轨道链（缺失填预设）。"""
+    """项目创建/更新时保证 stage_chains 含各轨道链（缺失填预设）；并自动补齐生命周期轨道(infra/release/ops)。"""
     proj = conn.execute("SELECT stage_chains, tracks FROM projects WHERE id=?", (pid,)).fetchone()
     if not proj:
         return
@@ -1629,14 +1649,15 @@ def ensure_stage_chains(conn, pid: str, tracks=None):
             tracks = json.loads(proj["tracks"] or '["web"]') or ["web"]
         except Exception:
             tracks = ["web"]
+    all_tracks = list(dict.fromkeys(list(tracks) + LIFE_TRACKS))
     changed = False
-    for t in tracks:
+    for t in all_tracks:
         if t not in chains:
             chains[t] = list(STAGE_PRESETS.get(t, STAGE_PRESETS["web"]))
             changed = True
     if changed:
-        conn.execute("UPDATE projects SET stage_chains=? WHERE id=?",
-                     (json.dumps(chains, ensure_ascii=False), pid))
+        conn.execute("UPDATE projects SET stage_chains=?, tracks=? WHERE id=?",
+                     (json.dumps(chains, ensure_ascii=False), json.dumps(all_tracks, ensure_ascii=False), pid))
 
 
 
@@ -2384,7 +2405,7 @@ async def create_project(req: Request):
     # v5.8 P1：双维度存储根目录（~/.fenshen/projects/<pid>）+ 设计规范（P2 用，建项自选）
     storage_root = os.path.expanduser(f"~/.fenshen/projects/{pid}")
     design_std = data.get("design_standard", "") or ""
-    # v6.1 矩阵看板：建项即按所选轨道配置阶段链（默认 web）
+    # v6.1 矩阵看板：建项即按所选轨道配置阶段链（默认 web）；v6.2 P2 自动补齐生命周期轨道
     tracks = data.get("tracks") or ["web"]
     if isinstance(tracks, str):
         try:
@@ -2393,6 +2414,7 @@ async def create_project(req: Request):
             tracks = ["web"]
     if not isinstance(tracks, list) or not tracks:
         tracks = ["web"]
+    tracks = list(dict.fromkeys(list(tracks) + LIFE_TRACKS))
     chains = {}
     for t in tracks:
         chains[t] = list(STAGE_PRESETS.get(t, STAGE_PRESETS["web"]))
@@ -2841,6 +2863,108 @@ async def add_message(req: Request):
         (pid, data.get("sender", "你"), data.get("kind", "self"), data.get("text", ""), data.get("tag"),
          datetime.now().isoformat(), data.get("topic_id", "")),
     )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ── v6.2 P2：1:1 私聊（用户 ↔ 成员/元神），结论可同步回群 ──
+META_DIRECT_SYS = ("你是分身的「元神」，岳衡的数字搭档与业务大脑。你懂全部业务但不亲自动手，负责调度 agent 成员。"
+                   "在私聊中，你用干练、直接、有态度的语气给用户做私下 briefing / 复核 / 纠偏。用中文。")
+
+
+def _direct_system_prompt(peer: str):
+    if peer == "meta":
+        return META_DIRECT_SYS
+    conn = get_db()
+    m = conn.execute("SELECT * FROM agent_members WHERE id=?", (peer,)).fetchone()
+    conn.close()
+    if not m:
+        return "你是分身的一名团队成员，请用专业、尽责的语气回应用户。"
+    soul = m["soul"] or ""
+    rule = m["rule"] or []
+    try:
+        rule = json.loads(rule) if isinstance(rule, str) else rule
+    except Exception:
+        rule = []
+    rule_txt = "\n".join(f"- {r}" for r in (rule or []))
+    return (f"你是分身项目团队成员「{m['name']}」({m.get('role_title','')})。\n"
+            f"你的 Soul：{soul}\n你的行为规则：\n{rule_txt}\n"
+            f"在 1:1 私聊中，给用户做私下 briefing / 复核 / 纠偏，语气符合你的 Soul。")
+
+
+@app.get("/api/direct/{peer}")
+def list_direct(peer: str, project_id: str = ""):
+    conn = get_db()
+    if project_id:
+        rows = conn.execute("SELECT * FROM direct_msgs WHERE peer=? AND project_id=? ORDER BY ts",
+                            (peer, project_id)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM direct_msgs WHERE peer=? ORDER BY ts", (peer,)).fetchall()
+    conn.close()
+    return {"ok": True, "peer": peer, "messages": [dict(r) for r in rows]}
+
+
+@app.post("/api/direct/{peer}")
+async def send_direct(peer: str, req: Request):
+    data = await req.json()
+    text = (data.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "内容为空"}
+    pid = data.get("project_id", "")
+    sender = data.get("sender", "user")
+    conn = get_db()
+    uid = f"dm{int(datetime.now().timestamp() * 1000)}"
+    conn.execute("INSERT INTO direct_msgs (id,peer,project_id,sender,kind,text,ts,synced) VALUES (?,?,?,?,?,?,?,0)",
+                 (uid, peer, pid, sender, "text", text, datetime.now().isoformat()))
+    conn.commit()
+    reply = None
+    if sender == "user":  # 用户发言 → 触发成员/元神回复
+        try:
+            hist = [dict(r) for r in
+                    conn.execute("SELECT sender,text FROM direct_msgs WHERE peer=? ORDER BY ts DESC LIMIT 12",
+                                 (peer,)).fetchall()]
+            history = [{"role": ("user" if h["sender"] == "user" else "assistant"), "content": h["text"]}
+                       for h in reversed(hist)]
+            sys_p = _direct_system_prompt(peer)
+            ans = call_llm(peer, history, sys_p)
+            rid = f"dm{int(datetime.now().timestamp() * 1000)}_r"
+            conn.execute("INSERT INTO direct_msgs (id,peer,project_id,sender,kind,text,ts,synced) VALUES (?,?,?,?,?,?,?,0)",
+                         (rid, peer, pid, peer, "text", ans, datetime.now().isoformat()))
+            conn.commit()
+            reply = {"id": rid, "text": ans}
+        except Exception as e:
+            print("[direct-reply] warn:", e)
+    conn.close()
+    return {"ok": True, "id": uid, "reply": reply}
+
+
+@app.post("/api/direct/{peer}/sync")
+async def sync_direct(peer: str, req: Request):
+    """把一条私聊结论同步回项目群聊。"""
+    data = await req.json()
+    mid = data.get("message_id") or ""
+    pid = data.get("project_id") or ""
+    text = (data.get("text") or "").strip()
+    if not pid:
+        return {"ok": False, "error": "缺少 project_id"}
+    conn = get_db()
+    sender_name = "元神"
+    if peer != "meta":
+        m = conn.execute("SELECT name FROM agent_members WHERE id=?", (peer,)).fetchone()
+        if m:
+            sender_name = m["name"]
+    if mid:
+        row = conn.execute("SELECT text FROM direct_msgs WHERE id=? AND peer=?", (mid, peer)).fetchone()
+        if row:
+            text = row["text"]
+    if not text:
+        conn.close()
+        return {"ok": False, "error": "无可同步内容"}
+    conn.execute("INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                 (pid, sender_name, "agent", text, "私聊同步", datetime.now().isoformat()))
+    if mid:
+        conn.execute("UPDATE direct_msgs SET synced=1 WHERE id=?", (mid,))
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -5356,25 +5480,17 @@ def project_matrix(pid: str, track: str = "web"):
              conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()]
     conn.close()
 
-    # 轨道筛模块：多轨道项目只看当前轨道；单轨道兜底全部
-    tmods = [m for m in mods if (m.get("track") or "web") == track]
-    if not tmods:
-        tmods = mods
-    # legacy 无 stage 任务 → 末列「未分环节」
-    uncat = [t for t in tasks if not (t.get("stage") or "")]
-    if uncat:
-        stages = stages + ["__uncat__"]
-
-    cells = {}
-    cells_by_m = {}
-    for m in tmods:
-        cells[m["id"]] = {}
-        cells_by_m[m["id"]] = []
+    # v6.2 P2：生命周期轨道（infra/release/ops）按阶段汇总项目级任务，渲染为单列阶段清单
+    lifecycle = track in LIFE_TRACKS
+    if lifecycle:
+        uncat = []
+        tmods = [{"id": "__life__", "name": LIFE_LABELS.get(track, track),
+                  "track": track, "weight": 1, "depends_on": [], "sort": 0, "desc": ""}]
+        life_tasks = [t for t in tasks if (t.get("track") or "") == track]
+        cells = {"__life__": {}}
+        cells_by_m = {"__life__": []}
         for s in stages:
-            if s == "__uncat__":
-                tk = [t for t in uncat if t["module_id"] == m["id"]]
-            else:
-                tk = [t for t in tasks if t["module_id"] == m["id"] and (t.get("stage") or "") == s]
+            tk = [t for t in life_tasks if (t.get("stage") or "") == s]
             total = len(tk)
             done_n = sum(1 for t in tk if t["status"] == "done")
             pct = round(done_n * 100 / total) if total else 0
@@ -5383,8 +5499,38 @@ def project_matrix(pid: str, track: str = "web"):
                  "task_ids": [t["id"] for t in tk],
                  "tasks": [{"id": t["id"], "name": t["name"], "owner_role": t.get("owner_role", ""),
                             "status": t["status"], "done_criteria": t.get("done_criteria", "")} for t in tk]}
-            cells[m["id"]][s] = c
-            cells_by_m[m["id"]].append(c)
+            cells["__life__"][s] = c
+            cells_by_m["__life__"].append(c)
+    else:
+        # 轨道筛模块：多轨道项目只看当前轨道；单轨道兜底全部
+        tmods = [m for m in mods if (m.get("track") or "web") == track]
+        if not tmods:
+            tmods = mods
+        # legacy 无 stage 任务 → 末列「未分环节」
+        uncat = [t for t in tasks if not (t.get("stage") or "")]
+        if uncat:
+            stages = stages + ["__uncat__"]
+
+        cells = {}
+        cells_by_m = {}
+        for m in tmods:
+            cells[m["id"]] = {}
+            cells_by_m[m["id"]] = []
+            for s in stages:
+                if s == "__uncat__":
+                    tk = [t for t in uncat if t["module_id"] == m["id"]]
+                else:
+                    tk = [t for t in tasks if t["module_id"] == m["id"] and (t.get("stage") or "") == s]
+                total = len(tk)
+                done_n = sum(1 for t in tk if t["status"] == "done")
+                pct = round(done_n * 100 / total) if total else 0
+                c = {"stage": s, "status": _cell_status(tk), "pct": pct,
+                     "total": total, "done": done_n,
+                     "task_ids": [t["id"] for t in tk],
+                     "tasks": [{"id": t["id"], "name": t["name"], "owner_role": t.get("owner_role", ""),
+                                "status": t["status"], "done_criteria": t.get("done_criteria", "")} for t in tk]}
+                cells[m["id"]][s] = c
+                cells_by_m[m["id"]].append(c)
 
     # 聚合：列(模块)进度 / 行(阶段)进度 / 项目进度（blank 不计入分母）
     column_pct, row_pct = {}, {}
@@ -5408,7 +5554,7 @@ def project_matrix(pid: str, track: str = "web"):
     crit = _matrix_critical_path(tmods, cells_by_m)
     return {
         "track": track,
-        "tracks": json.loads(proj["tracks"] or '["web"]') if proj["tracks"] else ["web"],
+        "tracks": list(dict.fromkeys(list(json.loads(proj["tracks"] or '["web"]') if proj["tracks"] else ["web"]) + LIFE_TRACKS)),
         "stages": stages,
         "modules": tmods,
         "cells": cells,
@@ -5426,6 +5572,43 @@ def project_matrix(pid: str, track: str = "web"):
 @app.get("/api/stage-presets")
 def stage_presets():
     return {"ok": True, "presets": STAGE_PRESETS}
+
+
+@app.get("/api/projects/{pid}/readiness")
+def project_readiness(pid: str):
+    """v6.2 P2 全链路就绪验收：基础设施轨道 done + 发布轨道 done + 运营轨道 started → 可运营。"""
+    conn = get_db()
+    proj = conn.execute("SELECT tracks FROM projects WHERE id=?", (pid,)).fetchone()
+    if not proj:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "项目不存在"})
+    tracks = json.loads(proj["tracks"] or '["web"]')
+    out = {}
+    for t in LIFE_TRACKS:
+        if t not in tracks:
+            out[t] = {"present": False, "status": "not_started", "stages": []}
+            continue
+        stages = get_stage_chain(conn, pid, t)
+        life_tasks = [dict(r) for r in
+                      conn.execute("SELECT * FROM tasks WHERE project_id=? AND track=?", (pid, t)).fetchall()]
+        stage_info, all_done, any_task = [], True, False
+        for s in stages:
+            tk = [x for x in life_tasks if (x.get("stage") or "") == s]
+            if tk:
+                any_task = True
+            dn = sum(1 for x in tk if x["status"] == "done")
+            st = "done" if (tk and dn == len(tk)) else ("doing" if tk else "blank")
+            if st != "done":
+                all_done = False
+            stage_info.append({"stage": s, "total": len(tk), "done": dn, "status": st})
+        status = "done" if (all_done and any_task) else ("started" if any_task else "not_started")
+        out[t] = {"present": True, "status": status, "stages": stage_info}
+    conn.close()
+    operational = (out["infra"]["status"] == "done" and out["release"]["status"] == "done"
+                   and out["ops"]["status"] != "not_started")
+    return {"ok": True, "tracks": tracks, "lifecycle": out, "operational_ready": operational,
+            "message": "全链路就绪 ✅ 可从 idea 进入可运营" if operational
+                       else "未就绪：基础设施·发布需 done，运营需 started"}
 
 
 @app.get("/api/projects/{pid}/stage-chain")
@@ -5474,18 +5657,21 @@ async def create_cell_task(pid: str, req: Request):
     name = (data.get("name") or "").strip()
     if not name:
         return {"ok": False, "error": "任务名不能为空"}
-    if not mid:
+    track = data.get("track", "web")
+    if track in LIFE_TRACKS:
+        pass  # 生命周期轨道任务不绑定功能模块，跳过 module 校验
+    elif not mid:
         return {"ok": False, "error": "缺少 module_id"}
     conn = get_db()
-    if not conn.execute("SELECT 1 FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone():
+    if track not in LIFE_TRACKS and not conn.execute("SELECT 1 FROM modules WHERE id=? AND project_id=?", (mid, pid)).fetchone():
         conn.close()
         return {"ok": False, "error": "模块不存在"}
     tid = f"tk{int(datetime.now().timestamp() * 1000)}"
     conn.execute(
         "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (tid, pid, mid, "", name, data.get("owner_role", "后端"), "todo",
-         (data.get("done_criteria") or "").strip()[:300], stage, data.get("track", "web"),
+        (tid, pid, mid, "", name, data.get("owner_role") or STAGE_ROLE.get(stage, "后端"), "todo",
+         (data.get("done_criteria") or "").strip()[:300], stage, track,
          datetime.now().isoformat()),
     )
     conn.commit()

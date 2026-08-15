@@ -3243,6 +3243,15 @@ async function loadCockpitProject(pid){
     renderMatrix(j, 'cockpitMatrix');
   } catch(e){ document.getElementById('cockpitMatrix').innerHTML = '<div style="color:var(--gray-400);font-size:12px;padding:20px">看板加载失败</div>'; }
   try {
+    const rd = await apiJson('/api/projects/'+pid+'/readiness');
+    const el = document.getElementById('ckReady');
+    if(el && rd.ok){
+      const lc = rd.lifecycle||{};
+      const badge = t => { const s=lc[t]&&lc[t].status; const c=s==='done'?'#34c98e':(s==='not_started'?'#bfbfbf':'#faad14'); const n={infra:'基础设施',release:'发布',ops:'运营'}[t]; return '<span style="display:inline-block;font-size:10px;border-radius:8px;padding:1px 7px;margin:1px 3px;background:'+c+'1a;color:'+c+';border:.5px solid '+c+'66">'+n+':'+s+'</span>'; };
+      el.innerHTML = '全链路：' + badge('infra') + badge('release') + badge('ops') + (rd.operational_ready? ' <b style="color:#34c98e">就绪 ✅</b>':' <span style="color:#faad14">未就绪</span>');
+    }
+  } catch(e){}
+  try {
     const m = await apiJson('/api/projects/'+pid+'/members');
     renderCockpitTeam(m.members || []);
   } catch(e){ document.getElementById('ckTeam').innerHTML = '<div style="color:var(--gray-400);font-size:12px;padding:10px">成员加载失败</div>'; }
@@ -3333,6 +3342,7 @@ async function openMemberDrawer(mid){
       <button class="btn meta" onclick="saveMember()">保存</button>
       <button class="btn" onclick="upgradeMember('${d.id}')">⚡ 元神升级</button>
       <button class="btn" onclick="autoUpgradeMember('${d.id}')">🛠 自动补能力</button>
+      <button class="btn" onclick="openDirect('${d.id}','${escapeHtml(d.name)}')">💬 私聊</button>
       <button class="btn sm" style="margin-left:auto;color:#cf1322" onclick="delMember('${d.id}')">删除</button>
     </div>`;
   document.getElementById('memberMask').style.display = 'flex';
@@ -3467,13 +3477,14 @@ async function delMember(mid){
       <!-- 中：矩阵看板 + 调度脑 -->
       <div class="ck-center">
         <div class="ck-h" id="ckCenterTitle">项目看板</div>
+        <div id="ckReady" style="font-size:11px;padding:0 8px 6px;color:var(--gray-500)"></div>
         <div class="ck-tabs" id="ckTabs"></div>
         <div id="cockpitMatrix" style="overflow:auto;flex:1;padding:8px"></div>
         <div class="ck-dispatch" id="ckDispatch"></div>
       </div>
       <!-- 右：战队面板 -->
       <div class="ck-right">
-        <div class="ck-h">战队 · 团队成员 <button class="btn sm meta" onclick="ckAddMember()" style="float:right">+ 成员</button></div>
+        <div class="ck-h">战队 · 团队成员 <button class="btn sm meta" onclick="ckAddMember()" style="float:right;margin-left:6px">+ 成员</button><button class="btn sm" onclick="openDirect('meta','元神')" style="float:right">💬 私聊元神</button></div>
         <div id="ckTeam" style="overflow:auto;flex:1;padding:8px"></div>
       </div>
     </div>
@@ -3489,6 +3500,64 @@ async function delMember(mid){
     <div id="mdBody" style="flex:1;overflow:auto;padding:14px 16px"></div>
   </div>
 </div>
+<!-- 1:1 私聊抽屉：用户 ↔ 成员/元神，结论可同步回群 -->
+<div id="directMask" class="mask" style="display:none" onclick="if(event.target===this)closeDirect()">
+  <div class="dialog" style="max-width:520px;width:94vw;height:80vh;display:flex;flex-direction:column">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:.5px solid var(--gray-200)">
+      <div class="t" id="dmTitle" style="font-size:15px;font-weight:600">私聊</div>
+      <button class="btn sm" onclick="closeDirect()">关闭</button>
+    </div>
+    <div id="dmList" style="flex:1;overflow:auto;padding:14px 16px;background:var(--gray-50)"></div>
+    <div style="display:flex;gap:8px;padding:12px 16px;border-top:.5px solid var(--gray-200)">
+      <input id="dmInput" placeholder="私聊内容…（结论可同步回群）" style="flex:1" onkeydown="if(event.key==='Enter')sendDirect()">
+      <button class="btn meta" onclick="sendDirect()">发送</button>
+    </div>
+  </div>
+</div>
+<script>
+let dmPeer='', dmLabel='';
+async function openDirect(peer, label){
+  dmPeer=peer; dmLabel=label||peer;
+  document.getElementById('dmTitle').textContent = '私聊 · ' + dmLabel;
+  document.getElementById('dmList').innerHTML='';
+  document.getElementById('directMask').style.display='flex';
+  await loadDirect();
+}
+function closeDirect(){ document.getElementById('directMask').style.display='none'; }
+async function loadDirect(){
+  try{
+    const q = ckFocus? ('?project_id='+ckFocus) : '';
+    const j = await (await fetch('/api/direct/'+dmPeer+q)).json();
+    renderDirect(j.messages||[]);
+  }catch(e){ document.getElementById('dmList').innerHTML='<div style="color:var(--gray-400);font-size:12px">加载失败</div>'; }
+}
+function renderDirect(msgs){
+  const host=document.getElementById('dmList');
+  if(!msgs.length){ host.innerHTML='<div style="color:var(--gray-400);font-size:12px;padding:10px">还没有私聊记录。开始和'+escapeHtml(dmLabel)+'对话吧。</div>'; return; }
+  host.innerHTML = msgs.map(m=>{
+    const me = m.sender==='user';
+    const who = me? '我' : (dmPeer==='meta'?'元神':escapeHtml(dmLabel));
+    const syncBtn = (!me && ckFocus)? '<button class="btn sm" style="margin-top:4px" onclick="syncDirect(\''+m.id+'\')">同步到群</button>':'';
+    return '<div style="display:flex;justify-content:'+(me?'flex-end':'flex-start')+';margin:6px 0">'+
+      '<div style="max-width:78%;background:'+(me?'#6d5bd0':'#fff')+';color:'+(me?'#fff':'var(--gray-800)')+';border:.5px solid var(--gray-200);border-radius:12px;padding:8px 12px;font-size:13px">'+
+      '<div style="font-size:10px;opacity:.6;margin-bottom:2px">'+who+(m.synced?' · 已同步':'')+'</div>'+
+      '<div style="white-space:pre-wrap;word-break:break-word">'+escapeHtml(m.text)+'</div>'+
+      syncBtn+'</div></div>';
+  }).join('');
+  host.scrollTop = host.scrollHeight;
+}
+async function sendDirect(){
+  const inp=document.getElementById('dmInput'); const text=inp.value.trim(); if(!text) return;
+  inp.value='';
+  const j = await apiJson('/api/direct/'+dmPeer, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, sender:'user', project_id: ckFocus||''})});
+  if(j.ok){ await loadDirect(); } else toast('发送失败');
+}
+async function syncDirect(mid){
+  if(!ckFocus){ toast('请先在左侧选择一个产品'); return; }
+  const j = await apiJson('/api/direct/'+dmPeer+'/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message_id: mid, project_id: ckFocus})});
+  if(j.ok){ toast('已同步到群'); await loadDirect(); } else toast('同步失败：'+(j.error||''));
+}
+</script>
 
 </body>
 </html>
