@@ -1,30 +1,51 @@
-name: build-windows-exe
+name: Build Windows (分身 v6.x)
 
-"on":
+on:
   workflow_dispatch:
   push:
     tags:
-      - "v*"
+      - 'v*'
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: Install deps + pyinstaller
+          python-version: '3.13'
+
+      - name: 安装依赖
         run: |
-          pip install -q -r dist-stage/分身-v1/requirements-dist.txt
-          pip install -q pyinstaller
-      - name: Build exe
+          python -m pip install --upgrade pip
+          pip install pyinstaller fastapi uvicorn requests
+
+      - name: PyInstaller 构建 exe
+        run: pyinstaller 分身.spec --noconfirm --distpath dist
+
+      - name: 代码签名（Authenticode EV）
+        # 前置：仓库 Secrets 配置
+        #   WIN_SIGN_PFX：EV 证书导出的 PFX（Base64 或原始，放在 secret）
+        #   WIN_SIGN_PWD：PFX 密码
+        # 说明：EV 证书（DigiCert/Sectigo ~$300-500/年）插硬件密钥，
+        #       Windows SmartScreen 立即信任，用户下载不被报毒。
+        if: ${{ env.WIN_SIGN_PFX != '' }}
+        env:
+          WIN_SIGN_PFX: ${{ secrets.WIN_SIGN_PFX }}
+          WIN_SIGN_PWD: ${{ secrets.WIN_SIGN_PWD }}
+        shell: pwsh
         run: |
-          python -m PyInstaller --clean packaging/windows/fenshen.spec -y
-      - name: Zip dist
-        shell: powershell
-        run: Compress-Archive -Force -Path 'dist\Fenshen.exe' -DestinationPath 'dist\Fenshen-Windows-exe.zip'
-      - uses: actions/upload-artifact@v4
+          $pfx = "$env:RUNNER_TEMP\sign.pfx"
+          [System.Convert]::FromBase64String($env:WIN_SIGN_PFX) | Set-Content -AsByteStream $pfx
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1
+          & $signtool.FullName sign /f $pfx /p $env:WIN_SIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\分身.exe"
+          if ($LASTEXITCODE -ne 0) { Write-Error "签名失败"; exit 1 }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
         with:
-          name: fenshen-windows-exe
-          path: dist/Fenshen-Windows-exe.zip
+          name: 分身-windows
+          path: dist/分身.exe

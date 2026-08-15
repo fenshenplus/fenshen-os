@@ -19,6 +19,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+import hmac
+import base64
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -256,25 +259,41 @@ async def auth_register(req: Request):
         return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
     phone = (data.get("phone") or "").strip()
     password = data.get("password") or ""
+    code = (data.get("code") or "").strip()
     if not _CN_MOBILE_RE.match(phone):
         return JSONResponse({"ok": False, "error": "手机号格式不正确（应为 11 位中国大陆手机号）"}, status_code=400)
     if len(password) < 6:
         return JSONResponse({"ok": False, "error": "密码至少 6 位"}, status_code=400)
     conn = get_db()
+    # 验证码校验（防止任意手机号乱注册 / 撞库）
+    srow = conn.execute("SELECT code,expires_at,attempts FROM sms_codes WHERE phone=?", (phone,)).fetchone()
+    if not srow or srow["code"] != code or datetime.now().isoformat() > srow["expires_at"]:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "验证码无效或已过期，请先获取短信验证码"}, status_code=400)
+    if (srow["attempts"] or 0) >= 5:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "验证码尝试次数过多，请重新获取"}, status_code=429)
     if conn.execute("SELECT 1 FROM users WHERE phone=?", (phone,)).fetchone():
         conn.close()
         return JSONResponse({"ok": False, "error": "该手机号已注册，请直接登录"}, status_code=409)
-    conn.close()
+    conn.execute("UPDATE sms_codes SET attempts=attempts+1 WHERE phone=?", (phone,))
     uid = "u" + secrets.token_hex(8)
     salt = _gen_salt()
     phash = _hash_password(password, salt)
     now = datetime.now().isoformat()
-    db_write(
+    conn.execute(
         "INSERT INTO users (id,phone,password_hash,salt,created_at,last_login) VALUES (?,?,?,?,?,?)",
         (uid, phone, phash, salt, now, now),
     )
+    conn.execute("DELETE FROM sms_codes WHERE phone=?", (phone,))  # 验证码一次性消费
+    # 生成恢复密钥（脱离手机号的所有权证明，明文随注册返回一次）
+    _rc = secrets.token_hex(16).upper()
+    _rc_key = "-".join(_rc[i:i + 4] for i in range(0, 32, 4))
+    conn.execute("UPDATE users SET recovery_key_hash=? WHERE id=?", (hashlib.sha256(_rc_key.encode()).hexdigest(), uid))
+    conn.commit()
+    conn.close()
     token = _create_session(uid)
-    return JSONResponse({"ok": True, "token": token, "user": {"id": uid, "phone": phone, "nickname": ""}})
+    return JSONResponse({"ok": True, "token": token, "user": {"id": uid, "phone": phone, "nickname": ""}, "recovery_key": _rc_key})
 
 
 @app.post("/api/auth/login")
@@ -330,6 +349,219 @@ async def auth_status(request: Request):
         return JSONResponse({"ok": True, "logged_in": False})
     return JSONResponse({"ok": True, "logged_in": True,
                          "user": {"id": row["id"], "phone": row["phone"], "nickname": row["nickname"] or ""}})
+
+
+# ── v6.2 短信验证码（阿里云 DysmsAPI，自包含 HMAC 签名，无第三方 SDK 依赖）──
+_ALIYUN_SMS_AK = os.environ.get("ALIYUN_SMS_AK", "REDACTED_ALIYUN_AK")
+_ALIYUN_SMS_SK = os.environ.get("ALIYUN_SMS_SK", "REDACTED_ALIYUN_SK")
+_ALIYUN_SMS_SIGN = os.environ.get("ALIYUN_SMS_SIGN", "安徽叒叕创业投资有限公司")
+_ALIYUN_SMS_TPL = os.environ.get("ALIYUN_SMS_TPL", "REDACTED_ALIYUN_SMS_TEMPLATE")
+_DEV_SMS = os.environ.get("FENSHEN_DEV_SMS", "") == "1"
+
+
+def _aliyun_percent_encode(s: str) -> str:
+    return urllib.parse.quote(str(s), safe="-_.~")
+
+
+def _aliyun_sms_sign(params: dict, secret: str) -> str:
+    canonical = "&".join(
+        f"{_aliyun_percent_encode(k)}={_aliyun_percent_encode(params[k])}"
+        for k in sorted(params.keys())
+    )
+    string_to_sign = "GET&%2F&" + _aliyun_percent_encode(canonical)
+    return base64.b64encode(
+        hmac.new((secret + "&").encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1).digest()
+    ).decode("ascii")
+
+
+def send_sms_code(phone: str, code: str) -> dict:
+    """调用阿里云短信发送验证码。返回阿里云原始响应（Code=='OK' 为成功）。"""
+    if _DEV_SMS:
+        return {"Code": "OK", "Message": "dev-skip", "dev_code": code}
+    params = {
+        "AccessKeyId": _ALIYUN_SMS_AK,
+        "Action": "SendSms",
+        "Format": "JSON",
+        "PhoneNumbers": phone,
+        "RegionId": "cn-hangzhou",
+        "SignName": _ALIYUN_SMS_SIGN,
+        "SignatureMethod": "HMAC-SHA1",
+        "SignatureNonce": str(uuid.uuid4()),
+        "SignatureVersion": "1.0",
+        "TemplateCode": _ALIYUN_SMS_TPL,
+        "TemplateParam": json.dumps({"code": code}, ensure_ascii=False),
+        "Timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "Version": "2017-05-25",
+    }
+    params["Signature"] = _aliyun_sms_sign(params, _ALIYUN_SMS_SK)
+    url = "https://dysmsapi.aliyuncs.com/?" + urllib.parse.urlencode(params)
+    try:
+        resp = requests.get(url, timeout=10)
+        return resp.json()
+    except Exception as e:  # 网络/超时：返回错误，绝不泄露验证码
+        return {"Code": "ERR", "Message": str(e)[:200]}
+
+
+def _gen_sms_code() -> str:
+    return f"{secrets.randbelow(1000000):06d}"
+
+
+@app.post("/api/auth/send-code")
+async def auth_send_code(req: Request):
+    """发送注册/重置验证码。频率限制：60s 冷却 + 单手机号每日上限 10 条。"""
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    phone = (data.get("phone") or "").strip()
+    if not _CN_MOBILE_RE.match(phone):
+        return JSONResponse({"ok": False, "error": "手机号格式不正确"}, status_code=400)
+    conn = get_db()
+    row = conn.execute("SELECT * FROM sms_codes WHERE phone=?", (phone,)).fetchone()
+    now = datetime.now()
+    if row:
+        last = datetime.fromisoformat(row["last_sent_at"]) if row["last_sent_at"] else None
+        if last and (now - last).total_seconds() < 60:
+            conn.close()
+            return JSONResponse({"ok": False, "error": "发送过于频繁，请 60 秒后再试"}, status_code=429)
+        day = now.strftime("%Y-%m-%d")
+        if row["day"] == day and (row["send_count"] or 0) >= 10:
+            conn.close()
+            return JSONResponse({"ok": False, "error": "今日验证码发送次数已达上限"}, status_code=429)
+    code = _gen_sms_code()
+    r = send_sms_code(phone, code)
+    if r.get("Code") != "OK":
+        conn.close()
+        return JSONResponse({"ok": False, "error": f"短信发送失败：{r.get('Message', '未知错误')}"}, status_code=502)
+    day = now.strftime("%Y-%m-%d")
+    cur_day_count = row["send_count"] if (row and row["day"] == day) else 0
+    conn.execute(
+        "INSERT INTO sms_codes (phone,code,expires_at,attempts,last_sent_at,send_count,day) "
+        "VALUES (?,?,?,0,?,?,?) "
+        "ON CONFLICT(phone) DO UPDATE SET code=excluded.code,expires_at=excluded.expires_at,"
+        "attempts=0,last_sent_at=excluded.last_sent_at,day=excluded.day,send_count=excluded.send_count",
+        (phone, code, (now + timedelta(minutes=5)).isoformat(), now.isoformat(), cur_day_count + 1, day),
+    )
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "message": "验证码已发送"})
+
+
+@app.post("/api/auth/reset-password")
+async def auth_reset_password(req: Request):
+    """凭短信验证码重置密码。"""
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    phone = (data.get("phone") or "").strip()
+    code = (data.get("code") or "").strip()
+    new_pwd = data.get("password") or ""
+    if not _CN_MOBILE_RE.match(phone):
+        return JSONResponse({"ok": False, "error": "手机号格式不正确"}, status_code=400)
+    if len(new_pwd) < 6:
+        return JSONResponse({"ok": False, "error": "新密码至少 6 位"}, status_code=400)
+    conn = get_db()
+    row = conn.execute("SELECT code,expires_at,attempts FROM sms_codes WHERE phone=?", (phone,)).fetchone()
+    if not row or row["code"] != code or datetime.now().isoformat() > row["expires_at"]:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "验证码无效或已过期"}, status_code=400)
+    if (row["attempts"] or 0) >= 5:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "验证码尝试次数过多，请重新获取"}, status_code=429)
+    salt = _gen_salt()
+    conn.execute("UPDATE sms_codes SET attempts=attempts+1 WHERE phone=?", (phone,))
+    conn.execute("UPDATE users SET password_hash=?, salt=? WHERE phone=?",
+                 (_hash_password(new_pwd, salt), salt, phone))
+    conn.execute("DELETE FROM sms_codes WHERE phone=?", (phone,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "message": "密码已重置"})
+
+
+# ── v6.2 账号归属权增强：可携带导出 / 被遗忘删除 / 恢复密钥（脱离手机号的所有权证明）──
+@app.get("/api/account/export")
+async def account_export(request: Request):
+    """导出当前用户全部元神数据（可携带权）。返回结构化 JSON。"""
+    uid = _current_user_id(request)
+    if not uid:
+        return JSONResponse({"ok": False, "error": "未登录"}, status_code=401)
+    conn = get_db()
+    user = conn.execute("SELECT id,phone,nickname,created_at FROM users WHERE id=?", (uid,)).fetchone()
+    projects = conn.execute("SELECT * FROM projects WHERE owner_id=?", (uid,)).fetchall()
+    pids = [p["id"] for p in projects]
+    mods, tasks, topics = [], [], []
+    for pid in pids:
+        mods += [dict(m) for m in conn.execute("SELECT * FROM modules WHERE project_id=?", (pid,)).fetchall()]
+        tasks += [dict(t) for t in conn.execute("SELECT * FROM tasks WHERE project_id=?", (pid,)).fetchall()]
+        topics += [dict(t) for t in conn.execute("SELECT * FROM topics WHERE project_id=?", (pid,)).fetchall()]
+    conn.close()
+    return JSONResponse({"ok": True, "data": {
+        "schema": "fenshen-export/v1",
+        "user": dict(user) if user else {},
+        "projects": [dict(p) for p in projects],
+        "modules": mods, "tasks": tasks, "topics": topics,
+    }})
+
+
+@app.post("/api/account/delete")
+async def account_delete(request: Request):
+    """注销并彻底删除当前用户及其全部元神数据（被遗忘权）。需密码确认。"""
+    uid = _current_user_id(request)
+    if not uid:
+        return JSONResponse({"ok": False, "error": "未登录"}, status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    pwd = data.get("password") or ""
+    conn = get_db()
+    row = conn.execute("SELECT password_hash,salt FROM users WHERE id=?", (uid,)).fetchone()
+    if not row or _hash_password(pwd, row["salt"]) != row["password_hash"]:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "密码错误"}, status_code=401)
+    for pid in [r["id"] for r in conn.execute("SELECT id FROM projects WHERE owner_id=?", (uid,)).fetchall()]:
+        for t in ("tasks", "modules", "topics", "messages"):
+            conn.execute(f"DELETE FROM {t} WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM projects WHERE id=?", (pid,))
+    conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+    conn.execute("DELETE FROM users WHERE id=?", (uid,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "message": "账号与全部元神数据已彻底删除"})
+
+
+@app.post("/api/account/recovery-key")
+async def account_recovery_key(request: Request):
+    """生成/重置恢复密钥（脱离手机号的所有权最终证明）。明文仅返回一次，服务端仅存哈希。"""
+    uid = _current_user_id(request)
+    if not uid:
+        return JSONResponse({"ok": False, "error": "未登录"}, status_code=401)
+    raw = secrets.token_hex(16).upper()
+    key = "-".join(raw[i:i + 4] for i in range(0, 32, 4))
+    conn = get_db()
+    conn.execute("UPDATE users SET recovery_key_hash=? WHERE id=?", (hashlib.sha256(key.encode()).hexdigest(), uid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "recovery_key": key, "note": "请离线保存，此明文不再显示"})
+
+
+@app.post("/api/account/verify-recovery")
+async def account_verify_recovery(req: Request):
+    """凭恢复密钥证明所有权（手机号不可用等场景）。"""
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    key = (data.get("recovery_key") or "").strip().upper()
+    phone = (data.get("phone") or "").strip()
+    conn = get_db()
+    row = conn.execute("SELECT id,recovery_key_hash FROM users WHERE phone=?", (phone,)).fetchone()
+    if not row or not row["recovery_key_hash"] or row["recovery_key_hash"] != hashlib.sha256(key.encode()).hexdigest():
+        conn.close()
+        return JSONResponse({"ok": False, "error": "恢复密钥不正确"}, status_code=401)
+    conn.close()
+    return JSONResponse({"ok": True, "user_id": row["id"], "message": "所有权校验通过"})
 
 
 def get_db():
@@ -391,13 +623,35 @@ def set_setting(key: str, value: str):
     conn.close()
 
 
+@app.middleware("http")
+async def _owner_guard(request: Request, call_next):
+    """v6.2 多租户归属权守卫：所有 /api/projects/{pid}/* 端点统一校验项目归属，
+    非 owner 且已登录 → 403；项目不存在 → 404。本地单用户（无登录态）放行。"""
+    p = request.url.path
+    if p.startswith("/api/projects/"):
+        parts = p.split("/")
+        if len(parts) >= 4 and parts[3]:
+            pid = parts[3]
+            conn = get_db()
+            row = conn.execute("SELECT owner_id FROM projects WHERE id=?", (pid,)).fetchone()
+            conn.close()
+            if not row:
+                return JSONResponse(status_code=404, content={"error": "项目不存在"})
+            _uid = _current_user_id(request)
+            _owner = row["owner_id"]
+            if _uid and _owner not in (_uid, "local"):
+                return JSONResponse(status_code=403, content={"error": "无权访问该项目（归属权受限）"})
+    return await call_next(request)
+
+
 def init_db():
     conn = get_db()
     cur = conn.cursor()
     cur.executescript(
         """
         CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY, name TEXT, goal TEXT, status TEXT DEFAULT 'green', created_at TEXT
+            id TEXT PRIMARY KEY, name TEXT, goal TEXT, status TEXT DEFAULT 'green', created_at TEXT,
+            owner_id TEXT DEFAULT 'local'
         );
         CREATE TABLE IF NOT EXISTS roles (
             id TEXT PRIMARY KEY, name TEXT, mandate TEXT, skills TEXT, gate TEXT
@@ -528,7 +782,8 @@ def init_db():
             status TEXT DEFAULT 'idea',
             context_summary TEXT DEFAULT '',
             sort INTEGER DEFAULT 0,
-            created_at TEXT, updated_at TEXT
+            created_at TEXT, updated_at TEXT,
+            owner_id TEXT DEFAULT 'local'
         );
         CREATE TABLE IF NOT EXISTS topics (
             id TEXT PRIMARY KEY,
@@ -548,7 +803,8 @@ def init_db():
             owner_role TEXT DEFAULT '后端',
             status TEXT DEFAULT 'todo',
             done_criteria TEXT DEFAULT '',
-            created_at TEXT
+            created_at TEXT,
+            owner_id TEXT DEFAULT 'local'
         );
         CREATE TABLE IF NOT EXISTS meta_settings (
             key TEXT PRIMARY KEY,
@@ -689,6 +945,38 @@ def init_db():
         cur.execute("ALTER TABLE projects ADD COLUMN tracks TEXT DEFAULT '[\"web\"]'")
     if "stage_chains" not in pcols4:
         cur.execute("ALTER TABLE projects ADD COLUMN stage_chains TEXT DEFAULT '{}'")
+    # ── v6.2 多租户：projects/modules/tasks 增加 owner_id（元神数据归属权锚点）──
+    ocols = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
+    if "owner_id" not in ocols:
+        cur.execute("ALTER TABLE projects ADD COLUMN owner_id TEXT DEFAULT 'local'")
+    mocols = {r[1] for r in cur.execute("PRAGMA table_info(modules)").fetchall()}
+    if "owner_id" not in mocols:
+        cur.execute("ALTER TABLE modules ADD COLUMN owner_id TEXT DEFAULT 'local'")
+    tocols = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "owner_id" not in tocols:
+        cur.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT DEFAULT 'local'")
+    # 存量数据回填：归属到首个注册用户（无用户则标记 'local'，本地单用户模式）
+    _fu = cur.execute("SELECT id FROM users ORDER BY created_at LIMIT 1").fetchone()
+    _owner = _fu["id"] if _fu else "local"
+    cur.execute("UPDATE projects SET owner_id=? WHERE owner_id IS NULL OR owner_id=''", (_owner,))
+    cur.execute("UPDATE modules SET owner_id=(SELECT p.owner_id FROM projects p WHERE p.id=modules.project_id) WHERE owner_id IS NULL OR owner_id=''")
+    cur.execute("UPDATE tasks SET owner_id=(SELECT p.owner_id FROM projects p WHERE p.id=tasks.project_id) WHERE owner_id IS NULL OR owner_id=''")
+    # ── v6.2 短信验证码表（频率限制 + 一次性消费）──
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS sms_codes (
+            phone TEXT PRIMARY KEY,
+            code TEXT DEFAULT '',
+            expires_at TEXT DEFAULT '',
+            attempts INTEGER DEFAULT 0,
+            last_sent_at TEXT DEFAULT '',
+            send_count INTEGER DEFAULT 0,
+            day TEXT DEFAULT ''
+        )"""
+    )
+    # users 增加恢复密钥哈希（脱离手机号的所有权证明）
+    ucols = {r[1] for r in cur.execute("PRAGMA table_info(users)").fetchall()}
+    if "recovery_key_hash" not in ucols:
+        cur.execute("ALTER TABLE users ADD COLUMN recovery_key_hash TEXT DEFAULT ''")
     # 角色种子数据
     cur.execute("SELECT COUNT(*) FROM roles")
     if cur.fetchone()[0] == 0:
@@ -1469,9 +1757,13 @@ def health():
 
 
 @app.get("/api/projects")
-def list_projects():
+def list_projects(request: Request):
     conn = get_db()
-    rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+    _uid = _current_user_id(request)
+    if _uid:
+        rows = conn.execute("SELECT * FROM projects WHERE owner_id=? ORDER BY created_at DESC", (_uid,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -2023,11 +2315,12 @@ async def create_project(req: Request):
     for t in tracks:
         chains[t] = list(STAGE_PRESETS.get(t, STAGE_PRESETS["web"]))
     conn = get_db()
+    _owner = _current_user_id(req) or "local"
     conn.execute(
-        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen,storage_root,design_standard,tracks,stage_chains) VALUES (?,?,?,?,?,?,?,0,?,?,?,?)",
+        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen,storage_root,design_standard,tracks,stage_chains,owner_id) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?)",
         (pid, data.get("name", ""), data.get("goal", ""), data.get("standards", ""), "green", datetime.now().isoformat(),
          data.get("phase", "requirement"), storage_root, design_std,
-         json.dumps(tracks, ensure_ascii=False), json.dumps(chains, ensure_ascii=False)),
+         json.dumps(tracks, ensure_ascii=False), json.dumps(chains, ensure_ascii=False), _owner),
     )
     # 解构引导：projects.modules 数组 → 批量创建模块（支持一次成立项目即拆模块）
     mods = data.get("modules") or []
