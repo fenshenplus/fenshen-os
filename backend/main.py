@@ -6846,6 +6846,10 @@ AUTONOMY_STATE = {
     "rest_window_active": False,
     # P1-3 元神升级闭环：按成员累计连续派单失败，达阈值自动加技能+升级
     "member_fail": {},
+    # P3 元神自动驾驶汇报：按项目累计派单/补空白/自动升级次数（用于汇报增量）
+    "proj_stats": {},
+    "report_ts": {},
+    "report_snap": {},
 }
 _AUTONOMY_WAKE = asyncio.Event()
 
@@ -7088,6 +7092,115 @@ def _project_critical_map(pid: str) -> dict:
     return crit_pos
 
 
+def _bump_proj_stat(pid: str, key: str, n: int = 1):
+    """累加某项目的自动驾驶活动计数（派单/补空白/自动升级），供元神汇报算增量。"""
+    d = AUTONOMY_STATE.setdefault("proj_stats", {}).setdefault(
+        pid, {"dispatched": 0, "filled": 0, "upgrades": 0})
+    d[key] = d.get(key, 0) + n
+
+
+def _meta_autopilot_report(pid: str, force: bool = False) -> dict:
+    """生成并（按需）发布「元神自动驾驶汇报」到项目群聊。
+
+    仅在 force 或（距上次≥600s 且本周期有增量）时发布，避免刷屏。
+    内容=各轨道进度 + 关键路径 + 全链路就绪 + 本周期元神动作 + 需你决策的问题。"""
+    try:
+        conn = get_db()
+        p = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if not p:
+            conn.close()
+            return {"posted": False, "reason": "no_project"}
+        tracks = json.loads(p["tracks"] or '["web"]')
+        tasks = [dict(r) for r in conn.execute(
+            "SELECT * FROM tasks WHERE project_id=?", (pid,)).fetchall()]
+        label_map = {"web": "策划/开发", "h5": "H5", "app": "App", "mp": "小程序",
+                     "generic": "通用", "infra": "基础设施", "release": "发布", "ops": "运营"}
+        # 各轨道进度
+        track_lines = []
+        for tr in tracks:
+            cells = [t for t in tasks if (t.get("track") or "web") == tr]
+            if not cells:
+                continue
+            done = sum(1 for t in cells if t.get("status") == "done")
+            doing = sum(1 for t in cells if t.get("status") == "doing")
+            todo = len(cells) - done - doing
+            pct = round(done / len(cells) * 100)
+            track_lines.append(
+                f"· {label_map.get(tr, tr)}：{done}/{len(cells)} 完成（{pct}%）· 进行中 {doing} · 待办 {todo}")
+        # 关键路径
+        crit = _project_critical_map(pid)
+        crit_mods = [m for m, _ in sorted(crit.items(), key=lambda kv: kv[1])]
+        # 全链路就绪（infra/release/ops）
+        life = {}
+        for t in LIFE_TRACKS:
+            if t not in tracks:
+                continue
+            sts = [x.get("status") for x in tasks if (x.get("track") or "") == t]
+            if not sts:
+                life[t] = "未启动"
+            elif all(s == "done" for s in sts):
+                life[t] = "done"
+            elif any(s in ("done", "doing") for s in sts):
+                life[t] = "推进中"
+            else:
+                life[t] = "未启动"
+        operational = (life.get("infra") == "done" and life.get("release") == "done"
+                       and life.get("ops") in ("done", "推进中"))
+        # 巡检问题
+        pr = _patrol_rules(conn, pid)
+        red = [i for i in pr.get("issues", []) if i.get("level") == "red"]
+        amber = [i for i in pr.get("issues", []) if i.get("level") in ("yellow", "amber")]
+        conn.close()
+        # 本周期增量
+        ps = AUTONOMY_STATE.get("proj_stats", {}).get(
+            pid, {"dispatched": 0, "filled": 0, "upgrades": 0})
+        snap = AUTONOMY_STATE.get("report_snap", {}).get(
+            pid, {"dispatched": 0, "filled": 0, "upgrades": 0})
+        delta = {k: ps.get(k, 0) - snap.get(k, 0) for k in ("dispatched", "filled", "upgrades")}
+        interval = 600
+        last = AUTONOMY_STATE.get("report_ts", {}).get(pid, 0)
+        if not force and all(v <= 0 for v in delta.values()) and (time.time() - last) < interval:
+            return {"posted": False, "reason": "no_change"}
+        # 组装正文
+        now = datetime.now()
+        lines = [f"🚀 元神自动驾驶简报 · {now.strftime('%m-%d %H:%M')}",
+                 f"产品：《{p['name']}》"]
+        if track_lines:
+            lines.append("【进度】")
+            lines.extend(track_lines)
+        if crit_mods:
+            lines.append("【关键路径】" + " → ".join(crit_mods[:6]))
+        lines.append("【全链路就绪】" + ("✅ 可运营" if operational else
+                     f"基础设施 {life.get('infra', '-')} · 发布 {life.get('release', '-')} · 运营 {life.get('ops', '-')}"))
+        acts = []
+        if delta["dispatched"] > 0:
+            acts.append(f"派单 {delta['dispatched']} 次")
+        if delta["filled"] > 0:
+            acts.append(f"补空白 {delta['filled']} 张")
+        if delta["upgrades"] > 0:
+            acts.append(f"自动升级成员 {delta['upgrades']} 次")
+        if acts:
+            lines.append("【本周期元神动作】" + "，".join(acts))
+        if red:
+            lines.append("【需你决策】" + "；".join(i.get("detail", "") for i in red[:3]))
+        elif amber:
+            lines.append("【提示】" + "；".join(i.get("detail", "") for i in amber[:3]))
+        lines.append("—— 元神将继续自主推进，你随时可 @元神 干预。")
+        text = "\n".join(lines)
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, "元神", "sys", text, "自动驾驶汇报", now.isoformat()))
+        conn.commit()
+        conn.close()
+        AUTONOMY_STATE.setdefault("report_ts", {})[pid] = time.time()
+        AUTONOMY_STATE.setdefault("report_snap", {})[pid] = dict(ps)
+        return {"posted": True, "pid": pid, "text": text}
+    except Exception as e:
+        print(f"[autonomy] report err: {e}")
+        return {"posted": False, "reason": str(e)}
+
+
 async def _autonomy_loop():
     """M2 元神长续航调度器：三模式 + 事件回调驱动。
     - autopilot：15s 心跳·并发 3·自动补空白；normal：60s·并发 1；rest：300s·只巡检（不派单）。
@@ -7168,6 +7281,7 @@ async def _autonomy_loop():
                     filled = _fill_blanks_internal(p["id"], cfg["blank_cap"])
                     if filled:
                         AUTONOMY_STATE["filled_total"] += filled
+                        _bump_proj_stat(p["id"], "filled", filled)
                         _AUTONOMY_WAKE.set()  # 新卡已建 → 本轮继续派单
 
                 # M3 关键路径优先级：优先派「关键路径模块、且模块链最早未完成阶段」的卡
@@ -7213,8 +7327,18 @@ async def _autonomy_loop():
                 AUTONOMY_STATE["inflight_peak"] = max(
                     AUTONOMY_STATE.get("inflight_peak", 0), len(AUTONOMY_STATE["running_projects"]))
                 AUTONOMY_STATE["dispatched_total"] += 1
+                _bump_proj_stat(p["id"], "dispatched", 1)
                 assigned_mid = _resolve_member_for_task(p["id"], t)  # P1-3：解析负责成员 → 连败达阈值自动升级
                 asyncio.create_task(_dispatch_and_track(p["id"], t, prompt, assigned_mid))
+            # 元神自动驾驶汇报：每 ~40 tick（autopilot≈10min / normal≈40min）给有活动的项目发一份简报（自带节流）
+            if AUTONOMY_STATE["ticks"] % 40 == 0 and mode in ("autopilot", "normal"):
+                for pp in projects:
+                    if pp["id"] == META_PID or pp["id"] in AUTONOMY_STATE["paused_projects"]:
+                        continue
+                    try:
+                        _meta_autopilot_report(pp["id"])
+                    except Exception as ex:
+                        print("[autonomy] report err", ex)
         except Exception as e:
             print(f"[autonomy] 循环异常: {e}")
             await asyncio.sleep(5)
@@ -7334,6 +7458,28 @@ async def autopilot_set(req: Request):
             return {"ok": False, "error": f"rest_schedule 校验失败: {e}"}
     _AUTONOMY_WAKE.set()  # 配置变更立即生效
     return {"ok": True, "changed": changed, "state": _autopilot_state_dict()}
+
+
+@app.post("/api/meta/report/{pid}")
+async def meta_report(pid: str):
+    """手动触发元神为某项目生成并发布「自动驾驶汇报」（force=True，无视节流）。"""
+    res = _meta_autopilot_report(pid, force=True)
+    if res.get("posted"):
+        return {"ok": True, **res}
+    return JSONResponse(status_code=400, content={"ok": False, "error": res.get("reason", "未发布")})
+
+
+@app.get("/api/projects/{pid}/report/latest")
+def project_report_latest(pid: str):
+    """返回项目最近一条元神自动驾驶汇报（供驾驶舱展示）。"""
+    conn = get_db()
+    r = conn.execute(
+        "SELECT * FROM messages WHERE project_id=? AND tag='自动驾驶汇报' ORDER BY id DESC LIMIT 1", (pid,)
+    ).fetchone()
+    conn.close()
+    if not r:
+        return {"ok": True, "report": None}
+    return {"ok": True, "report": dict(r)}
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -7463,6 +7609,7 @@ async def upgrade_member(mid: str, req: Request = None):
         new_level += 1
     evo = json.loads(r["evo_tree"] or "[]")
     evo.append({"v": new_ver, "at": datetime.now().isoformat(), "note": reason})
+    _bump_proj_stat(r["project_id"], "upgrades", 1)
     conn.execute(
         "UPDATE agent_members SET version=?,level=?,experience=?,evo_tree=?,updated_at=? WHERE id=?",
         (new_ver, new_level, exp, json.dumps(evo, ensure_ascii=False), datetime.now().isoformat(), mid))
@@ -7550,6 +7697,7 @@ def _auto_upgrade_member(mid: str, reason_type: str = "manual", context: str = "
         soul = soul + ("\n【进化印记】" if soul.strip() else "") + note
     else:
         soul = soul + "；" + note
+    _bump_proj_stat(r["project_id"], "upgrades", 1)
     conn.execute(
         "UPDATE agent_members SET version=?,level=?,experience=?,skills=?,evo_tree=?,model_cfg=?,soul=?,updated_at=? WHERE id=?",
         (new_ver, new_level, exp, json.dumps(skills, ensure_ascii=False),
