@@ -978,6 +978,14 @@ def init_db():
     # ── P0-C：tasks 增加 acceptance_criteria 列（看板验收门：该任务的可验收点）──
     if "acceptance_criteria" not in tcols:
         cur.execute("ALTER TABLE tasks ADD COLUMN acceptance_criteria TEXT DEFAULT ''")
+    # ── P1-A：model_usage 增加 phase / scope_modules / project_id 列（精准路由埋点：区分元神调度 vs 角色执行、记录爆炸半径范围、按项目归因）──
+    ucols = {r[1] for r in cur.execute("PRAGMA table_info(model_usage)").fetchall()}
+    if "phase" not in ucols:
+        cur.execute("ALTER TABLE model_usage ADD COLUMN phase TEXT DEFAULT ''")
+    if "scope_modules" not in ucols:
+        cur.execute("ALTER TABLE model_usage ADD COLUMN scope_modules INTEGER DEFAULT -1")
+    if "project_id" not in ucols:
+        cur.execute("ALTER TABLE model_usage ADD COLUMN project_id TEXT DEFAULT ''")
     # ── v5.8 P1 双维度存储：projects 增加 storage_root（双维度根目录）+ design_standard（P2 设计规范）──
     pcols3 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
     if "storage_root" not in pcols3:
@@ -1273,15 +1281,16 @@ def _live_add(provider, model, inp, out):
 
 
 def _log_usage(agent_id: str, provider: str, model: str, latency_ms: int, status: str,
-               input_tokens: int = 0, output_tokens: int = 0):
-    """记录一次 LLM 调用（v5.9 起含 token 计数，供成本/效果统计与实时 token 条）。"""
+               input_tokens: int = 0, output_tokens: int = 0, phase: str = "", scope_modules: int = -1,
+               project_id: str = ""):
+    """记录一次 LLM 调用（v5.9 起含 token 计数；P1-A 加 phase 区分元神调度/角色执行、scope_modules 记录爆炸半径范围、project_id 按项目归因）。"""
     try:
         _live_add(provider, model, input_tokens, output_tokens)
         conn = get_db()
         conn.execute(
-            "INSERT INTO model_usage (ts,agent_id,provider,model,latency_ms,status,input_tokens,output_tokens) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO model_usage (ts,agent_id,provider,model,latency_ms,status,input_tokens,output_tokens,phase,scope_modules,project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (datetime.now().isoformat(), agent_id, provider, model, latency_ms, status,
-             int(input_tokens or 0), int(output_tokens or 0)),
+             int(input_tokens or 0), int(output_tokens or 0), phase or "", int(scope_modules or -1), project_id or ""),
         )
         conn.commit()
         conn.close()
@@ -4113,7 +4122,8 @@ def _match_skill_steps(system_prompt: str, user_text: str) -> str:
     return "\n\n".join(parts)
 
 
-async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, tools: list = None) -> str:
+async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, tools: list = None,
+                          phase: str = "", scope_modules: int = -1, project_id: str = "") -> str:
     """通用工具对话循环（元神/群聊共用，v0.27.0）：最多 6 轮（支持多步工具操作）。
     批次 B / P2-1：tools 参数控制工具集——元神默认 META_TOOLS（只读+搭建，无写文件），
     角色默认 ROLE_TOOLS（含 write_file 可动手产出）。
@@ -4145,7 +4155,8 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                         raise
                 latency = int((datetime.now() - t0).total_seconds() * 1000)
                 _log_usage(agent_id, provider, model, latency, "success",
-                           usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
+                           usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                           phase=phase, scope_modules=scope_modules, project_id=project_id)
                 tool_calls = msg.get("tool_calls")
                 if tool_calls:
                     history.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
@@ -5024,6 +5035,114 @@ def get_dispatch_job(job_id: str):
     return d
 
 
+# ── P1-A：团队级 blast radius（爆炸半径）计算 ─────────────────────
+# 对齐 CRG 结构图/爆炸半径：只把受影响的模块/成员切片投给相关角色，避免全项目广播。
+# 保守多报路线（CRG F1≈0.71 也走保守）：命中模块 + 其依赖方 + 被依赖方 一并纳入，宁可多拉不可漏。
+
+def _module_dep_graph(mods: list) -> dict:
+    """返回 {模块名: set(依赖的模块名)}。depends_on 可能是 JSON 字符串或列表。"""
+    g = {}
+    for m in mods:
+        raw = m["depends_on"]
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw) if raw.strip() else []
+            except Exception:
+                raw = []
+        if not isinstance(raw, list):
+            raw = []
+        g[m["name"]] = set(raw)
+    return g
+
+
+# 通用/弱区分词，不应作为命中 token（避免"系统/功能/模块"等词导致全命中）
+_BLAST_STOP = {"系统", "功能", "模块", "页面", "管理", "服务", "接口", "组件", "逻辑",
+               "处理", "相关", "实现", "优化", "支持", "平台", "中心", "后台", "前端", "后端"}
+
+
+def _blast_tokens(name: str) -> set:
+    """模块/任务名 → 用于命中的 token 集合（分词 + 全名，去停用词，保留 len>=2）。"""
+    raw = (name or "").strip()
+    if not raw:
+        return set()
+    toks = set()
+    for part in __import__("re").split(r"[\/\-_\s、，,；;]+", raw):
+        if len(part) >= 2 and part not in _BLAST_STOP:
+            toks.add(part)
+    if len(raw) >= 2 and raw not in _BLAST_STOP:
+        toks.add(raw)
+    return toks
+
+
+def _compute_blast_radius(user_text: str, mods: list, tasks: list) -> set:
+    """返回受用户指令影响的模块名集合（爆炸半径）。空集 = 全项目（不聚焦，保质量）。
+    命中策略：模块名/任务名的分词 token（如"登录/注册"→登录、注册）在指令文本中出现即命中，
+    解决"优化登录模块"匹配不到"登录/注册"的退化问题；同时保留全名精确命中。"""
+    text = (user_text or "").lower()
+    name_to_mod = {m["name"]: m for m in mods}
+    hits = set()
+    # 1) 模块名命中（token 或全名）
+    for m in mods:
+        nm = (m["name"] or "")
+        if not nm:
+            continue
+        if nm.lower() in text or any(tok.lower() in text for tok in _blast_tokens(nm)):
+            hits.add(m["name"])
+    # 2) 任务名命中 → 归入其所属模块
+    for t in tasks:
+        tn = (t["name"] or "")
+        if not tn:
+            continue
+        if tn.lower() in text or any(tok.lower() in text for tok in _blast_tokens(tn)):
+            mid = t["module_id"]
+            for m in mods:
+                if m["id"] == mid:
+                    hits.add(m["name"])
+                    break
+    if not hits:
+        return set()  # 无命中 → 全项目广播（保质量）
+    # 3) 保守扩展：命中模块的依赖方 + 被依赖方一并纳入
+    g = _module_dep_graph(mods)
+    expanded = set(hits)
+    changed = True
+    while changed:
+        changed = False
+        for nm in list(expanded):
+            deps = g.get(nm, set())
+            for d in deps:
+                if d not in expanded and d in name_to_mod:
+                    expanded.add(d); changed = True
+            for other, odep in g.items():
+                if nm in odep and other not in expanded and other in name_to_mod:
+                    expanded.add(other); changed = True
+    return expanded
+
+
+def _scoped_project_context(mods: list, tasks: list, focus: set) -> tuple:
+    """按爆炸半径生成聚焦的 mod_desc / task_desc。focus 为空 = 全项目。"""
+    if focus:
+        smods = [m for m in mods if m["name"] in focus]
+        smod_ids = {m["id"] for m in smods}
+        stasks = [t for t in tasks if t["module_id"] in smod_ids]
+    else:
+        smods, stasks = mods, tasks
+    mod_desc = ""
+    if smods:
+        active = [m for m in smods if m["status"] != "done"]
+        done_cnt = len(smods) - len(active)
+        mod_desc = "项目模块总览（按爆炸半径聚焦）：" + ("\n" + "\n".join(
+            f"- {m['name']}（{m['status']} · 负责人 {m['owner_role']}）" for m in active[:8])) if active else ""
+        if done_cnt:
+            mod_desc += f"\n（另 {done_cnt} 个模块已完成）"
+    task_desc = ""
+    if stasks:
+        doing = [t for t in stasks if t["status"] == "doing"]
+        todo = [t for t in stasks if t["status"] == "todo"]
+        task_desc = (f"项目任务（聚焦范围内）：进行中 {len(doing)} 个（{('、'.join(t['name'] for t in doing[:3])) if doing else '无'}），"
+                     f"待办 {len(todo)} 个。")
+    return mod_desc, task_desc
+
+
 async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = None) -> dict:
     """v4.2 自主闭环：项目群聊执行链（API 与团队自主推进循环共用）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
@@ -5059,23 +5178,13 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     if _CHAT_DISTILL_CNT[pid] >= 6:
         _CHAT_DISTILL_CNT[pid] = 0
         asyncio.create_task(_auto_distill_project_chat(pid))
-    # ── 项目级上下文 ──
+    # ── 项目级上下文（P1-A：先算爆炸半径，再生成聚焦切片，避免全项目广播）──
     mods = conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort", (pid,)).fetchall()
     tasks = conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
-    mod_desc = ""
-    if mods:
-        active = [m for m in mods if m["status"] != "done"]
-        done_cnt = len(mods) - len(active)
-        mod_desc = "项目模块总览：" + ("\n" + "\n".join(
-            f"- {m['name']}（{m['status']} · 负责人 {m['owner_role']}）" for m in active[:8])) if active else ""
-        if done_cnt:
-            mod_desc += f"\n（另 {done_cnt} 个模块已完成）"
-    task_desc = ""
-    if tasks:
-        doing = [t for t in tasks if t["status"] == "doing"]
-        todo = [t for t in tasks if t["status"] == "todo"]
-        task_desc = (f"项目任务：进行中 {len(doing)} 个（{('、'.join(t['name'] for t in doing[:3])) if doing else '无'}），"
-                     f"待办 {len(todo)} 个。")
+    # P1-A 团队级 blast radius：只把与本次指令相关的模块切片投给元神，避免全项目广播
+    _blast = _compute_blast_radius(user_text, mods, tasks)
+    mod_desc, task_desc = _scoped_project_context(mods, tasks, _blast)
+    _blast_scope = len(_blast) if _blast else len(mods)  # 记录聚焦范围（0 命中=全项目）
     # 最近群聊消息（项目级，不含话题消息）
     rows = conn.execute(
         "SELECT sender,kind,text FROM messages WHERE project_id=? AND (topic_id IS NULL OR topic_id='') "
@@ -5088,13 +5197,18 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     role_systems, role_names = _roles_from_db()
     max_actions = max(3, min(6, len(role_systems)))
     role_enum = "|".join(role_names)
+    # P1-A：若已聚焦，明确告知元神本次只涉及这些模块（爆炸半径），其余模块不在此轮上下文
+    blast_note = ""
+    if _blast:
+        blast_note = (f"\n【爆炸半径·精准路由】本次指令经分析只聚焦以下模块：{'、'.join(sorted(_blast))}。"
+                      f"请仅围绕这些模块调度，不要涉及范围外模块（其余模块暂不在此轮上下文）。\n")
     dispatch_sys = (
         "你是「元神」，在项目群聊中接收用户指令后，需要分析并调度团队执行。\n"
         "根据用户指令和项目当前状态，判断是否需要调度团队执行：\n"
         "- 如果是执行类指令（如\"实现XX\"、\"修复XX\"、\"检查XX\"、\"设计XX\"），输出 JSON 调度计划\n"
         "- 如果是闲聊/提问/汇报，只在 reply 中回答，actions 为空数组\n\n"
         f"项目：{proj['name']}。目标：{proj['goal'] or '（未填写）'}。\n"
-        f"当前团队角色：{'、'.join(role_names.values())}。\n"
+        f"当前团队角色：{'、'.join(role_names.values())}。{blast_note}"
         f"{mod_desc}\n{task_desc}\n\n"
         "【可用工具（v0.27.0）】调度阶段不要调用任何工具——直接输出 JSON 调度计划；"
         "需要查真实状态/执行验证，交给被派单的角色在其执行阶段用工具完成。"
@@ -5120,7 +5234,9 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         role = "assistant" if r["kind"] in ("agent", "meta") else "user"
         hist.append({"role": role, "content": r["text"]})
     hist.append({"role": "user", "content": user_text})
-    dispatch_reply = await _chat_with_tools("__meta__", hist, dispatch_sys, tools=[])  # v4.2: 调度阶段禁用工具
+    dispatch_reply = await _chat_with_tools("__meta__", hist, dispatch_sys, tools=[],
+                                          phase="meta-dispatch", scope_modules=_blast_scope,
+                                          project_id=pid)  # v4.2: 调度阶段禁用工具
 
     # 解析 JSON（容错：LLM 可能返回非 JSON）
     meta_reply = dispatch_reply
@@ -5236,6 +5352,23 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             _ds = _load_design_spec(ds_id)
             if _ds:
                 role_sys_ctx += "\n\n" + _design_spec_prompt(_ds)
+        # P1-A：注入该角色所负责模块的聚焦切片（爆炸半径），让角色只见自己的模块上下文（而非全项目）
+        _role_scope = 0
+        try:
+            _role_disp = role_names.get(role, role)
+            _role_mods = [m for m in mods
+                          if (m["owner_role"] or "") in (role, _role_disp)
+                          or _ROLE_NAME_FALLBACK.get(m["owner_role"] or "", "") == role]
+            if _role_mods:
+                _rm_ids = {m["id"] for m in _role_mods}
+                _rm_lines = [f"- {m['name']}（{m['status']}）" for m in _role_mods]
+                _rm_tasks = [t for t in tasks if t.get("module_id") in _rm_ids and t["status"] in ("doing", "todo")]
+                if _rm_tasks:
+                    _rm_lines.append("该模块待推进任务：" + "、".join(t["name"] for t in _rm_tasks[:5]))
+                role_sys_ctx += "\n\n【你负责的模块（爆炸半径聚焦，仅这些模块在此上下文）】\n" + "\n".join(_rm_lines)
+                _role_scope = len(_role_mods)
+        except Exception:
+            _role_scope = 0
         # 疗效归因第⑤环：召回与任务最相关的经验（按 5 维权重排序），注入角色执行上下文
         try:
             rel_exp = _recall_experiences(f"{task_name} {detail}", limit=3)
@@ -5258,7 +5391,9 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
         ]
         try:
-            role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx)
+            role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx,
+                                             phase=f"role-exec:{role}", scope_modules=_role_scope,
+                                             project_id=pid)
         except Exception as e:
             role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
 
@@ -5356,7 +5491,8 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         conn.close()
     except Exception:
         pass
-    return {"reply": meta_reply, "actions": role_results, "ok": True, "rounds": round_no, "all_done": all_done}
+    return {"reply": meta_reply, "actions": role_results, "ok": True, "rounds": round_no, "all_done": all_done,
+            "blast_radius": sorted(_blast) if _blast else [], "blast_scope": _blast_scope}
 
 
 # ── v4.2 立项自动拆解：沟通内容 → 看板（模块 + 任务 + 目标/标准）──
@@ -6058,6 +6194,61 @@ def delete_task(task_id: str):
     return {"ok": True}
 
 
+# ── P1-C：精准定位窄播（团队级 blast radius 的通知侧应用）─────────────
+def _narrowcast_targets(pid: str, module_id: str) -> list:
+    """P1-C 精准定位窄播：计算受某模块变更影响的成员（角色）集合。
+    命中规则：① 该模块 owner_role ② 依赖该模块的其它模块的 owner_role（波及面）。
+    保守多报（宁可多拉不可漏，对齐 CRG F1 路线）。返回角色展示名列表。"""
+    if not module_id:
+        return []
+    conn = get_db()
+    mods = conn.execute("SELECT id,name,depends_on,owner_role FROM modules WHERE project_id=?", (pid,)).fetchall()
+    conn.close()
+    focus = next((m for m in mods if m["id"] == module_id), None)
+    if not focus:
+        return []
+    target_roles = set()
+    if focus["owner_role"]:
+        target_roles.add(focus["owner_role"])
+    # 被此模块依赖的其它模块 → 其 owner 也受影响（波及）
+    for m in mods:
+        raw = m["depends_on"]
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw) if raw.strip() else []
+            except Exception:
+                raw = []
+        if not isinstance(raw, list):
+            raw = []
+        if focus["name"] in raw and m["owner_role"]:
+            target_roles.add(m["owner_role"])
+    _, role_names = _roles_from_db()
+    return [role_names.get(r, r) for r in sorted(target_roles)]
+
+
+def _narrowcast_notify(pid: str, text: str, targets: list):
+    """P1-C 窄播：把通知只发给受影响的成员（@提及 + narrowcast 标记），而非全群广播。"""
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, "分身 · 元神", "meta", text, "narrowcast", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+@app.get("/api/narrowcast/targets")
+def narrowcast_targets(project_id: str = "", module_id: str = ""):
+    """P1-C：返回某模块变更将窄播通知的成员集合（精准定位，不广播全群）。"""
+    if not project_id:
+        return {"ok": False, "error": "project_id 必填"}
+    targets = _narrowcast_targets(project_id, module_id)
+    return {"ok": True, "targets": targets}
+
+
 @app.post("/api/tasks/{task_id}/verify")
 async def verify_task(task_id: str, req: Request):
     """P0-C 看板验收门：用任务验收标准（或 done_criteria / 项目 standards）对照产出判定；达标转 done，否则标记 review。"""
@@ -6079,11 +6270,16 @@ async def verify_task(task_id: str, req: Request):
     if not output:
         return {"ok": False, "error": "请提供待验收的产出内容（output）"}
     status, reason = await _judge_role_output(output, acceptance, project_standards, task["owner_role"])
+    # P1-C：精准定位窄播——只把验收结果 @ 给受该模块影响的成员，而非全群广播
+    targets = _narrowcast_targets(pid, task["module_id"] or "")
+    mention = (" @" + " @".join(targets)) if targets else ""
     if status == "done":
         _task_status(task_id, "done", pid, f"✅ 验收通过：{task['name']}（{reason}）")
-        return {"ok": True, "pass": True, "status": "done", "reason": reason}
+        _narrowcast_notify(pid, f"✅ 验收通过：{task['name']}（{reason}）{mention}", targets)
+        return {"ok": True, "pass": True, "status": "done", "reason": reason, "narrowcast": targets}
     _task_status(task_id, "review", pid, f"🔍 验收未通过：{task['name']}（{reason}）")
-    return {"ok": True, "pass": False, "status": "review", "reason": reason}
+    _narrowcast_notify(pid, f"🔍 验收未通过：{task['name']}（{reason}）{mention}", targets)
+    return {"ok": True, "pass": False, "status": "review", "reason": reason, "narrowcast": targets}
 
 
 # ── v5.8「磨」：对话压缩 / 元神材料精炼 ──────────────────────────
@@ -7996,6 +8192,100 @@ def _autopilot_state_dict() -> dict:
 def autopilot_state():
     """返回元神续航调度器实时状态：模式 / 在岗矩阵 / 护栏用量。"""
     return _autopilot_state_dict()
+
+
+@app.get("/api/meta/token-report")
+def meta_token_report(project_id: str = ""):
+    """P1-A 精准路由 token 埋点报告：按 phase 聚合元神调度 vs 角色执行的 token 用量，
+    并对比「聚焦（scope>0）」vs「全量广播（scope=-1）」的 input token，量化精准路由收益。"""
+    conn = get_db()
+    where = "WHERE project_id=? " if project_id else ""
+    args = (project_id,) if project_id else ()
+    rows = conn.execute(
+        f"SELECT phase, scope_modules, SUM(input_tokens) AS inp, SUM(output_tokens) AS outp, COUNT(*) AS n "
+        f"FROM model_usage {where}GROUP BY phase, scope_modules ORDER BY phase", args
+    ).fetchall()
+    conn.close()
+    by_phase = {}
+    for r in rows:
+        ph = r["phase"] or "unknown"
+        d = by_phase.setdefault(ph, {"input": 0, "output": 0, "calls": 0, "scopes": {}})
+        d["input"] += r["inp"] or 0
+        d["output"] += r["outp"] or 0
+        d["calls"] += r["n"] or 0
+        sc = r["scope_modules"]
+        d["scopes"][sc] = d["scopes"].get(sc, 0) + (r["inp"] or 0)
+    md = by_phase.get("meta-dispatch", {})
+    scopes = md.get("scopes", {})
+    full_inp = scopes.get(-1, 0)        # 未聚焦（全项目广播）时的 input 总和
+    scoped_inp = sum(v for k, v in scopes.items() if isinstance(k, int) and k > 0)
+    return {"ok": True, "by_phase": by_phase,
+            "meta_full_input": full_inp, "meta_scoped_input": scoped_inp,
+            "saved_pct": round((1 - scoped_inp / full_inp) * 100, 1) if full_inp else 0.0}
+
+
+@app.get("/api/meta/morning-brief")
+async def meta_morning_brief(project_id: str = ""):
+    """P1-B 元神潜意识晨报（对齐 OpenHuman Subconscious）：汇总自上次查看以来项目状态 diff + 元神主动建议关注。
+    返回结构化 stats + focus（主动建议）+ brief（自然语言晨报，离线/无 key 时降级为模板）。"""
+    if not project_id:
+        return {"ok": False, "error": "project_id 必填"}
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    if not proj:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    proj = dict(proj)
+    last_key = f"morning_brief_last:{project_id}"
+    last_ts = get_setting(last_key, "")
+    now = datetime.now()
+    since = last_ts or (now - timedelta(hours=24)).isoformat()
+    new_tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE project_id=? AND created_at>=?", (project_id, since)).fetchone()[0]
+    done_tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE project_id=? AND status='done' AND updated_at>=?", (project_id, since)).fetchone()[0]
+    review_tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE project_id=? AND status='review' AND updated_at>=?", (project_id, since)).fetchone()[0]
+    doing = conn.execute("SELECT id,name,module_id,owner_role,updated_at FROM tasks WHERE project_id=? AND status='doing'", (project_id,)).fetchall()
+    todo = conn.execute("SELECT COUNT(*) FROM tasks WHERE project_id=? AND status='todo'", (project_id,)).fetchone()[0]
+    # 卡点：doing 超过 6h 未更新
+    stuck = []
+    for t in doing:
+        try:
+            if (now - datetime.fromisoformat(t["updated_at"])).total_seconds() > 6 * 3600:
+                stuck.append(t["name"])
+        except Exception:
+            pass
+    # 近期失败经验（疗效归因素材）
+    recent_fail = conn.execute(
+        "SELECT scenario,lesson FROM experiences WHERE project_id=? AND category='failure' ORDER BY ts DESC LIMIT 3",
+        (project_id,)).fetchall()
+    conn.close()
+    # 元神主动建议关注
+    focus = []
+    if stuck:
+        focus.append(f"有 {len(stuck)} 个进行中任务疑似卡住（>6h 无更新）：{'、'.join(stuck[:3])}，建议优先排查。")
+    if review_tasks:
+        focus.append(f"{review_tasks} 个任务待复核（验收未通过），需决策重做或放宽标准。")
+    if todo:
+        focus.append(f"仍有 {todo} 个待办未启动。")
+    # LLM 生成晨报（失败/离线降级为模板）
+    brief_prompt = (f"项目：{proj['name']}。\n"
+                    f"自 {since} 以来：新增任务 {new_tasks}、完成 {done_tasks}、转复核 {review_tasks}。\n"
+                    f"当前：进行中 {len(doing)}、待办 {todo}。\n"
+                    f"卡点：{'、'.join(stuck) if stuck else '无'}。\n"
+                    f"近期失败经验：{'; '.join(e['lesson'] for e in recent_fail) if recent_fail else '无'}。\n"
+                    f"请给出一份「今日晨报」：3-5 句，先现状概览，再给元神主动建议关注（聚焦最关键 1-2 件事）。")
+    try:
+        brief = await _chat_with_tools("__meta__", [{"role": "user", "content": brief_prompt}],
+                                       "你是分身产品的「元神」，负责团队总管。用中文、简洁、actionable 的口吻写晨报（3-5 句）。")
+        if brief.startswith("[分身·离线]") or brief.startswith("[分身·降级]"):
+            raise RuntimeError("offline")
+    except Exception:
+        brief = (f"【{proj['name']} 今日晨报】新增 {new_tasks} · 完成 {done_tasks} · 待复核 {review_tasks}；"
+                 f"进行中 {len(doing)} · 待办 {todo}。" + (" " + " ".join(focus) if focus else " 状态平稳，按计划推进即可。"))
+    set_setting(last_key, now.isoformat())
+    return {"ok": True, "project": proj["name"], "since": since,
+            "stats": {"new": new_tasks, "done": done_tasks, "review": review_tasks,
+                      "doing": len(doing), "todo": todo, "stuck": stuck},
+            "focus": focus, "brief": brief}
 
 
 @app.post("/api/autopilot/set")
