@@ -819,7 +819,9 @@
             <button class="btn sm" onclick="loadExperiences('success')">只看成功</button>
             <button class="btn sm" onclick="loadExperiences('failure')">只看失败</button>
             <button class="btn sm" onclick="loadExperiences('')">全部</button>
+            <button class="btn sm" onclick="loadAttribution()">疗效归因</button>
           </div>
+          <div id="attrPanel" class="card" style="display:none;margin:8px 0;padding:12px;font-size:12px"></div>
           <div id="expList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
           <!-- 经验编辑弹窗 -->
           <div class="mask" id="expMask" style="display:none">
@@ -2861,6 +2863,9 @@ async function loadExperiences(cat){
       ${e.attempts?`<div class="desc"><b>尝试</b>：${esc(e.attempts)}</div>`:''}
       ${e.outcome?`<div class="desc"><b>效果</b>：${esc(e.outcome)}</div>`:''}
       ${e.lesson?`<div class="desc" style="color:var(--meta-700)"><b>教训</b>：${esc(e.lesson)}</div>`:''}
+      <div class="rl" style="margin-top:6px">
+        权重 <b>${Math.round((e.weight||0)*100)}%</b> · 信任 <b>${Math.round((e.trust_score||0)*100)}%</b> · 复用 ${e.frequency||0}${e.persistent?' · 📌持久':''}${e.eliminated?' · 🗑已淘汰':''}
+      </div>
       <div style="display:flex;gap:6px;margin-top:10px">
         <button class="btn sm" onclick="openExpEdit(${e.id})">编辑</button>
         <button class="btn sm ghost" onclick="if(confirm('删除该经验？'))deleteExp(${e.id})">删除</button>
@@ -2874,6 +2879,21 @@ async function distillExperiences(btn){
     toast(j.extracted? `✅ 提炼 ${j.extracted} 条经验：\n${(j.items||[]).join('\n')}` : '没发现新的成功/失败案例');
     loadExperiences('');
   });
+}
+async function loadAttribution(){
+  const p=document.getElementById('attrPanel');
+  try{
+    const j=await apiJson('/api/meta/attribution');
+    const list=(j.attribution||[]);
+    if(!list.length){ p.style.display='block'; p.innerHTML='<b>疗效归因</b><div style="color:var(--gray-400);margin-top:6px">暂无聚合数据，经验库为空。</div>'; return; }
+    p.style.display='block';
+    p.innerHTML='<b>疗效归因（类脑自进化第⑤环 · 5 维权重聚合）</b>'+
+      list.map(a=>`<div style="margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:8px">
+        <div style="font-weight:600">${esc(a.name)} <span style="color:var(--gray-400);font-weight:400">· 样本 ${a.samples}</span></div>
+        <div class="rl" style="margin-top:4px">综合权重 <b>${Math.round((a.weight||0)*100)}%</b> · 信任度 <b>${Math.round((a.trust_score||0)*100)}%</b> · 相关性 ${Math.round((a.relevance||0)*100)}% · 频度 ${Math.round((a.frequency||0)*100)}%</div>
+      </div>`).join('')+
+      '<div style="color:var(--gray-400);margin-top:8px;font-size:11px">权重低/信任度低的类别，元神会自动给成员加「疗效归因补强」并优先补技能。</div>';
+  }catch(e){ p.style.display='block'; p.innerHTML='加载失败：'+e; }
 }
 function openExpEdit(id){
   const e = id!==undefined ? experiences.find(x=>x.id===id) : null;
@@ -3120,12 +3140,12 @@ async function loadMarket(){
       </div>`).join('');
   }catch(e){ el.textContent='加载失败：'+errText(e); }
 }
-function marketOpen(pid){ window.open('/p/'+pid,'_blank'); fetch('/api/market/visit/'+pid,{method:'POST'}); loadMarket(); }
+function marketOpen(pid){ window.open('/p/'+pid,'_blank'); apiJson('/api/market/visit/'+pid,{method:'POST'}).catch(()=>{}); loadMarket(); }
 function marketCopyLink(pid){
   const url=location.origin+'/p/'+pid;
   (navigator.clipboard?navigator.clipboard.writeText(url):Promise.reject()).then(()=>toast('已复制产品链接','ok'))
     .catch(()=>{ prompt('产品链接（复制到浏览器）：', url); });
-  fetch('/api/market/visit/'+pid,{method:'POST'});
+  apiJson('/api/market/visit/'+pid,{method:'POST'}).catch(()=>{});
 }
 async function marketUnpublish(pid){
   if(!confirm('确认下架该产品？')) return;
@@ -3140,7 +3160,7 @@ async function loadFeedback(pid){
   box.style.display=show?'block':'none';
   if(!show) return;
   try{
-    const r=await fetch('/api/market/feedback/'+pid); const list=await r.json();
+    const list=await apiJson('/api/market/feedback/'+pid);
     if(!list.length){ box.innerHTML='<div style="color:var(--gray-400)">暂无反馈</div>'; return; }
     box.innerHTML=list.map(f=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:.5px solid var(--gray-200)">
       <div style="flex:1">${escapeHtml(f.text)} <span style="font-size:10px;color:var(--gray-400)">${escapeHtml((f.ts||'').slice(5,16).replace('T',' '))} · ${f.status==='done'?'已处理':'待处理'}</span></div>
@@ -3149,8 +3169,8 @@ async function loadFeedback(pid){
   }catch(e){ box.innerHTML='加载失败：'+errText(e); }
 }
 async function fbToBoard(fid){
-  try{ const r=await fetch('/api/market/feedback/'+fid+'/to-board',{method:'POST'});
-    const j=await r.json(); if(j.ok){ toast('✅ '+j.message,'ok'); loadMarket(); } else toast('❌ '+(j.error||''),'err');
+  try{ const j=await apiJson('/api/market/feedback/'+fid+'/to-board',{method:'POST'});
+    if(j.ok){ toast('✅ '+j.message,'ok'); loadMarket(); } else toast('❌ '+(j.error||''),'err');
   }catch(e){ toast('请求失败：'+errText(e)); }
 }
 async function genSeo(pid){
@@ -3364,7 +3384,10 @@ function renderSuffRing(sf){
   ring.style.background = `conic-gradient(#6d5bd0 ${pct*3.6}deg, #eee 0)`;
   document.getElementById('ckRingTxt').textContent = pct + '%';
   const lab = document.getElementById('ckSuffLabel');
-  if(lab){ lab.textContent = (sf.sufficient_dims||0)+'/'+(sf.total_dims||5)+' 维达标' + (sf.interview_total?(' · 访谈 '+(sf.interview_answered||0)+'/'+sf.interview_total):''); }
+  if(lab){
+    if(sf.empty){ lab.textContent = '元神还在了解你 · 去「了解我」或上传资料'; lab.style.color='var(--gray-400)'; }
+    else { lab.textContent = (sf.sufficient_dims||0)+'/'+(sf.total_dims||5)+' 维达标' + (sf.interview_total?(' · 访谈 '+(sf.interview_answered||0)+'/'+sf.interview_total):''); lab.style.color=''; }
+  }
   // 5 维置信度条
   let host = document.getElementById('ckSuffDims');
   if(!host){ host = document.createElement('div'); host.id='ckSuffDims'; host.style.cssText='font-size:10px;color:var(--gray-400);margin-top:4px';
