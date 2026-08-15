@@ -112,7 +112,9 @@ TOKEN_FILE = os.path.join(DB_DIR if _MEI else os.path.join(BASE, "..", "data"), 
 ALLOW_LAN = os.environ.get("FENSHEN_ALLOW_LAN") == "1"
 PORT = int(os.environ.get("FENSHEN_PORT", "8002"))
 COOKIE_NAME = "fenshen_token"
-# 无需令牌即可访问的接口（仅健康检查，供启动脚本探活）
+# 无需令牌即可访问的接口：健康检查 + 应用市场公开端点。
+# 市场反馈/访问统计是面向「扫码/链接访客」的公开能力（公开产品页 /p/{pid} 无 token 也可提交反馈），
+# 故保持公开；其滥用风险通过「限流 + 输入校验」（_rate_ok）收敛，而非强制本地令牌。
 PUBLIC_API = {"/api/health", "/api/market/feedback", "/api/market/visit"}
 
 
@@ -188,6 +190,30 @@ async def local_guard(request: Request, call_next):
             status_code=401,
         )
     return await call_next(request)
+
+
+# ── 公开端点限流（防刷/防注入放大）：滑动窗口，按客户端 IP 计数 ──
+_RL_BUCKET = {}
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for") or ""
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return (request.client.host if request.client else "unknown")
+
+
+def _rate_ok(key: str, limit: int, window: float) -> bool:
+    """滑动窗口限流：window 秒内最多 limit 次；True=放行。"""
+    import time as _t
+    now = _t.time()
+    buf = [t for t in _RL_BUCKET.get(key, []) if now - t < window]
+    if len(buf) >= limit:
+        _RL_BUCKET[key] = buf
+        return False
+    buf.append(now)
+    _RL_BUCKET[key] = buf
+    return True
 
 
 @app.exception_handler(json.JSONDecodeError)
@@ -748,7 +774,18 @@ def init_db():
             lesson TEXT DEFAULT '',
             project_id TEXT DEFAULT '',
             source TEXT DEFAULT '',
-            ts TEXT
+            ts TEXT,
+            -- 疗效归因（类脑自进化第⑤环）5 维权重 + 积累/淘汰标记
+            relevance REAL DEFAULT 0.5,
+            recency REAL DEFAULT 0.5,
+            frequency REAL DEFAULT 0.0,
+            explicit_feedback REAL DEFAULT 0.0,
+            trust_score REAL DEFAULT 0.5,
+            weight REAL DEFAULT 0.5,
+            last_used TEXT DEFAULT '',
+            neg_streak INTEGER DEFAULT 0,
+            persistent INTEGER DEFAULT 0,
+            eliminated INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS reviews (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1132,6 +1169,43 @@ def init_db():
                 cur.execute(f"ALTER TABLE model_usage ADD COLUMN {col} INTEGER DEFAULT 0")
     except Exception:
         pass
+    # ── 疗效归因（类脑自进化第⑤环）：experiences 补 5 维权重 + 淘汰列（老库兼容）──
+    try:
+        exp_cols = {r[1] for r in cur.execute("PRAGMA table_info(experiences)").fetchall()}
+        for col, ddl in (
+            ("relevance", "REAL DEFAULT 0.5"),
+            ("recency", "REAL DEFAULT 0.5"),
+            ("frequency", "REAL DEFAULT 0.0"),
+            ("explicit_feedback", "REAL DEFAULT 0.0"),
+            ("trust_score", "REAL DEFAULT 0.5"),
+            ("weight", "REAL DEFAULT 0.5"),
+            ("last_used", "TEXT DEFAULT ''"),
+            ("neg_streak", "INTEGER DEFAULT 0"),
+            ("persistent", "INTEGER DEFAULT 0"),
+            ("eliminated", "INTEGER DEFAULT 0"),
+        ):
+            if col not in exp_cols:
+                cur.execute(f"ALTER TABLE experiences ADD COLUMN {col} {ddl}")
+    except Exception:
+        pass
+    # ── 疗效归因权重聚合表（按 类别 聚合 outcome 信号，EMA 平滑）──
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS skill_attribution (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT UNIQUE,
+            name TEXT DEFAULT '',
+            kind TEXT DEFAULT 'category',
+            trust_score REAL DEFAULT 0.5,
+            relevance REAL DEFAULT 0.5,
+            recency REAL DEFAULT 0.5,
+            frequency REAL DEFAULT 0.0,
+            explicit_feedback REAL DEFAULT 0.0,
+            weight REAL DEFAULT 0.5,
+            samples INTEGER DEFAULT 0,
+            last_signal REAL DEFAULT 0,
+            updated_at TEXT DEFAULT ''
+        )"""
+    )
     conn.commit()
     conn.close()
 
@@ -1148,6 +1222,11 @@ async def _start_patrol():
     asyncio.create_task(_autonomy_loop())
     # v5.8 P2：初始化用户级 UI 设计规范目录（首次从内置副本复制）
     _ensure_design_specs()
+    # 疗效归因第⑤环：启动时跑一次全量权重维护，保证聚合表就绪
+    try:
+        _maintain_attribution()
+    except Exception:
+        pass
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -1292,9 +1371,12 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
 def _available_providers(agent_id: str):
     """收集该角色可用的 provider 候选链：自己的配置优先，其余已配置 Key 的按 FALLBACK_ORDER 顶上。
 
-    审查 #12：旧版这里最多只返回 1 个候选（自己的 key，或 DeepSeek secret 兜底），
-    FALLBACK_ORDER 从头到尾没人读——"多模型自动降级"这个宣传点在代码里根本不存在，
-    cross-check 交叉验证也变成了 deepseek 验 deepseek。现在真正把候选链建起来。
+    候选链已真正建起（审查 #12 的修复）：
+      ① 角色自有 key 永远第一；
+      ② 全库其他角色已配 Key 按 FALLBACK_ORDER 依次顶上（多模型自动降级真实可用）；
+      ③ 本地 Ollama 作最后兜底；
+      ④ DeepSeek secret 文件向后兼容兜底。
+    cross-check 交叉验证不再 deepseek 验 deepseek。
     """
     cands = []
     seen = set()
@@ -2066,8 +2148,11 @@ def market_list():
 
 
 @app.post("/api/market/visit/{pid}")
-async def market_visit(pid: str):
-    """访问计数（市场链接被打开时调用）。"""
+async def market_visit(pid: str, request: Request):
+    """访问计数（市场链接被打开时调用）。按客户端 IP 限流，防脚本刷量。"""
+    ip = _client_ip(request)
+    if not _rate_ok("visit:" + ip, 30, 60):
+        return JSONResponse(status_code=429, content={"ok": False, "error": "操作过于频繁，请稍后再试"})
     conn = get_db()
     conn.execute("UPDATE projects SET visit_count=visit_count+1 WHERE id=? AND published=1", (pid,))
     conn.commit()
@@ -2171,7 +2256,10 @@ async def deploy_project(pid: str, req: Request):
 # ── v5.3 运营中心：公开反馈收集 → 一键转看板 + SEO 文案 ─────────
 @app.post("/api/market/feedback")
 async def market_feedback(req: Request):
-    """公开产品反馈（无需 token，产品页内嵌表单调用；简单限流）。"""
+    """公开产品反馈（无需 token，产品页内嵌表单调用；按 IP + 按产品双重限流）。"""
+    ip = _client_ip(req)
+    if not _rate_ok("fb:" + ip, 10, 60):
+        return {"ok": False, "error": "提交太频繁，请稍后再试"}
     data = await req.json()
     pid = (data.get("product_id") or "").strip()
     text = (data.get("text") or "").strip()[:500]
@@ -2182,7 +2270,7 @@ async def market_feedback(req: Request):
     if not row:
         conn.close()
         return {"ok": False, "error": "产品不存在或已下架"}
-    # 简单防刷：同一产品 10 秒内最多 3 条
+    # 防刷：同一产品 10 秒内最多 3 条（叠加按 IP 限流）
     n = conn.execute(
         "SELECT COUNT(*) c FROM market_feedback WHERE product_id=? AND ts>?",
         (pid, (datetime.now() - timedelta(seconds=10)).isoformat())).fetchone()["c"]
@@ -5137,6 +5225,23 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             _ds = _load_design_spec(ds_id)
             if _ds:
                 role_sys_ctx += "\n\n" + _design_spec_prompt(_ds)
+        # 疗效归因第⑤环：召回与任务最相关的经验（按 5 维权重排序），注入角色执行上下文
+        try:
+            rel_exp = _recall_experiences(f"{task_name} {detail}", limit=3)
+            if rel_exp:
+                exp_lines = [
+                    f"- （权重{round(e.get('weight', 0), 2)}）{e.get('scenario', '')}：{e.get('lesson', '')}"
+                    for e in rel_exp if e.get("lesson")
+                ]
+                if exp_lines:
+                    role_sys_ctx += "\n\n【相关经验（按疗效权重召回，优先复用高信任经验）】\n" + "\n".join(exp_lines)
+                    for e in rel_exp:
+                        try:
+                            _record_experience_use(e["id"])  # 标记复用：frequency/last_used 演化权重
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         role_hist = [
             {"role": "system", "content": role_sys_ctx},
             {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
@@ -6258,12 +6363,13 @@ async def create_experience(req: Request):
     if not scenario:
         return {"ok": False, "error": "场景不能为空"}
     conn = get_db()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO experiences (category,scenario,goal,attempts,outcome,lesson,project_id,source,ts) VALUES (?,?,?,?,?,?,?,?,?)",
         (data.get("category", "success"), scenario, data.get("goal", ""), data.get("attempts", ""),
          data.get("outcome", ""), data.get("lesson", ""), data.get("project_id", ""),
          data.get("source", "manual"), datetime.now().isoformat()),
     )
+    _refresh_experience_weights(conn, cur.lastrowid)  # 疗效归因：新经验初始化 5 维权重
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -6278,6 +6384,7 @@ async def update_experience(eid: int, req: Request):
         (data.get("category", "success"), data.get("scenario", ""), data.get("goal", ""),
          data.get("attempts", ""), data.get("outcome", ""), data.get("lesson", ""), eid),
     )
+    _refresh_experience_weights(conn, eid)  # 疗效归因：outcome 变化重算权重
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -6289,6 +6396,225 @@ def delete_experience(eid: int):
     conn.execute("DELETE FROM experiences WHERE id=?", (eid,))
     conn.commit()
     conn.close()
+    return {"ok": True}
+
+
+# ───────────────────────────────────────────────────────────────
+# 疗效归因（类脑自进化第⑤环）
+# 信号 → 5 维权重（relevance/recency/frequency/explicit_feedback/trust_score，EMA 平滑）
+#      → 综合 weight 驱动召回优先级 → 累积/淘汰 → 聚合喂回成员自动升级
+# 设计真源：桌面元神/EXPERIENCES.md + WORKFLOW「流程六」EchoMind RL 蓝图
+# ───────────────── Privat ────────────────
+_ATTR_W = {"relevance": 0.25, "recency": 0.20, "frequency": 0.15,
+           "explicit_feedback": 0.15, "trust_score": 0.25}
+_LAST_ATTR_MAINTAIN = 0.0  # 模块级：上次全量维护时间戳，避免召回时频繁重算
+
+
+def _refresh_experience_weights(conn, eid):
+    """按当前存储信号重算单条经验的 5 维权重 + 综合 weight。
+    trust_score / explicit_feedback 以存储的 EMA 累计值为准（不被 outcome 文本覆盖），
+    保证 _record_experience_use 的增量学习可持续；relevance/recency/frequency 由信号重算（幂等）。
+    """
+    row = conn.execute(
+        "SELECT outcome,last_used,ts,frequency,trust_score,explicit_feedback,relevance "
+        "FROM experiences WHERE id=?", (eid,)).fetchone()
+    if not row:
+        return
+    d = dict(row)
+    now = datetime.now()
+    anchor = d.get("last_used") or d.get("ts") or now.isoformat()
+    try:
+        dt = datetime.fromisoformat(anchor)
+    except Exception:
+        dt = now
+    age_days = max(0, (now - dt).total_seconds() / 86400.0)
+    recency = round(max(0.0, 1.0 - age_days / 30.0), 3)  # 30 天半衰
+    outcome = (d.get("outcome") or "").lower()
+    pos = any(k in outcome for k in ("成功", "达标", "完成", "有效", "解决", "✅", "ok", "pass", "win"))
+    neg = any(k in outcome for k in ("失败", "踩坑", "报错", "无效", "超时", "❌", "fail", "error", "stuck"))
+    if pos and not neg:
+        rel = 0.8
+    elif neg and not pos:
+        rel = 0.2
+    else:
+        rel = round(d.get("relevance") or 0.5, 3)
+    freq_raw = d.get("frequency") or 0          # 原始复用计数（勿覆盖）
+    freq = min(1.0, freq_raw / 10.0)            # 归一化仅用于权重
+    trust = d.get("trust_score") if d.get("trust_score") is not None else 0.5
+    ef = d.get("explicit_feedback") if d.get("explicit_feedback") is not None else 0.0
+    weight = (_ATTR_W["relevance"] * rel + _ATTR_W["recency"] * recency +
+              _ATTR_W["frequency"] * freq + _ATTR_W["explicit_feedback"] * max(0.0, ef) +
+              _ATTR_W["trust_score"] * trust)
+    weight = round(max(0.0, min(1.0, weight)), 3)
+    # 注意：frequency 为原始复用次数，由 _record_experience_use 维护，此处只重算权重不回写
+    conn.execute(
+        "UPDATE experiences SET relevance=?,recency=?,explicit_feedback=?,trust_score=?,weight=? WHERE id=?",
+        (round(rel, 3), recency, round(ef, 3), round(trust, 3), weight, eid))
+
+
+def _record_experience_use(eid, feedback=None):
+    """经验被召回/使用：frequency+1、last_used=now（EMA 增量）；可带一次显式反馈调整 trust/ef。"""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT frequency,last_used,trust_score,explicit_feedback,neg_streak,persistent,eliminated "
+            "FROM experiences WHERE id=?", (eid,)).fetchone()
+        if not row:
+            return
+        d = dict(row)
+        freq = (d.get("frequency") or 0) + 1
+        last = datetime.now().isoformat()
+        trust = d.get("trust_score") if d.get("trust_score") is not None else 0.5
+        ef = d.get("explicit_feedback") if d.get("explicit_feedback") is not None else 0.0
+        neg = d.get("neg_streak") or 0
+        persistent = d.get("persistent") or 0
+        if feedback == "positive" or feedback is True:
+            trust = round(min(1.0, trust + 0.1), 3)
+            ef = round(min(1.0, ef + 0.2), 3)
+            neg = 0
+        elif feedback == "negative" or feedback is False:
+            trust = round(max(0.0, trust - 0.1), 3)
+            ef = round(max(-1.0, ef - 0.2), 3)
+            neg += 1
+        # 累积→持久 / 连续负反馈→淘汰（学会遗忘该忘记的事，立即生效）
+        if (ef >= 3.0) or (freq >= 10):
+            persistent = 1
+        eliminated = 1 if neg >= 2 else (d.get("eliminated") or 0)
+        conn.execute(
+            "UPDATE experiences SET frequency=?,last_used=?,trust_score=?,explicit_feedback=?,neg_streak=?,persistent=?,eliminated=? WHERE id=?",
+            (freq, last, trust, ef, neg, persistent, eliminated, eid))
+        _refresh_experience_weights(conn, eid)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _maintain_attribution():
+    """定时维护：recency 衰减、累积→持久、连续负反馈/断连→淘汰、聚合到 skill_attribution。"""
+    global _LAST_ATTR_MAINTAIN
+    conn = get_db()
+    try:
+        now = datetime.now()
+        rows = conn.execute(
+            "SELECT id,category,last_used,ts,neg_streak,persistent,eliminated,frequency,explicit_feedback "
+            "FROM experiences WHERE eliminated=0").fetchall()
+        for r in rows:
+            d = dict(r)
+            anchor = d["last_used"] or d["ts"] or now.isoformat()
+            try:
+                dt = datetime.fromisoformat(anchor)
+            except Exception:
+                dt = now
+            age_days = (now - dt).total_seconds() / 86400.0
+            neg = d["neg_streak"] or 0
+            ef = d["explicit_feedback"] or 0.0
+            # 淘汰：连续 2 次负反馈 或 30 天未引（学会遗忘该忘记的事）
+            if (neg >= 2) or (age_days > 30):
+                conn.execute("UPDATE experiences SET eliminated=1 WHERE id=?", (d["id"],))
+                continue
+            # 累积→持久：显式正反馈累计≥3 或 被复用≥10 次（升持久）
+            if (ef >= 3.0) or ((d["frequency"] or 0) >= 10):
+                conn.execute("UPDATE experiences SET persistent=1 WHERE id=?", (d["id"],))
+            _refresh_experience_weights(conn, d["id"])
+        # 聚合到 skill_attribution（按 category 维度）
+        conn.execute("DELETE FROM skill_attribution")
+        for cat in ("success", "failure"):
+            sub = conn.execute(
+                "SELECT AVG(weight) w, AVG(trust_score) t, AVG(relevance) rel, AVG(recency) rec, "
+                "AVG(frequency) fr, AVG(explicit_feedback) ef, COUNT(*) n "
+                "FROM experiences WHERE category=? AND eliminated=0", (cat,)).fetchone()
+            if sub and sub["n"]:
+                conn.execute(
+                    "INSERT INTO skill_attribution "
+                    "(key,name,kind,trust_score,relevance,recency,frequency,explicit_feedback,weight,samples,last_signal,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ("cat:" + cat, ("成功经验" if cat == "success" else "失败教训"), "category",
+                     round(sub["t"] or 0.5, 3), round(sub["rel"] or 0.5, 3), round(sub["rec"] or 0.5, 3),
+                     round(min(1.0, (sub["fr"] or 0) / 10.0), 3), round(sub["ef"] or 0.0, 3),
+                     round(sub["w"] or 0.5, 3), sub["n"], 1, now.isoformat()))
+        conn.commit()
+        _LAST_ATTR_MAINTAIN = time.time()
+    finally:
+        conn.close()
+
+
+def _recall_experiences(scenario: str, limit: int = 5):
+    """特征驱动召回：按综合 weight 降序（非淘汰项）；场景关键词重叠额外加权 relevance。
+    超过 1 小时未全量维护则顺带跑一次 _maintain_attribution，保证 weight 不过期。"""
+    global _LAST_ATTR_MAINTAIN
+    if time.time() - _LAST_ATTR_MAINTAIN > 3600:
+        try:
+            _maintain_attribution()
+        except Exception:
+            pass
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM experiences WHERE eliminated=0 ORDER BY weight DESC LIMIT ?",
+            (limit * 3,)).fetchall()
+        scored = []
+        kw = set(re.findall(r"[\w\u4e00-\u9fff]{2,}", scenario or ""))
+        for r in rows:
+            d = dict(r)
+            rel = d.get("relevance") or 0.5
+            if kw:
+                sce = set(re.findall(r"[\w\u4e00-\u9fff]{2,}", (d.get("scenario", "") + d.get("goal", ""))))
+                ov = len(kw & sce) / max(1, len(kw))
+                rel = max(rel, min(1.0, rel + 0.4 * ov))
+            score = (d.get("weight") or 0.5) * 0.7 + rel * 0.3
+            d["_score"] = round(score, 3)
+            d["_relevance_boost"] = round(rel, 3)
+            scored.append(d)
+        scored.sort(key=lambda x: x["_score"], reverse=True)
+        return scored[:limit]
+    finally:
+        conn.close()
+
+
+@app.get("/api/experiences/recall")
+def experience_recall(q: str = "", limit: int = 5):
+    """特征驱动召回经验（疗效归因闭环：召回→标记使用→权重演化）。"""
+    items = _recall_experiences(q, limit)
+    return {"ok": True, "query": q, "count": len(items), "items": items}
+
+
+@app.post("/api/experiences/{eid}/signal")
+async def experience_signal(eid: int, req: Request):
+    """给一条经验打信号：use（被复用）/ positive / negative / outcome（更新结果文本并重算）。"""
+    data = await req.json()
+    kind = (data.get("kind") or "use")
+    if kind == "use":
+        _record_experience_use(eid)
+    elif kind in ("positive", "negative"):
+        _record_experience_use(eid, kind)
+    elif kind == "outcome":
+        conn = get_db()
+        conn.execute("UPDATE experiences SET outcome=?,last_used=? WHERE id=?",
+                     (str(data.get("outcome", ""))[:500], datetime.now().isoformat(), eid))
+        conn.commit()
+        conn.close()
+        _record_experience_use(eid)
+    else:
+        return {"ok": False, "error": "未知信号类型（use/positive/negative/outcome）"}
+    return {"ok": True}
+
+
+@app.get("/api/meta/attribution")
+def meta_attribution():
+    """疗效归因聚合视图（按类别的权重/信任度），供元神驾驶舱与成员升级参考。"""
+    try:
+        _maintain_attribution()
+    except Exception:
+        pass
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM skill_attribution ORDER BY weight DESC").fetchall()
+    conn.close()
+    return {"ok": True, "attribution": [dict(r) for r in rows]}
+
+
+@app.post("/api/meta/attribution/refresh")
+def meta_attribution_refresh():
+    _maintain_attribution()
     return {"ok": True}
 
 
@@ -6334,13 +6660,14 @@ async def distill_experiences(req: Request):
         if not scenario or scenario in existing or len(lesson) < 6:
             continue  # 没有教训的不算经验
         category = "failure" if it.get("category") == "failure" else "success"
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO experiences (category,scenario,goal,attempts,outcome,lesson,project_id,source,ts) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
             (category, scenario, (it.get("goal") or "")[:200], (it.get("attempts") or "")[:500],
              (it.get("outcome") or "")[:300], lesson[:500], META_PID, f"auto·{method}",
              datetime.now().isoformat()),
         )
+        _refresh_experience_weights(conn, cur.lastrowid)  # 疗效归因：蒸馏新经验初始化权重
         existing.add(scenario)
         created.append({"scenario": scenario, "category": category})
     conn.commit()
@@ -7800,7 +8127,21 @@ def _auto_upgrade_member(mid: str, reason_type: str = "manual", context: str = "
     for s in added:
         if s not in skills:
             skills.append(s)
-    note = f"自动升级[v{new_ver}]：{'、'.join(added)}" + (f"（诱因：{ctx[:60]}）" if ctx else "")
+    # 疗效归因第⑤环 → 第③环（成员进化）：该类经验信任度偏低时优先补强并标记
+    try:
+        ac = conn.execute(
+            "SELECT trust_score,weight,samples FROM skill_attribution WHERE key=?",
+            ("cat:" + ("failure" if reason_type == "fail" else "success"),)).fetchone()
+        if ac and ac["trust_score"] is not None and ac["trust_score"] < 0.4:
+            if "疗效归因补强" not in skills:
+                skills.append("疗效归因补强")
+            added.append("疗效归因补强")
+            note_suffix = f"；归因预警：该类经验信任度偏低({ac['trust_score']:.2f})，优先补强"
+        else:
+            note_suffix = ""
+    except Exception:
+        note_suffix = ""
+    note = f"自动升级[v{new_ver}]：{'、'.join(added)}" + (f"（诱因：{ctx[:60]}）" if ctx else "") + note_suffix
     evo.append({"v": new_ver, "at": now, "note": note, "type": reason_type, "added": added})
     if "【进化印记】" not in soul:
         soul = soul + ("\n【进化印记】" if soul.strip() else "") + note
@@ -7896,7 +8237,8 @@ def meta_state():
 @app.get("/api/meta/sufficiency")
 def meta_sufficiency():
     """蒸馏充足度：元神「懂你多少」。真实读取 user_model（来自访谈/上传资料/被动蒸馏）
-    与 meta_interview（已答问题数），5 维各自置信均值 ≥0.6 且条数≥2 即扎实。"""
+    与 meta_interview（已答问题数），5 维各自置信均值 ≥0.6 且条数≥2 即扎实。
+    空库/无访谈行也返回结构化默认（dims/overall/facts_total/empty/message），前端可降级渲染，不出现 NaN/None。"""
     try:
         from backend import meta_distill
         conn = get_db()
@@ -7921,13 +8263,22 @@ def meta_sufficiency():
                          "avg": avg, "count": cnt, "sufficient": sufficient})
         overall = round(sum(x["avg"] for x in dims) / len(dims), 2) if dims else 0.0
         suff_cnt = sum(1 for x in dims if x["sufficient"])
+        facts_total = sum(len(v) for v in per.values())
+        empty = (facts_total == 0 and len(asked) == 0)
         return {"ok": True, "dims": dims, "overall": overall,
                 "sufficient_dims": suff_cnt, "total_dims": len(dims),
                 "interview_answered": len(asked),
                 "interview_total": len(meta_distill.QUESTION_BANK),
-                "facts_total": sum(len(v) for v in per.values())}
+                "facts_total": facts_total,
+                "empty": empty,
+                "message": ("元神还在了解你：去「了解我」回答几个问题，或上传聊天记录/笔记让它更懂你。"
+                            if empty else "")}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        # 异常也降级为结构化默认，绝不返回 None（前端按 empty 渲染空态）
+        return {"ok": False, "error": str(e), "dims": [], "overall": 0.0,
+                "sufficient_dims": 0, "total_dims": 5, "facts_total": 0,
+                "interview_answered": 0, "interview_total": 0,
+                "empty": True, "message": "画像数据读取异常，已降级显示。"}
 
 
 # ── v5.8 元神个人化（v6.1 全面自检补齐：前端早已引用，审计分支曾缺失后端实现）──
