@@ -1732,7 +1732,13 @@ DANGER_RE = re.compile(
     r">\s*(/etc/|/System/|~/\.ssh/|/usr/)|"           # 覆写系统/密钥路径
     r"\bmv\b[^|;&]*\s+/(etc|usr|bin|System)\b|"
     r"\bgit\b\s+push\b[^|;&]*--force|"
-    r"\bdefaults\s+delete\b|\bcrontab\b\s+-r)",
+    r"\bdefaults\s+delete\b|\bcrontab\b\s+-r|"
+    r"(find|fd)\b[^|;&]*-delete|"                       # find/fd 删除变体
+    r"rsync\b[^|;&]*--delete|"                          # rsync 删目标
+    r"(shutil\.rmtree|os\.remove|os\.rmdir|os\.unlink|\.unlink\(|\.rmdir\()|"  # python 删除
+    r"truncate\b|git\b[^|;&]*(clean\s+-[fdx]|reset\s+--hard)|"  # 截断/ git 破坏性
+    r"mv\b[^|;&]*\s+/dev/null|"                         # 移入黑洞
+    r"(shred|wipefs)\b)",                               # 擦除/清文件系统
     re.IGNORECASE,
 )
 
@@ -3187,11 +3193,12 @@ async def exec_command(req: Request):
     confirm = bool(data.get("confirm", False))
     if not command:
         return {"ok": False, "error": "命令为空"}
-    is_danger = bool(DANGER_RE.search(command) or SENSITIVE_PATH_RE.search(command))
-    # 审查 V02：旧逻辑的 confirm 由客户端自带，请求里加一句 "confirm":true 即可解除全部护栏。
-    # v4.0 起，危险命令一律由服务端弹出系统对话框，等真人点击——客户端说什么都不算数。
+    # P1-3 修复：与元神工具路径(_run_meta_tool)统一走 needs_approval 闸门，
+    # 尊重「设置→确认策略」(all/danger/off)，不再只看本地黑名单、且不受客户端 confirm 绕过。
+    # 审查 V02：确认框由服务端弹系统对话框，客户端说啥都不算数（fail-closed）。
+    is_danger = bool(DANGER_RE.search(command) or SENSITIVE_PATH_RE.search(command))  # 仅作审计标记，不再用于拦截
     approved_by = "user-panel"
-    if is_danger:
+    if needs_approval(command):
         ok_approved, why = await human_approve(
             "分身请求执行危险命令",
             f"来源：{agent_id}\n命令：{command}\n\n这条命令可能造成不可逆后果。确认要执行吗？",
@@ -4871,7 +4878,7 @@ def get_dispatch_job(job_id: str):
     return d
 
 
-async def _execute_project_chat(pid: str, user_text: str) -> dict:
+async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = None) -> dict:
     """v4.2 自主闭环：项目群聊执行链（API 与团队自主推进循环共用）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
     # v5.9：Trajectory run_id（本次派单/对话的唯一回放标识）
@@ -4998,8 +5005,9 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
     round_no = 1
     pending_actions = actions[:max_actions]
 
-    async def _run_one(act):
-        """执行单个 action：建卡 → doing → 角色执行 → 落库 → 对照标准判定。并发安全（各自独立连接）。"""
+    async def _run_one(act, reuse_task_id: str = None):
+        """执行单个 action：建卡 → doing → 角色执行 → 落库 → 对照标准判定。并发安全（各自独立连接）。
+        reuse_task_id：autopilot 推进预存 todo 看板卡时传入既有卡 id，复用该卡而非新建（修复看板↔执行脱节）。"""
         role = act.get("role", "backend")
         if role not in role_systems:
             role = "backend"
@@ -5010,30 +5018,43 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
         _trajectory_event(run_id, pid, "role_start", role_names.get(role, role),
                           f"▶️ 派单：{task_name}（{role_names.get(role, role)}）", {"detail": detail[:300]})
 
-        # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
-        task_id = f"tk{time.time_ns()}"
         conn = get_db()
         mod = mods[0] if mods else None
         mod_id = mod["id"] if mod else ""
         topic_id = ""
-        if mod_id:
-            trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
-            if trow:
-                topic_id = trow["id"]
-            else:
-                topic_id = f"tp{time.time_ns()}"
-                conn.execute(
-                    "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
-                )
-        conn.execute(
-            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat(), datetime.now().isoformat()),
-        )
-        conn.commit()
-        conn.close()
+        if reuse_task_id:
+            # P1-2 修复：autopilot 推进预存 todo 看板卡时复用既有卡，而非每张 action 新建一张，
+            # 避免「预存卡永远停在 todo + 每轮派单堆新卡」导致看板与实际执行脱节。
+            task_id = reuse_task_id
+            conn.execute(
+                "UPDATE tasks SET owner_role=?, status='doing', "
+                "done_criteria=COALESCE(NULLIF(?, ''), done_criteria), updated_at=? "
+                "WHERE id=?",
+                (role, done_criteria, datetime.now().isoformat(), task_id),
+            )
+            conn.commit()
+            conn.close()
+        else:
+            # 建任务卡片（todo 状态），并绑定该模块的真实话题（修复看板↔群聊断链）
+            task_id = f"tk{time.time_ns()}"
+            if mod_id:
+                trow = conn.execute("SELECT id FROM topics WHERE project_id=? AND module_id=? LIMIT 1", (pid, mod_id)).fetchone()
+                if trow:
+                    topic_id = trow["id"]
+                else:
+                    topic_id = f"tp{time.time_ns()}"
+                    conn.execute(
+                        "INSERT INTO topics (id,project_id,module_id,name,agents,status,created_at) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
+                    )
+            conn.execute(
+                "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat(), datetime.now().isoformat()),
+            )
+            conn.commit()
+            conn.close()
 
         # v4.0：开工即流转到「进行中」，看板实时可见
         _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
@@ -5098,13 +5119,19 @@ async def _execute_project_chat(pid: str, user_text: str) -> dict:
 
     _sem = asyncio.Semaphore(3)  # v4.2 并行化：PAD 协议 ≤3 并发
 
-    async def _limited(act):
+    async def _limited(act, reuse_task_id=None):
         async with _sem:
-            return await _run_one(act)
+            return await _run_one(act, reuse_task_id)
 
+    _reuse_consumed = False
     while pending_actions and round_no <= MAX_ROUNDS:
         # v4.2 并行化：本轮 actions 并发执行（≤3），多 action 派单显著提速
-        role_results.extend(await asyncio.gather(*[_limited(a) for a in pending_actions]))
+        # P1-2：本轮首个 action 复用 autopilot 传入的预存看板卡，其余 action 仍各自建新卡
+        role_results.extend(await asyncio.gather(*[
+            _limited(a, reuse_task_id if (not _reuse_consumed and i == 0) else None)
+            for i, a in enumerate(pending_actions)
+        ]))
+        _reuse_consumed = True
 
         # ── 本轮判定：未达标 → 元神重新规划补充动作（autonomy，最多 MAX_ROUNDS 轮）──
         unmet = [r for r in role_results if r["round"] == round_no and r["status"] != "done"]
@@ -7014,7 +7041,7 @@ async def _dispatch_and_track(pid: str, t: dict, prompt: str, assigned_mid: str 
     """并发派单包装：执行完成后回收并发槽并立即唤醒调度器（毫秒级补位）。
     P1-3 升级闭环：按负责成员累计连续失败，达阈值(3)元神自动加技能+升级，并在群聊留痕。"""
     try:
-        await _execute_project_chat(pid, prompt)
+        await _execute_project_chat(pid, prompt, reuse_task_id=(t.get("id") if t else None))
         AUTONOMY_STATE["fail_streak"] = 0
         AUTONOMY_STATE["last_success_ts"] = time.time()
         if assigned_mid:
