@@ -22,6 +22,29 @@
 </script>
 <style>
   .btext{white-space:pre-wrap;word-break:break-word;}
+  /* 元神自动驾驶汇报结构化卡片 */
+  .report-card{background:linear-gradient(180deg,#fbfaff,#f4f1ff);border:1px solid #e3defb;border-radius:14px;padding:12px 14px;max-width:560px;font-size:13px;color:#2a2740;box-shadow:0 2px 10px rgba(83,74,183,.06)}
+  .report-card .rc-h{display:flex;align-items:center;gap:6px;font-weight:700;color:#4b3fa8;margin-bottom:8px;font-size:13px}
+  .report-card .rc-h .rc-ts{margin-left:auto;font-weight:400;font-size:11px;color:#9a93c4}
+  .report-card .rc-sec{margin:7px 0}
+  .report-card .rc-sec .rc-t{font-size:11px;color:#8a83b8;font-weight:600;margin-bottom:3px;letter-spacing:.3px}
+  .report-card .rc-prog{display:flex;flex-direction:column;gap:4px}
+  .report-card .rc-prog .rc-row{display:flex;align-items:center;gap:8px;font-size:12px}
+  .report-card .rc-bar{flex:1;height:6px;border-radius:4px;background:#e7e3f7;overflow:hidden;min-width:60px}
+  .report-card .rc-bar i{display:block;height:100%;background:linear-gradient(90deg,#6d5bd0,#9b8bff);border-radius:4px}
+  .report-card .rc-row .rc-lab{min-width:64px;color:#4a466a}
+  .report-card .rc-row .rc-pct{width:42px;text-align:right;color:#6d5bd0;font-variant-numeric:tabular-nums}
+  .report-card .rc-chip{display:inline-block;padding:2px 8px;border-radius:10px;background:#efecfb;color:#5b53a8;font-size:11px;margin:2px 4px 2px 0}
+  .report-card .rc-ready{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .report-card .rc-ready .st{padding:2px 8px;border-radius:10px;font-size:11px;border:1px solid #e3defb}
+  .report-card .rc-ready .st.done{background:#e7f9ef;color:#1e9e5a;border-color:#bfe9cf}
+  .report-card .rc-ready .st.adv{background:#fff5e6;color:#c47f12;border-color:#f6e0b3}
+  .report-card .rc-ready .st.idle{background:#f2f2f5;color:#8e8e93;border-color:#e3e3e8}
+  .report-card .rc-ready .go{background:#e7f9ef;color:#1e9e5a;border:1px solid #bfe9cf;padding:2px 10px;border-radius:10px;font-weight:700}
+  .report-card .rc-actions{color:#4a466a}
+  .report-card .rc-dec{background:#fdecec;color:#c0392b;border:1px solid #f6cfcf;border-radius:8px;padding:5px 8px;font-size:12px;margin-top:3px}
+  .report-card .rc-hint{background:#fff7e6;color:#9a6b12;border:1px solid #f6e6c2;border-radius:8px;padding:5px 8px;font-size:12px;margin-top:3px}
+  .report-card .rc-foot{margin-top:8px;font-size:11px;color:#a8a2cf;border-top:1px dashed #e3defb;padding-top:6px}
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
     /* Layer1 原语 */
@@ -1243,11 +1266,46 @@ function streamText(row){
   sp.textContent=''; let i=0;
   const t=setInterval(()=>{ i+=2; sp.textContent=full.slice(0,i); if(i>=full.length){ sp.textContent=full; clearInterval(t); } },16);
 }
+function renderReportCard(m){
+  // 优先结构化载荷；缺则回退纯文本（兼容历史消息）
+  let r=null;
+  try { if(m.report_json) r=JSON.parse(m.report_json); } catch(e){ r=null; }
+  if(!r){
+    return `<div class="bubble meta"><div class="sender">元神</div><span class="tag 自动驾驶汇报">自动驾驶汇报</span><br><span class="btext">${escapeHtml(m.text||'')}</span></div>`;
+  }
+  const rd=r.readiness||{};
+  const stClass=s=> s==='done'?'done' : (s==='推进中'?'adv':'idle');
+  const prog=(r.progress||[]).map(p=>`<div class="rc-row"><span class="rc-lab">${escapeHtml(p.track||'')}</span>`
+    +`<span class="rc-bar"><i style="width:${p.pct||0}%"></i></span>`
+    +`<span class="rc-pct">${p.pct||0}%</span>`
+    +`<span style="color:#8e8e93;font-size:11px">${p.done||0}/${p.total||0}·进行 ${p.doing||0}·待 ${p.todo||0}</span></div>`).join('');
+  const crit=(r.critical_path||[]).map(c=>`<span class="rc-chip">${escapeHtml(c)}</span>`).join(' → ');
+  const ready=`<span class="st ${stClass(rd.infra)}">基础设施 ${escapeHtml(rd.infra||'-')}</span>`
+    +`<span class="st ${stClass(rd.release)}">发布 ${escapeHtml(rd.release||'-')}</span>`
+    +`<span class="st ${stClass(rd.ops)}">运营 ${escapeHtml(rd.ops||'-')}</span>`
+    +(rd.operational?`<span class="go">✅ 可运营</span>`:'');
+  const acts=(r.actions||[]).map(a=>`<span class="rc-chip">${escapeHtml(a)}</span>`).join('');
+  const decs=(r.decisions||[]).map(d=>`<div class="rc-dec">⚠ ${escapeHtml(d)}</div>`).join('');
+  const hints=(r.hints||[]).map(h=>`<div class="rc-hint">💡 ${escapeHtml(h)}</div>`).join('');
+  return `<div class="bubble meta"><div class="report-card">`
+    +`<div class="rc-h">🚀 元神自动驾驶简报<span class="rc-ts">${escapeHtml((m.ts||'').slice(0,16).replace('T',' '))}</span></div>`
+    +(prog?`<div class="rc-sec"><div class="rc-t">进度</div><div class="rc-prog">${prog}</div></div>`:'')
+    +(crit?`<div class="rc-sec"><div class="rc-t">关键路径</div>${crit}</div>`:'')
+    +`<div class="rc-sec"><div class="rc-t">全链路就绪</div><div class="rc-ready">${ready}</div></div>`
+    +(acts?`<div class="rc-sec"><div class="rc-t">本周期元神动作</div><div class="rc-actions">${acts}</div></div>`:'')
+    +(decs?`<div class="rc-sec"><div class="rc-t">需你决策</div>${decs}</div>`:'')
+    +(hints?`<div class="rc-sec">${hints}</div>`:'')
+    +`<div class="rc-foot">元神将继续自主推进，你随时可 @元神 干预。</div>`
+    +`</div></div>`;
+}
 function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerHTML='';
   if(!msgs.length){ b.innerHTML='<div class="empty"><div class="ic">💬</div><div>还没有消息，发送第一条指令开始工作</div></div>'; b.scrollTop=b.scrollHeight; return; }
   let lastRow=null;
   msgs.forEach(m=>{ const row=document.createElement('div');
-    if(m.kind==='sys'){ row.className='sysmsg'; row.innerHTML=`<span>${escapeHtml(m.text)}</span>`; }
+    if(m.kind==='sys'){
+      if(m.tag==='自动驾驶汇报'){ row.className='msg left'; row.innerHTML=renderReportCard(m); }
+      else { row.className='sysmsg'; row.innerHTML=`<span>${escapeHtml(m.text)}</span>`; }
+    }
     else { row.className='msg '+(m.kind==='self'?'right':'left');
       const cls=escapeHtml(m.kind==='meta'?'meta':m.kind); const tag=m.tag?`<span class="tag ${escapeHtml(m.tag)}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
       let acts=''; if(m.kind==='meta') acts=`<div class="acts"><button class="btn sm" onclick="metaCheck(this)">检查产出</button><button class="btn sm ghost" onclick="metaStop()">中止</button><button class="btn sm" onclick="metaReassign(this)">重派</button></div>`;
@@ -3287,6 +3345,8 @@ async function loadCockpitReport(pid){
     const r = await apiJson('/api/projects/'+pid+'/report/latest');
     const m = r.report;
     if(!m){ el.innerHTML = '<span style="color:var(--gray-400)">元神尚未发布汇报。点「📊 元神汇报」生成一份进度简报。</span>'; return; }
+    let rep=null; try{ if(m.report_json) rep=JSON.parse(m.report_json); }catch(e){ rep=null; }
+    if(rep){ el.innerHTML = renderReportCard(m); return; }
     el.innerHTML = '<div style="color:var(--gray-400);margin-bottom:3px">📊 元神最新汇报 · '+escapeHtml((m.ts||'').slice(0,16))+'</div>'+
                    '<div style="white-space:pre-wrap;line-height:1.5;color:var(--gray-700)">'+escapeHtml(m.text||'')+'</div>';
   }catch(e){ el.innerHTML=''; }

@@ -980,6 +980,10 @@ def init_db():
     cur.execute("UPDATE projects SET owner_id=? WHERE owner_id IS NULL OR owner_id=''", (_owner,))
     cur.execute("UPDATE modules SET owner_id=(SELECT p.owner_id FROM projects p WHERE p.id=modules.project_id) WHERE owner_id IS NULL OR owner_id=''")
     cur.execute("UPDATE tasks SET owner_id=(SELECT p.owner_id FROM projects p WHERE p.id=tasks.project_id) WHERE owner_id IS NULL OR owner_id=''")
+    # ── v6.2 P3：messages 增加 report_json（元神自动驾驶汇报结构化卡片载荷）──
+    mscols = {r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()}
+    if "report_json" not in mscols:
+        cur.execute("ALTER TABLE messages ADD COLUMN report_json TEXT DEFAULT ''")
     # ── v6.2 短信验证码表（频率限制 + 一次性消费）──
     cur.execute(
         """CREATE TABLE IF NOT EXISTS sms_codes (
@@ -7187,10 +7191,36 @@ def _meta_autopilot_report(pid: str, force: bool = False) -> dict:
             lines.append("【提示】" + "；".join(i.get("detail", "") for i in amber[:3]))
         lines.append("—— 元神将继续自主推进，你随时可 @元神 干预。")
         text = "\n".join(lines)
+        # 结构化载荷：供群聊/驾驶舱渲染卡片（不依赖纯文本解析）
+        report = {
+            "ts": now.isoformat(),
+            "product": p["name"],
+            "progress": [
+                {"track": label_map.get(tr, tr), "done": done, "total": len(cells),
+                 "pct": pct, "doing": doing, "todo": todo}
+                for tr, (done, doing, todo, pct, cells) in
+                ((tr, (sum(1 for t in cells if t.get("status") == "done"),
+                       sum(1 for t in cells if t.get("status") == "doing"),
+                       len(cells) - sum(1 for t in cells if t.get("status") == "done")
+                       - sum(1 for t in cells if t.get("status") == "doing"),
+                       round(sum(1 for t in cells if t.get("status") == "done") / len(cells) * 100),
+                       cells))
+                 for tr, cells in
+                 ((tr, [t for t in tasks if (t.get("track") or "web") == tr]) for tr in tracks)
+                 if cells)
+            ],
+            "critical_path": crit_mods[:6],
+            "readiness": {"infra": life.get("infra"), "release": life.get("release"),
+                          "ops": life.get("ops"), "operational": operational},
+            "actions": acts,
+            "decisions": [i.get("detail", "") for i in red[:3]],
+            "hints": [i.get("detail", "") for i in amber[:3]],
+        }
         conn = get_db()
         conn.execute(
-            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-            (pid, "元神", "sys", text, "自动驾驶汇报", now.isoformat()))
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts,report_json) VALUES (?,?,?,?,?,?,?)",
+            (pid, "元神", "sys", text, "自动驾驶汇报", now.isoformat(),
+             json.dumps(report, ensure_ascii=False)))
         conn.commit()
         conn.close()
         AUTONOMY_STATE.setdefault("report_ts", {})[pid] = time.time()
