@@ -641,6 +641,25 @@ async def _owner_guard(request: Request, call_next):
             _owner = row["owner_id"]
             if _uid and _owner not in (_uid, "local"):
                 return JSONResponse(status_code=403, content={"error": "无权访问该项目（归属权受限）"})
+    elif p.startswith("/api/members/"):
+        # v6.2 战队：成员接口经 member → project 解析归属权
+        parts = p.split("/")
+        if len(parts) >= 4 and parts[3]:
+            mid = parts[3]
+            conn = get_db()
+            mrow = conn.execute("SELECT project_id FROM agent_members WHERE id=?", (mid,)).fetchone()
+            conn.close()
+            if not mrow:
+                return JSONResponse(status_code=404, content={"error": "成员不存在"})
+            _pid = mrow["project_id"]
+            if _pid:
+                conn = get_db()
+                prow = conn.execute("SELECT owner_id FROM projects WHERE id=?", (_pid,)).fetchone()
+                conn.close()
+                if prow:
+                    _uid = _current_user_id(request)
+                    if _uid and prow["owner_id"] not in (_uid, "local"):
+                        return JSONResponse(status_code=403, content={"error": "无权访问该成员（归属权受限）"})
     return await call_next(request)
 
 
@@ -973,6 +992,41 @@ def init_db():
             day TEXT DEFAULT ''
         )"""
     )
+    # ── v6.2 元神战队：团队成员（agent_members）+ 经验进化（agent_experience）──
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS agent_members (
+            id TEXT PRIMARY KEY,
+            project_id TEXT DEFAULT '',
+            name TEXT DEFAULT '',
+            avatar TEXT DEFAULT '',
+            role_title TEXT DEFAULT '',
+            track TEXT DEFAULT 'web',
+            soul TEXT DEFAULT '',
+            rule TEXT DEFAULT '[]',
+            eng_spec TEXT DEFAULT '',
+            model_cfg TEXT DEFAULT '{}',
+            work_mode TEXT DEFAULT 'online',
+            work_hours TEXT DEFAULT '24h',
+            current_task TEXT DEFAULT '',
+            skills TEXT DEFAULT '[]',
+            experience INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            evo_tree TEXT DEFAULT '[]',
+            version INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT ''
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS agent_experience (
+            id TEXT PRIMARY KEY,
+            member_id TEXT DEFAULT '',
+            project_id TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            kind TEXT DEFAULT 'general',
+            created_at TEXT DEFAULT ''
+        )"""
+    )
     # users 增加恢复密钥哈希（脱离手机号的所有权证明）
     ucols = {r[1] for r in cur.execute("PRAGMA table_info(users)").fetchall()}
     if "recovery_key_hash" not in ucols:
@@ -985,6 +1039,7 @@ def init_db():
             ("backend", "后端工程师", "实现 API 与数据层", "python, fastapi, sql", "测试通过"),
             ("frontend", "前端工程师", "实现 H5 客户端与交互", "html, css, js", "无控制台报错"),
             ("tester", "测试工程师", "编写与执行测试用例", "pytest, e2e", "覆盖率达标"),
+            ("sre", "运维工程师", "负责服务器/域名/带宽/备案/监控与发布上线", "linux, docker, ci-cd", "线上稳定可达"),
         ]
         cur.executemany("INSERT OR IGNORE INTO roles VALUES (?,?,?,?,?)", sample_roles)
     # 资源种子数据
@@ -2295,6 +2350,33 @@ async function submitFeedback(pid){{
     return HTMLResponse(page_html)
 
 
+def _seed_default_roster(pid: str, tracks):
+    """v6.2 战队：建项即生成初始成员阵容（元神战队从成立那一刻就齐人）。
+    按轨道给出 策划/设计/开发/测试/运营 五位基础成员，soul 预填定位，rule 预置安全红线。"""
+    conn = get_db()
+    base = [
+        ("策划", "产品策划", "负责需求澄清/定位/商业模型，把目标拆给团队"),
+        ("设计", "UI/UX 设计师", "原型/界面/品牌，保证体验与一致性"),
+        ("开发", "全栈工程师", "前端/后端/联调，把设计变成可运行产品"),
+        ("测试", "测试工程师", "编写用例/回归/卡点回收，守住质量门"),
+        ("运营", "增长运营", "内容/社群/投放/数据，把产品推到用户面前"),
+    ]
+    now = datetime.now().isoformat()
+    for i, (name, title, soul) in enumerate(base):
+        mid = f"{pid}-a{i + 1}"
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_members "
+            "(id,project_id,name,avatar,role_title,track,soul,rule,eng_spec,model_cfg,work_mode,work_hours,skills,experience,level,version,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,1,?,?)",
+            (mid, pid, name, name[0], title, "web", soul,
+             json.dumps(["先出方案再动手", "不碰生产库", "重大变更先报告元神"], ensure_ascii=False),
+             "", json.dumps({"model": "deepseek-v4-flash", "temp": 0.3, "reason": False, "max_tokens": 8000}, ensure_ascii=False),
+             "online", "24h", "[]", now, now),
+        )
+    conn.commit()
+    conn.close()
+
+
 @app.post("/api/projects")
 async def create_project(req: Request):
     data = await req.json()
@@ -2351,6 +2433,11 @@ async def create_project(req: Request):
     # 批次 B / P2-2：元神搭建基础设施（开场消息定格目标/标准/团队/看板）
     _bootstrap_project(pid, goal=data.get("goal", ""), standards=data.get("standards", ""),
                        roles=data.get("roles") or [])
+    # v6.2 战队：建项即生成初始成员阵容
+    try:
+        _seed_default_roster(pid, tracks)
+    except Exception as e:
+        print("roster seed warn:", e)
     return {"id": pid, "ok": True, "modules": len(mods)}
 
 
@@ -7037,6 +7124,231 @@ async def autopilot_set(req: Request):
             return {"ok": False, "error": f"rest_schedule 校验失败: {e}"}
     _AUTONOMY_WAKE.set()  # 配置变更立即生效
     return {"ok": True, "changed": changed, "state": _autopilot_state_dict()}
+
+
+# ════════════════════════════════════════════════════════════════════
+# v6.2 元神战队：Agent 成员（团队成员）CRUD + 配置 + 升级 + 经验进化
+# ════════════════════════════════════════════════════════════════════
+DEFAULT_MODEL_CFG = {"model": "deepseek-v4-flash", "temp": 0.3, "reason": False, "max_tokens": 8000}
+
+
+def _member_dict(r):
+    d = dict(r)
+    for k in ("rule", "skills", "evo_tree"):
+        try:
+            d[k] = json.loads(d[k] or "[]")
+        except Exception:
+            d[k] = []
+    try:
+        d["model_cfg"] = json.loads(d.get("model_cfg") or "{}")
+    except Exception:
+        d["model_cfg"] = {}
+    return d
+
+
+@app.get("/api/projects/{pid}/members")
+def list_members(pid: str):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM agent_members WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
+    out = [_member_dict(r) for r in rows]
+    conn.close()
+    return {"ok": True, "members": out}
+
+
+@app.post("/api/projects/{pid}/members")
+async def create_member(pid: str, req: Request):
+    data = await req.json()
+    mid = data.get("id") or f"{pid}-a{int(datetime.now().timestamp() * 1000)}"
+    now = datetime.now().isoformat()
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO agent_members "
+        "(id,project_id,name,avatar,role_title,track,soul,rule,eng_spec,model_cfg,work_mode,work_hours,current_task,skills,experience,level,version,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,1,?,?)",
+        (mid, pid, data.get("name", ""), data.get("avatar") or (data.get("name", "?")[0]),
+         data.get("role_title", ""), data.get("track", "web"), data.get("soul", ""),
+         json.dumps(data.get("rule") or [], ensure_ascii=False), data.get("eng_spec", ""),
+         json.dumps(data.get("model_cfg") or DEFAULT_MODEL_CFG, ensure_ascii=False),
+         data.get("work_mode", "online"), data.get("work_hours", "24h"),
+         data.get("current_task", ""), json.dumps(data.get("skills") or [], ensure_ascii=False),
+         now, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": mid}
+
+
+@app.delete("/api/projects/{pid}/members/{mid}")
+def delete_member(pid: str, mid: str):
+    conn = get_db()
+    conn.execute("DELETE FROM agent_members WHERE id=? AND project_id=?", (mid, pid))
+    conn.execute("DELETE FROM agent_experience WHERE member_id=?", (mid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/members/{mid}")
+def get_member(mid: str):
+    conn = get_db()
+    r = conn.execute("SELECT * FROM agent_members WHERE id=?", (mid,)).fetchone()
+    if not r:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "成员不存在"})
+    d = _member_dict(r)
+    exp = [dict(x) for x in conn.execute(
+        "SELECT * FROM agent_experience WHERE member_id=? ORDER BY created_at DESC", (mid,)).fetchall()]
+    d["experiences"] = exp
+    conn.close()
+    return {"ok": True, "member": d}
+
+
+@app.put("/api/members/{mid}")
+async def update_member(mid: str, req: Request):
+    data = await req.json()
+    conn = get_db()
+    r = conn.execute("SELECT * FROM agent_members WHERE id=?", (mid,)).fetchone()
+    if not r:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "成员不存在"})
+
+    def pick(k, default):
+        return data.get(k, default)
+
+    rule = data.get("rule", None)
+    rule = rule if rule is None else (rule if isinstance(rule, str) else json.dumps(rule, ensure_ascii=False))
+    rule = r["rule"] if rule is None else rule
+    model_cfg = data.get("model_cfg", None)
+    model_cfg = model_cfg if model_cfg is None else (model_cfg if isinstance(model_cfg, str) else json.dumps(model_cfg, ensure_ascii=False))
+    model_cfg = r["model_cfg"] if model_cfg is None else model_cfg
+    skills = data.get("skills", None)
+    skills = skills if skills is None else (skills if isinstance(skills, str) else json.dumps(skills, ensure_ascii=False))
+    skills = r["skills"] if skills is None else skills
+
+    conn.execute(
+        "UPDATE agent_members SET name=?,avatar=?,role_title=?,track=?,soul=?,rule=?,eng_spec=?,"
+        "model_cfg=?,work_mode=?,work_hours=?,current_task=?,skills=?,updated_at=? WHERE id=?",
+        (pick("name", r["name"]), pick("avatar", r["avatar"]), pick("role_title", r["role_title"]),
+         pick("track", r["track"]), pick("soul", r["soul"]), rule, pick("eng_spec", r["eng_spec"]),
+         model_cfg, pick("work_mode", r["work_mode"]), pick("work_hours", r["work_hours"]),
+         pick("current_task", r["current_task"]), skills, datetime.now().isoformat(), mid))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/members/{mid}/upgrade")
+async def upgrade_member(mid: str, req: Request = None):
+    data = await req.json() if req else {}
+    conn = get_db()
+    r = conn.execute("SELECT * FROM agent_members WHERE id=?", (mid,)).fetchone()
+    if not r:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "成员不存在"})
+    new_ver = (r["version"] or 1) + 1
+    new_level = r["level"] or 1
+    reason = (data.get("reason") or "元神评估：能力升级")[:200]
+    exp = (r["experience"] or 0) + 50
+    if exp >= new_level * 200:
+        new_level += 1
+    evo = json.loads(r["evo_tree"] or "[]")
+    evo.append({"v": new_ver, "at": datetime.now().isoformat(), "note": reason})
+    conn.execute(
+        "UPDATE agent_members SET version=?,level=?,experience=?,evo_tree=?,updated_at=? WHERE id=?",
+        (new_ver, new_level, exp, json.dumps(evo, ensure_ascii=False), datetime.now().isoformat(), mid))
+    conn.execute(
+        "INSERT INTO agent_experience (id,member_id,project_id,note,kind,created_at) VALUES (?,?,?,?,?,?)",
+        (f"e{int(datetime.now().timestamp() * 1000)}", mid, r["project_id"],
+         f"[升级] {reason}", "upgrade", datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "version": new_ver, "level": new_level, "experience": exp}
+
+
+@app.post("/api/members/{mid}/experience")
+async def add_experience(mid: str, req: Request):
+    data = await req.json()
+    conn = get_db()
+    r = conn.execute("SELECT * FROM agent_members WHERE id=?", (mid,)).fetchone()
+    if not r:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "成员不存在"})
+    note = (data.get("note") or "")[:500]
+    kind = data.get("kind", "general")
+    gained = int(data.get("gained", 10))
+    conn.execute(
+        "INSERT INTO agent_experience (id,member_id,project_id,note,kind,created_at) VALUES (?,?,?,?,?,?)",
+        (f"e{int(datetime.now().timestamp() * 1000)}", mid, r["project_id"], note, kind, datetime.now().isoformat()))
+    new_exp = (r["experience"] or 0) + gained
+    new_level = r["level"] or 1
+    if new_exp >= new_level * 200:
+        new_level += 1
+    conn.execute(
+        "UPDATE agent_members SET experience=?,level=?,updated_at=? WHERE id=?",
+        (new_exp, new_level, datetime.now().isoformat(), mid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "experience": new_exp, "level": new_level}
+
+
+# ── v6.2 元神状态机（8 态）+ 蒸馏充足度 ──
+META_STATE = {"state": "idle", "focus_project": "", "upgrading": False, "blocked": False}
+
+
+@app.get("/api/meta/state")
+def meta_state():
+    """元神状态机：返回当前 8 态之一（init/idle/dispatching/supervising/autopilot/rest/upgrading/blocked）
+    及叠加态 flags。由续航调度器状态派生，并叠加升级中/需决策。"""
+    ap = _autopilot_state_dict()
+    st = META_STATE.get("state", "idle")
+    if st in ("idle", "supervising", "dispatching"):
+        if ap["mode"] == "autopilot":
+            st = "blocked" if META_STATE.get("blocked") else "supervising"
+        elif ap.get("rest_window_active"):
+            st = "rest"
+        else:
+            st = "idle"
+    flags = []
+    if META_STATE.get("upgrading"):
+        flags.append("upgrading")
+    if META_STATE.get("blocked") or ap.get("circuit_open"):
+        flags.append("blocked")
+    return {
+        "ok": True,
+        "state": st,
+        "states": ["init", "idle", "dispatching", "supervising", "autopilot", "rest", "upgrading", "blocked"],
+        "flags": flags,
+        "focus_project": META_STATE.get("focus_project", ""),
+        "mode": ap["mode"],
+        "today_dispatched": ap.get("dispatched_total", 0),
+        "token_budget": ap.get("token_budget", {}),
+        "rest_window_active": ap.get("rest_window_active", False),
+        "autonomy_enabled": ap.get("autonomy_enabled", True),
+    }
+
+
+@app.get("/api/meta/sufficiency")
+def meta_sufficiency():
+    """蒸馏充足度：元神「懂你多少」。5 维各自置信均值，≥0.6 即扎实。"""
+    try:
+        from backend import meta_distill
+        bp = meta_distill.binding_progress()
+        dims_state = bp.get("dims", {})
+        labels = {"interest": "利益关切", "decision": "决策倾向", "emotion": "情感信号",
+                  "value": "价值观锚点", "comm": "沟通风格"}
+        dims = []
+        for d in meta_distill.META_DIMS:
+            ds = dims_state.get(d, {"bound": False, "count": 0, "conf": 0.0})
+            avg = ds.get("conf", 0.0)
+            cnt = ds.get("count", 0)
+            dims.append({"dim": d, "name": labels.get(d, d),
+                         "avg": avg, "count": cnt, "sufficient": bool(ds.get("bound"))})
+        overall = round(sum(x["avg"] for x in dims) / len(dims), 2) if dims else 0.0
+        return {"ok": True, "progress": bp.get("progress", 0),
+                "bound_dims": bp.get("bound_dims", 0), "total_dims": bp.get("total_dims", len(dims)),
+                "dims": dims, "overall": overall}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 # ── v5.8 元神个人化（v6.1 全面自检补齐：前端早已引用，审计分支曾缺失后端实现）──
