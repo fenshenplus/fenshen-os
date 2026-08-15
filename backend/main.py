@@ -6658,6 +6658,8 @@ AUTONOMY_STATE = {
     # M4 休息时段：每日作息窗口自动停止派单/补空白（仍回收卡死任务）
     "rest_schedule": {},
     "rest_window_active": False,
+    # P1-3 元神升级闭环：按成员累计连续派单失败，达阈值自动加技能+升级
+    "member_fail": {},
 }
 _AUTONOMY_WAKE = asyncio.Event()
 
@@ -6814,16 +6816,37 @@ def _fill_blanks_internal(pid: str, cap: int = 5, track: str = None) -> int:
         return 0
 
 
-async def _dispatch_and_track(pid: str, t: dict, prompt: str):
-    """并发派单包装：执行完成后回收并发槽并立即唤醒调度器（毫秒级补位）。"""
+async def _dispatch_and_track(pid: str, t: dict, prompt: str, assigned_mid: str = None):
+    """并发派单包装：执行完成后回收并发槽并立即唤醒调度器（毫秒级补位）。
+    P1-3 升级闭环：按负责成员累计连续失败，达阈值(3)元神自动加技能+升级，并在群聊留痕。"""
     try:
         await _execute_project_chat(pid, prompt)
         AUTONOMY_STATE["fail_streak"] = 0
         AUTONOMY_STATE["last_success_ts"] = time.time()
+        if assigned_mid:
+            AUTONOMY_STATE["member_fail"][assigned_mid] = 0  # 成功清零该成员连败
     except Exception as e:
         print(f"[autonomy] {pid} 派单失败: {e}")
         AUTONOMY_STATE["fail_streak"] += 1
         AUTONOMY_STATE["last_fail_ts"] = time.time()
+        if assigned_mid:
+            cnt = AUTONOMY_STATE["member_fail"].get(assigned_mid, 0) + 1
+            AUTONOMY_STATE["member_fail"][assigned_mid] = cnt
+            if cnt >= 3:  # 连续 3 次未达标 → 元神判定不胜任，自动升级
+                res = _auto_upgrade_member(assigned_mid, "fail", f"{t.get('name','')}：{e}"[:120])
+                AUTONOMY_STATE["member_fail"][assigned_mid] = 0
+                if res:
+                    try:
+                        conn = get_db()
+                        conn.execute(
+                            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                            (pid, "元神", "sys",
+                             f"【自动升级】检测到成员连续未达标，已加技能并升级到 v{res['version']}：{', '.join(res['added'])}",
+                             "upgrade", datetime.now().isoformat()))
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
     finally:
         AUTONOMY_STATE["running_projects"].discard(pid)
         _AUTONOMY_WAKE.set()  # 执行返回即触发下一轮 tick
@@ -7004,7 +7027,8 @@ async def _autonomy_loop():
                 AUTONOMY_STATE["inflight_peak"] = max(
                     AUTONOMY_STATE.get("inflight_peak", 0), len(AUTONOMY_STATE["running_projects"]))
                 AUTONOMY_STATE["dispatched_total"] += 1
-                asyncio.create_task(_dispatch_and_track(p["id"], t, prompt))
+                assigned_mid = _resolve_member_for_task(p["id"], t)  # P1-3：解析负责成员 → 连败达阈值自动升级
+                asyncio.create_task(_dispatch_and_track(p["id"], t, prompt, assigned_mid))
         except Exception as e:
             print(f"[autonomy] 循环异常: {e}")
             await asyncio.sleep(5)
@@ -7291,6 +7315,105 @@ async def add_experience(mid: str, req: Request):
     return {"ok": True, "experience": new_exp, "level": new_level}
 
 
+# ── P1-3 元神升级闭环：agent 不胜任 → 元神自动加技能 / 改 soul / 换模型 ──
+def _auto_upgrade_member(mid: str, reason_type: str = "manual", context: str = ""):
+    """元神对不胜任成员自动升级：加技能 + 版本+1 + 进化树节点 + 经验 + soul 印记 + 必要时换模型。
+    返回升级结果 dict，成员不存在返回 None。reason_type: fail / weak / manual。"""
+    conn = get_db()
+    r = conn.execute("SELECT * FROM agent_members WHERE id=?", (mid,)).fetchone()
+    if not r:
+        conn.close()
+        return None
+    now = datetime.now().isoformat()
+    skills = json.loads(r["skills"] or "[]")
+    evo = json.loads(r["evo_tree"] or "[]")
+    model_cfg = json.loads(r["model_cfg"] or "{}") or {}
+    soul = r["soul"] or ""
+    new_ver = (r["version"] or 1) + 1
+    new_level = r["level"] or 1
+    exp = (r["experience"] or 0) + 50
+    if exp >= new_level * 200:
+        new_level += 1
+    added = []
+    ctx = (context or "")
+    if reason_type == "fail":
+        if not any("复盘" in s for s in skills):
+            added.append("复盘与异常兜底")
+        if not any("自愈" in s for s in skills):
+            added.append("失败自愈重试")
+        if any(k in ctx for k in ("推理", "复杂", "逻辑", "reason", "推理链")):
+            model_cfg["reason"] = True
+            if "强化推理(reason=on)" not in added:
+                added.append("强化推理(reason=on)")
+        if any(k in ctx for k in ("前端", "样式", "UI", "界面")) and not any("前端" in s for s in skills):
+            added.append("前端样式精修")
+        if any(k in ctx for k in ("后端", "接口", "API", "数据库")) and not any("后端" in s for s in skills):
+            added.append("后端接口加固")
+    elif reason_type == "weak":
+        if not any("强化" in s for s in skills):
+            added.append("进阶专项强化")
+    else:
+        if not any("定向" in s for s in skills):
+            added.append("元神定向强化")
+    for s in added:
+        if s not in skills:
+            skills.append(s)
+    note = f"自动升级[v{new_ver}]：{'、'.join(added)}" + (f"（诱因：{ctx[:60]}）" if ctx else "")
+    evo.append({"v": new_ver, "at": now, "note": note, "type": reason_type, "added": added})
+    if "【进化印记】" not in soul:
+        soul = soul + ("\n【进化印记】" if soul.strip() else "") + note
+    else:
+        soul = soul + "；" + note
+    conn.execute(
+        "UPDATE agent_members SET version=?,level=?,experience=?,skills=?,evo_tree=?,model_cfg=?,soul=?,updated_at=? WHERE id=?",
+        (new_ver, new_level, exp, json.dumps(skills, ensure_ascii=False),
+         json.dumps(evo, ensure_ascii=False), json.dumps(model_cfg, ensure_ascii=False), soul, now, mid))
+    conn.execute(
+        "INSERT INTO agent_experience (id,member_id,project_id,note,kind,created_at) VALUES (?,?,?,?,?,?)",
+        (f"e{int(datetime.now().timestamp() * 1000)}", mid, r["project_id"],
+         f"[自动升级] {note}", "auto-upgrade", now))
+    conn.commit()
+    conn.close()
+    return {"version": new_ver, "level": new_level, "experience": exp,
+            "added": added, "skills": skills, "model_cfg": model_cfg}
+
+
+@app.post("/api/members/{mid}/auto-upgrade")
+async def auto_upgrade_member(mid: str, req: Request = None):
+    """元神主动升级成员：依据 reason_type（fail/weak/manual）+ 上下文自动加技能 / 改 soul / 换模型。"""
+    data = await req.json() if req else {}
+    rt = data.get("reason_type", "manual")
+    ctx = (data.get("context") or "")[:300]
+    res = _auto_upgrade_member(mid, rt, ctx)
+    if res is None:
+        return JSONResponse(status_code=404, content={"error": "成员不存在"})
+    return {"ok": True, **res}
+
+
+def _resolve_member_for_task(pid: str, t: dict) -> str:
+    """解析任务负责成员 id：模块 owner_role → 同名 role_title 成员；否则按 track 匹配；再否则首个成员。"""
+    try:
+        conn = get_db()
+        mod = conn.execute("SELECT owner_role FROM modules WHERE id=?",
+                           (t.get("module_id") or "",)).fetchone()
+        members = conn.execute(
+            "SELECT id,role_title,track FROM agent_members WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()
+        conn.close()
+        if not members:
+            return None
+        owner_role = (mod["owner_role"] if mod else "") or ""
+        by_role = [m for m in members if owner_role and m["role_title"] == owner_role]
+        if by_role:
+            return by_role[0]["id"]
+        trk = t.get("track") or "web"
+        by_trk = [m for m in members if m["track"] == trk]
+        if by_trk:
+            return by_trk[0]["id"]
+        return members[0]["id"]
+    except Exception:
+        return None
+
+
 # ── v6.2 元神状态机（8 态）+ 蒸馏充足度 ──
 META_STATE = {"state": "idle", "focus_project": "", "upgrading": False, "blocked": False}
 
@@ -7329,24 +7452,37 @@ def meta_state():
 
 @app.get("/api/meta/sufficiency")
 def meta_sufficiency():
-    """蒸馏充足度：元神「懂你多少」。5 维各自置信均值，≥0.6 即扎实。"""
+    """蒸馏充足度：元神「懂你多少」。真实读取 user_model（来自访谈/上传资料/被动蒸馏）
+    与 meta_interview（已答问题数），5 维各自置信均值 ≥0.6 且条数≥2 即扎实。"""
     try:
         from backend import meta_distill
-        bp = meta_distill.binding_progress()
-        dims_state = bp.get("dims", {})
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT dim, confidence FROM user_model").fetchall()
+        iv = conn.execute(
+            "SELECT asked FROM meta_interview ORDER BY id DESC LIMIT 1").fetchone()
+        conn.close()
+        asked = json.loads(iv["asked"]) if iv and iv["asked"] else []
+        per = {}
+        for r in rows:
+            per.setdefault(r["dim"], []).append(r["confidence"])
         labels = {"interest": "利益关切", "decision": "决策倾向", "emotion": "情感信号",
                   "value": "价值观锚点", "comm": "沟通风格"}
         dims = []
         for d in meta_distill.META_DIMS:
-            ds = dims_state.get(d, {"bound": False, "count": 0, "conf": 0.0})
-            avg = ds.get("conf", 0.0)
-            cnt = ds.get("count", 0)
+            confs = per.get(d, [])
+            avg = round(sum(confs) / len(confs), 2) if confs else 0.0
+            cnt = len(confs)
+            sufficient = cnt >= 2 and avg >= 0.6
             dims.append({"dim": d, "name": labels.get(d, d),
-                         "avg": avg, "count": cnt, "sufficient": bool(ds.get("bound"))})
+                         "avg": avg, "count": cnt, "sufficient": sufficient})
         overall = round(sum(x["avg"] for x in dims) / len(dims), 2) if dims else 0.0
-        return {"ok": True, "progress": bp.get("progress", 0),
-                "bound_dims": bp.get("bound_dims", 0), "total_dims": bp.get("total_dims", len(dims)),
-                "dims": dims, "overall": overall}
+        suff_cnt = sum(1 for x in dims if x["sufficient"])
+        return {"ok": True, "dims": dims, "overall": overall,
+                "sufficient_dims": suff_cnt, "total_dims": len(dims),
+                "interview_answered": len(asked),
+                "interview_total": len(meta_distill.QUESTION_BANK),
+                "facts_total": sum(len(v) for v in per.values())}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
