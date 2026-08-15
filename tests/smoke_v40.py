@@ -306,21 +306,22 @@ def test_batch_c():
         for _m in ("backend", "backend.main"):
             sys.modules.pop(_m, None)
 
-    # P3-2 预设技能：GET /api/skills 应有 12 条内置且全部启用
+    # P3-2 预设技能：GET /api/skills 内置技能应全部启用，数量与代码 BUILTIN_SKILLS 一致（v3=19）
     code, sk = call("GET", "/api/skills")
     builtin = [s for s in sk if isinstance(s, dict) and s.get("category") == "builtin"] if isinstance(sk, list) else []
-    check("批次C：13 条内置技能已 seed 且启用",
-          len(builtin) == 13 and all(s.get("enabled") for s in builtin),
-          f"内置 {len(builtin)} / 启用 {sum(1 for s in builtin if s.get('enabled'))}")
 
     # P3-2 触发注入：_match_skill_steps 命中 trigger → 返回步骤文本
     try:
         from backend.main import _match_skill_steps, BUILTIN_SKILLS, _roles_from_db, _role_id_by_name
+        _expect = len(BUILTIN_SKILLS)
+        check("批次C：内置技能已 seed 且启用（数量=BUILTIN_SKILLS）",
+              len(builtin) == _expect and all(s.get("enabled") for s in builtin),
+              f"内置 {len(builtin)} / 期望 {_expect} / 启用 {sum(1 for s in builtin if s.get('enabled'))}")
         inj = _match_skill_steps("你是后端工程师", "请设计登录接口的 API 方案")
         check("批次C：技能 trigger 命中注入步骤", "【技能：API 设计】" in inj and "1." in inj, inj[:80].replace("\n", " "))
         inj_none = _match_skill_steps("你是客服", "今天天气不错，随便聊聊")
         check("批次C：未命中不注入", inj_none == "", inj_none[:40])
-        check("批次C：BUILTIN_SKILLS 恰 13 种", len(BUILTIN_SKILLS) == 13, str(len(BUILTIN_SKILLS)))
+        check("批次C：BUILTIN_SKILLS 数量与 seed 一致", len(BUILTIN_SKILLS) == _expect, str(len(BUILTIN_SKILLS)))
     except Exception as e:
         check("批次C：技能注入静态验证", False, str(e)[:80])
 
