@@ -831,6 +831,8 @@
             <button class="btn sm" onclick="loadExperiences('')">全部</button>
             <button class="btn sm" onclick="loadAttribution()">疗效归因</button>
             <button class="btn sm meta" onclick="toggleExpTree()" id="btnExpTree">🌳 经验树</button>
+            <button class="btn sm" onclick="exportVault()">📤 导出 Vault</button>
+            <button class="btn sm" onclick="showShareApi()">🔗 共享 API</button>
           </div>
           <div id="attrPanel" class="card" style="display:none;margin:8px 0;padding:12px;font-size:12px"></div>
           <div id="expTree" class="card" style="display:none;margin:8px 0;padding:12px;font-size:12px;max-height:360px;overflow:auto"></div>
@@ -2947,6 +2949,64 @@ async function grindDemo(){
     out.textContent=j.compressed;
   }catch(e){ out.textContent='请求失败：'+e; }
 }
+async function exportVault(){
+  try{
+    const r=await fetch('/api/export/vault'+(curRoom?'?project_id='+encodeURIComponent(curRoom):''));
+    const j=await r.json();
+    if(!j.ok){ toast('导出失败：'+(j.error||'')); return; }
+    const files=j.files||{}; const names=Object.keys(files);
+    if(!names.length){ toast('暂无可导出数据'); return; }
+    const m=document.createElement('div'); m.className='mask'; m.style.zIndex=60;
+    const d=document.createElement('div'); d.className='modal'; d.style.maxWidth='660px'; d.style.maxHeight='82vh'; d.style.overflow='auto';
+    d.innerHTML=`<div class="mh">📤 记忆 Vault 导出 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="this.closest('.mask').remove()">✕</span></div>
+      <div class="mb">
+        <div style="color:var(--gray-400);font-size:11px;margin-bottom:8px">导出范围：${j.scope==='all'?'全部项目':('项目 '+esc(j.scope))} · 画像 ${j.count&&j.count.user_model||0} · 经验 ${j.count&&j.count.experiences||0} · 访谈 ${j.count&&j.count.meta_interview||0}。Obsidian 兼容，可人读纠错后回填。</div>
+        <div id="vaultTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${
+          names.map((n,i)=>`<button class="btn sm ${i===0?'primary':''}" onclick="toggleVaultFile(${i})" id="vt${i}">${esc(n)}</button>`).join('')
+        }</div>
+        <textarea id="vaultText" readonly style="width:100%;height:300px;font-size:11px;font-family:monospace;white-space:pre">${esc(files[names[0]]||'')}</textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn sm primary" onclick="copyVault()">复制当前</button>
+          <button class="btn sm" onclick="downloadVault()">下载全部 .md</button>
+        </div>
+      </div>`;
+    m.appendChild(d); document.body.appendChild(m);
+    window._vaultFiles=files; window._vaultNames=names;
+  }catch(e){ toast('导出失败：'+e); }
+}
+function toggleVaultFile(i){
+  const f=window._vaultFiles, n=window._vaultNames; if(!f) return;
+  const t=document.getElementById('vaultText'); if(t) t.value=f[n[i]]||'';
+  for(let k=0;k<n.length;k++){const b=document.getElementById('vt'+k); if(b)b.classList.toggle('primary',k===i);}
+}
+function copyVault(){ const t=document.getElementById('vaultText'); if(t){t.select(); try{document.execCommand('copy');toast('已复制');}catch(e){toast('复制失败');} } }
+function downloadVault(){
+  const f=window._vaultFiles; if(!f){toast('无数据');return;}
+  const names=Object.keys(f); let i=0;
+  const dl=()=>{ if(i>=names.length){toast('已下载 '+names.length+' 个文件');return;}
+    const nm=names[i++]; const blob=new Blob([f[nm]],{type:'text/markdown'}); const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download=nm; a.click(); URL.revokeObjectURL(a.href); setTimeout(dl,160); };
+  dl();
+}
+async function showShareApi(){
+  const base=location.origin;
+  const urls=[
+    base+'/api/share/experiences?limit=20',
+    base+'/api/share/experiences?scenario=部署静态站&limit=5',
+    base+'/api/share/experiences?category=failure'+(curRoom?'&project_id='+encodeURIComponent(curRoom):'')
+  ];
+  window._shareUrls=urls;
+  const m=document.createElement('div'); m.className='mask'; m.style.zIndex=60;
+  const d=document.createElement('div'); d.className='modal'; d.style.maxWidth='640px';
+  d.innerHTML=`<div class="mh">🔗 经验库共享 API <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="this.closest('.mask').remove()">✕</span></div>
+    <div class="mb">
+      <div style="color:var(--gray-400);font-size:11px;margin-bottom:8px">agentmemory 式共享：其他 Agent / IDE 可经以下接口复用本产品经验库（需本机令牌，GET 即可）。</div>
+      ${urls.map((u,i)=>`<div style="margin:6px 0;font-size:11px;font-family:monospace;word-break:break-all">${esc(u)}<button class="btn sm" style="margin-left:6px" onclick="copyShareUrl(${i})">复制</button></div>`).join('')}
+      <div style="margin-top:8px;font-size:11px">返回字段含 <b>_score</b>（scenario 命中时按权重+相关度），便于外部排序复用；被淘汰项不会返回。</div>
+    </div>`;
+  m.appendChild(d); document.body.appendChild(m);
+}
+function copyShareUrl(i){ const u=(window._shareUrls||[])[i]; if(u){navigator.clipboard&&navigator.clipboard.writeText(u); toast('已复制');} }
 async function distillExperiences(btn){
   await withBusy(btn,'提炼中…',async()=>{
     const j=await apiJson('/api/experiences/distill',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});

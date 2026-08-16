@@ -8288,6 +8288,150 @@ async def meta_morning_brief(project_id: str = ""):
             "focus": focus, "brief": brief}
 
 
+# ── P2-A：画像/经验导出 Markdown Vault（对齐 OpenHuman Obsidian）──
+def _vault_md_front(tag: str) -> str:
+    return "---\ntags: [分身, %s]\n---\n\n" % tag
+
+
+@app.get("/api/export/vault")
+def export_vault(project_id: str = ""):
+    """P2-A 画像/经验导出 Markdown Vault（对齐 OpenHuman Obsidian）：
+    把 user_model(画像) + experiences(经验库) + meta_interview(元神访谈) 导出为
+    Obsidian 兼容的多文件 .md（人读可纠错）。返回 files 字典 {文件名: 内容} 与 combined 合并版。
+    鉴权由全局中间件统一处理（需本地令牌）。"""
+    conn = get_db()
+    # 画像：按维度分组
+    um = conn.execute(
+        "SELECT dim,field,value,confidence,source FROM user_model ORDER BY dim, id").fetchall()
+    # 经验：非淘汰，按疗效权重降序（可按项目过滤）
+    exp_where = "WHERE eliminated=0" + (" AND project_id=?" if project_id else "")
+    exp_args = (project_id,) if project_id else ()
+    exps = conn.execute(
+        "SELECT id,category,scenario,goal,attempts,outcome,lesson,project_id,source,ts,weight "
+        f"FROM experiences {exp_where} ORDER BY weight DESC", exp_args).fetchall()
+    # 访谈：取最近一条
+    mi = conn.execute(
+        "SELECT asked,answers,focus_dim,last_ask_at,updated_at FROM meta_interview ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+
+    # ── 元神画像.md ──
+    by_dim = {}
+    for r in um:
+        by_dim.setdefault(r["dim"], []).append(r)
+    prof = [_vault_md_front("元神画像"), "# 元神画像（用户模型）\n",
+            "> 由元神在群聊/访谈中逐步沉淀，人读可纠错。\n"]
+    if by_dim:
+        for dim, rows in by_dim.items():
+            prof.append(f"## {dim}")
+            for r in rows:
+                conf = f"（置信度 {r['confidence']:.2f}）" if r["confidence"] is not None else ""
+                src = f" · 来源：{r['source']}" if r["source"] else ""
+                prof.append(f"- **{r['field']}**：{r['value']}{conf}{src}")
+            prof.append("")
+    else:
+        prof.append("_尚无画像数据（元神尚未完成足够访谈/观察）。_\n")
+    profile_md = "\n".join(prof)
+
+    # ── 经验库.md ──
+    exp = [_vault_md_front("经验库"), "# 经验库（疗效归因权重降序）\n",
+           "> 每条经验可被其他 Agent/IDE 经 /api/share/experiences 复用。\n"]
+    if exps:
+        for r in exps:
+            cat = "✅ 成功" if r["category"] == "success" else "❌ 失败/踩坑"
+            pid_tag = f" · 项目：{r['project_id']}" if r["project_id"] else ""
+            exp.append(f"## [{cat}] {r['scenario']}（权重 {r['weight']:.2f}）")
+            if r["goal"]:
+                exp.append(f"- **目标**：{r['goal']}")
+            if r["attempts"]:
+                exp.append(f"- **做法**：{r['attempts']}")
+            if r["outcome"]:
+                exp.append(f"- **结果**：{r['outcome']}")
+            exp.append(f"- **经验**：{r['lesson']}{pid_tag}")
+            if r["source"]:
+                exp.append(f"  - 来源：{r['source']} · {r['ts']}")
+            exp.append("")
+    else:
+        exp.append("_尚无经验数据。_\n")
+    exp_md = "\n".join(exp)
+
+    # ── 元神访谈.md ──
+    mi_lines = [_vault_md_front("元神访谈"), "# 元神访谈记录\n"]
+    if mi:
+        try:
+            asked = json.loads(mi["asked"]) if mi["asked"] else []
+        except Exception:
+            asked = []
+        try:
+            answers = json.loads(mi["answers"]) if mi["answers"] else {}
+        except Exception:
+            answers = {}
+        if mi["focus_dim"]:
+            mi_lines.append(f"- **当前聚焦维度**：{mi['focus_dim']}")
+        if asked:
+            mi_lines.append("")
+            mi_lines.append("## 已问问题")
+            for q in asked:
+                a = answers.get(q, "")
+                mi_lines.append(f"- Q：{q}" + (f"\n  - A：{a}" if a else ""))
+        if mi["updated_at"]:
+            mi_lines.append("")
+            mi_lines.append(f"_最近更新：{mi['updated_at']}_")
+    else:
+        mi_lines.append("_尚无访谈记录。_")
+    mi_lines.append("")
+    interview_md = "\n".join(mi_lines)
+
+    # ── Vault 索引（Obsidian 双链）──
+    index_md = "\n".join([
+        _vault_md_front("Vault索引"), "# 分身记忆 Vault 索引\n",
+        "本 Vault 由分身导出，可被 Obsidian 直接打开（双链互相引用）。\n",
+        "- [[元神画像]]", "- [[经验库]]", "- [[元神访谈]]", "",
+        f"> 导出范围：{('项目 ' + project_id) if project_id else '全部项目'}"
+    ])
+
+    files = {
+        "Vault索引.md": index_md,
+        "元神画像.md": profile_md,
+        "经验库.md": exp_md,
+        "元神访谈.md": interview_md,
+    }
+    combined = "\n\n---\n\n".join(files.values())
+    return {"ok": True, "scope": project_id or "all",
+            "count": {"user_model": len(um), "experiences": len(exps),
+                      "meta_interview": 1 if mi else 0},
+            "files": files, "combined": combined}
+
+
+# ── P2-B：经验库 agentmemory 式外部共享（供其他 Agent/IDE 复用）──
+@app.get("/api/share/experiences")
+def share_experiences(scenario: str = "", category: str = "", project_id: str = "", limit: int = 20):
+    """P2-B 经验库 agentmemory 式外部共享：供其他 Agent/IDE 复用本产品的经验库（对齐 OpenHuman agentmemory）。
+    - scenario 命中：按疗效权重复用召回（_recall_experiences，权重+相关度排序，返回 _score）
+    - 否则按 category / project_id 过滤，按权重降序
+    返回机器可读 JSON 数组（含 _score 以便外部排序复用）。鉴权由全局中间件统一处理（需本地令牌）。"""
+    if scenario:
+        items = _recall_experiences(scenario, limit)
+        return {"ok": True, "count": len(items), "mode": "recall",
+                "query": scenario, "items": [dict(i) for i in items]}
+    conn = get_db()
+    try:
+        where, args = [], []
+        if category:
+            where.append("category=?"); args.append(category)
+        if project_id:
+            where.append("project_id=?"); args.append(project_id)
+        wsql = ("WHERE eliminated=0 AND " + " AND ".join(where)) if where else "WHERE eliminated=0"
+        rows = conn.execute(
+            "SELECT id,category,scenario,goal,attempts,outcome,lesson,project_id,source,ts,weight "
+            f"FROM experiences {wsql} ORDER BY weight DESC LIMIT ?", args + [limit]).fetchall()
+        out = [dict(r) for r in rows]
+        return {"ok": True, "count": len(out), "mode": "list",
+                "query": {"category": category, "project_id": project_id, "limit": limit},
+                "items": out}
+    finally:
+        conn.close()
+
+
 @app.post("/api/autopilot/set")
 async def autopilot_set(req: Request):
     """切换续航模式 / 暂停·恢复项目 / 设置 token 预算。变更即时生效。"""
