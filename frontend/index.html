@@ -1414,10 +1414,17 @@ async function sendMsg(){
   });
 }
 /* v5.0：共享的派单进度轮询（sendMsg / continueBoard 复用）*/
+/* P1-4：轮询期间并行拉取 trajectory 事件，渲染「执行直播」面板 */
+let _liveSeenIds = new Set();
+let _livePid = null;
 async function pollJob(jobId,onDone,onRunning){
   const t0=Date.now();
+  _liveSeenIds = new Set();
+  if(curRoom){ _livePid = curRoom; showLivePanel(); }
   const poll=async()=>{
-    if(Date.now()-t0 > 480000){ if(onDone) onDone(); return; }
+    if(Date.now()-t0 > 480000){ hideLivePanel(); if(onDone) onDone(); return; }
+    // P1-4：并行拉 trajectory 事件
+    if(_livePid){ try{ await fetchTrajectoryLive(_livePid); }catch(e){} }
     let st=null;
     try{ st=await apiJson('/api/jobs/'+jobId); }catch(e){}
     if(!st){ setTimeout(poll,3000); return; }
@@ -1425,8 +1432,11 @@ async function pollJob(jobId,onDone,onRunning){
       if(onRunning) onRunning(st.progress||'团队执行中…');
       setTimeout(poll,3000); return;
     }
+    // P1-4：最终拉一次确保完整
+    if(_livePid){ try{ await fetchTrajectoryLive(_livePid); }catch(e){} }
     if(st.status==='failed') toast('执行失败：'+(st.error||'未知错误'),'err');
     else if(st.status==='done') toast('✅ 团队执行完成','ok');
+    setTimeout(()=>hideLivePanel(), 6000);
     if(onDone) onDone(st.result);
   };
   poll();
@@ -1443,6 +1453,53 @@ async function continueBoard(){
       await pollJob(j.job_id,()=>{ if(inp){ inp.placeholder='发消息给团队…（回车发送）'; inp.disabled=false; } if(typeof loadBoard==='function') loadBoard(); loadChat(curRoom); });
     } else toast('❌ '+(j.error||'派单失败'),'err');
   }catch(e){ toast('请求失败：'+errText(e),'err'); }
+}
+
+/* P1-4：执行直播面板 —— 派单期间实时展示 trajectory 事件时间线 */
+const LIVE_KIND_ICON = {
+  run_start: '▶️', plan: '📋', role_start: '🚀', tool: '🔧',
+  role_done: '✅', error: '❌', phase: '📊', info: '💬'
+};
+function showLivePanel(){
+  let p = document.getElementById('livePanel');
+  if(!p) return;
+  p.style.display = 'flex';
+  const body = document.getElementById('livePanelBody');
+  if(body) body.innerHTML = '';
+  _liveSeenIds = new Set();
+}
+function hideLivePanel(){
+  const p = document.getElementById('livePanel');
+  if(p) p.style.display = 'none';
+}
+async function fetchTrajectoryLive(pid){
+  if(!pid) return;
+  const events = await apiJson('/api/projects/'+pid+'/trajectory');
+  if(!Array.isArray(events)) return;
+  const body = document.getElementById('livePanelBody');
+  if(!body) return;
+  let newCount = 0;
+  for(const ev of events){
+    if(_liveSeenIds.has(ev.id)) continue;
+    _liveSeenIds.add(ev.id);
+    newCount++;
+  }
+  if(newCount === 0) return;
+  // 重新渲染全部（事件是倒序的，反转成正序）
+  body.innerHTML = '';
+  const sorted = [...events].reverse();
+  for(const ev of sorted){
+    const icon = LIVE_KIND_ICON[ev.kind] || '·';
+    const time = (ev.ts || '').slice(11, 19);
+    const agent = ev.agent ? ` <span style="color:var(--meta);font-weight:600">${escapeHtml(ev.agent)}</span>` : '';
+    const metaStr = ev.meta && Object.keys(ev.meta).length
+      ? ` <span style="color:var(--gray-400);font-size:10px">${escapeHtml(JSON.stringify(ev.meta).slice(0,120))}</span>` : '';
+    const div = document.createElement('div');
+    div.style.cssText = 'padding:6px 0;border-bottom:0.5px solid var(--gray-200);font-size:12px;line-height:1.5';
+    div.innerHTML = `<span style="opacity:0.6;font-size:10px;margin-right:4px">${time}</span>${icon}${agent} <span style="color:var(--gray-600)">${escapeHtml((ev.text||'').slice(0,200))}</span>${metaStr}`;
+    body.appendChild(div);
+  }
+  body.scrollTop = body.scrollHeight;
 }
 /* 元神中止：真的把正在跑的请求取消掉（AbortController），不再插一条假的系统消息 */
 function metaStop(){
@@ -4118,6 +4175,19 @@ async function syncDirect(mid){
   if(j.ok){ toast('已同步到群'); await loadDirect(); } else toast('同步失败：'+(j.error||''));
 }
 </script>
+
+<!-- P1-4：执行直播面板 -->
+<div id="livePanel" style="display:none;position:fixed;bottom:16px;right:16px;width:340px;max-height:380px;
+     flex-direction:column;z-index:9000;background:var(--gray-100);border:0.5px solid var(--gray-300);
+     border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.12);overflow:hidden">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
+       background:var(--meta);color:#fff;font-size:13px;font-weight:600">
+    <span>📺 执行直播</span>
+    <button onclick="hideLivePanel()" style="background:none;border:none;color:#fff;cursor:pointer;
+            font-size:16px;padding:0 4px;line-height:1">×</button>
+  </div>
+  <div id="livePanelBody" style="flex:1;overflow-y:auto;padding:8px 12px;max-height:340px"></div>
+</div>
 
 </body>
 </html>
