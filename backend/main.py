@@ -4374,19 +4374,31 @@ SKILL_DISTILL_SYSTEM = """你是流程提炼器。从对话中识别「可复用
 
 @app.post("/api/memory/distill")
 async def distill_memory(req: Request):
-    """从元神私聊最近的对话中提炼长期记忆（LLM 抽取，失败退关键词）。"""
-    rows = _recent_meta_texts(20)
-    if not rows:
-        return {"ok": True, "extracted": 0, "items": [], "method": "empty",
-                "note": "最近没有对话可供提炼。"}
-    convo = "\n".join(f"{r['sender']}: {r['text']}" for r in rows if r.get("text"))
-    items, method = await _llm_extract(MEMORY_DISTILL_SYSTEM, f"以下是最近的对话记录：\n\n{convo}")
+    """从元神私聊最近的对话中提炼长期记忆（LLM 抽取，失败退关键词）。
+    评测 P2-1/P2-2（2026-08-17）：支持显式 text 入参 + force 强制记录。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    text_in = (data.get("text") or "").strip()
+    force = bool(data.get("force"))
+    if text_in:
+        convo = text_in
+    else:
+        rows = _recent_meta_texts(20)
+        if not rows:
+            return {"ok": True, "extracted": 0, "items": [], "method": "empty",
+                    "note": "最近没有对话可供提炼；可传入 text 直接提交一段文本提炼。"}
+        convo = "\n".join(f"{r['sender']}: {r['text']}" for r in rows if r.get("text"))
+    items, method = await _llm_extract(MEMORY_DISTILL_SYSTEM, f"以下是对话/文本记录：\n\n{convo}")
 
     if items is None:
         # 兜底：LLM 不可用时退回关键词匹配，但如实标注方法，不冒充智能抽取
         pref_keywords = ["记住", "我喜欢", "我不喜欢", "我习惯", "我总是", "我从来", "注意", "规则", "不要"]
         items = [{"category": "preference", "content": r["text"]}
-                 for r in rows if r.get("text") and any(k in r["text"] for k in pref_keywords)]
+                 for r in ([{"text": convo}] if text_in else [])
+                 if r.get("text") and any(k in r["text"] for k in pref_keywords)] or (
+            [{"category": "preference", "content": convo}] if (text_in and force) else [])
         method = "keyword"
         note = f"LLM 不可用（{method}），已退回关键词匹配。"
     else:
@@ -4406,8 +4418,21 @@ async def distill_memory(req: Request):
         )
         existing.add(content)
         saved.append({"category": category, "content": content})
+    # force：无可提炼但用户明确要求记住 → 原样存为 fact（如实标注来源）
+    if not saved and force and convo.strip():
+        content = convo.strip()[:300]
+        if content not in existing:
+            conn.execute(
+                "INSERT INTO long_term_memory (category,content,source,ts) VALUES (?,?,?,?)",
+                ("fact", content, "manual·force", datetime.now().isoformat()),
+            )
+            existing.add(content)
+            saved.append({"category": "fact", "content": content, "forced": True})
     conn.commit()
     conn.close()
+    if not note and not saved:
+        note = ("未提炼出值得长期记住的信息（偏好/规则/事实/决策）；如需原样记住，请带 force=true 重新提交。"
+                if text_in else "最近对话未提炼出值得长期记住的信息；可传入 text + force 直接记录。")
     return {"ok": True, "extracted": len(saved), "items": saved, "method": method, "note": note}
 
 
@@ -5411,6 +5436,13 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             _role_mods = [m for m in mods
                           if (m["owner_role"] or "") in (role, _role_disp)
                           or _ROLE_NAME_FALLBACK.get(m["owner_role"] or "", "") == role]
+            # 评测 P2-3（2026-08-17）：在角色职责基础上按爆炸半径再收敛——
+            # 指令命中某模块时，只注入「该角色负责的 ∩ 爆炸半径内」的模块，进一步降低 token；
+            # 交集为空则保留角色职责全量（避免角色失去上下文）。
+            if _role_mods and _blast:
+                _blast_intersect = [m for m in _role_mods if m["name"] in _blast]
+                if _blast_intersect:
+                    _role_mods = _blast_intersect
             if _role_mods:
                 _rm_ids = {m["id"] for m in _role_mods}
                 _rm_lines = [f"- {m['name']}（{m['status']}）" for m in _role_mods]
@@ -7310,13 +7342,24 @@ EXPERIENCE_DISTILL_SYSTEM = """你是复盘提炼器。从对话中找出「做�
 
 @app.post("/api/experiences/distill")
 async def distill_experiences(req: Request):
-    """从元神私聊最近的对话中提炼成功/失败案例（LLM 抽取）。"""
-    rows = _recent_meta_texts(30)
-    if not rows:
-        return {"ok": True, "extracted": 0, "items": [], "method": "empty",
-                "note": "最近没有对话可供提炼。"}
-    convo = "\n".join(f"{r['sender']}: {r['text']}" for r in rows if r.get("text"))
-    items, method = await _llm_extract(EXPERIENCE_DISTILL_SYSTEM, f"以下是最近的对话记录：\n\n{convo}")
+    """从元神私聊最近的对话中提炼成功/失败案例（LLM 抽取）。
+    评测 P2-1/P2-2（2026-08-17）：支持显式 text 入参（优先于私聊历史）；
+    支持 force=true 强制记录——无可提炼时把原文原样存为一条 note 经验，避免「想记的记不下来」。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    text_in = (data.get("text") or "").strip()
+    force = bool(data.get("force"))
+    if text_in:
+        convo = text_in
+    else:
+        rows = _recent_meta_texts(30)
+        if not rows:
+            return {"ok": True, "extracted": 0, "items": [], "method": "empty",
+                    "note": "最近没有对话可供提炼；可传入 text 直接提交一段文本提炼。"}
+        convo = "\n".join(f"{r['sender']}: {r['text']}" for r in rows if r.get("text"))
+    items, method = await _llm_extract(EXPERIENCE_DISTILL_SYSTEM, f"以下是对话/文本记录：\n\n{convo}")
     if items is None:
         # 旧版在这里把命中"失败/成功"关键词的原句整条塞进 lesson 字段，
         # 存出来的"经验"就是一句聊天记录，复用价值为零。宁可空手而归。
@@ -7342,9 +7385,24 @@ async def distill_experiences(req: Request):
         _refresh_experience_weights(conn, cur.lastrowid)  # 疗效归因：蒸馏新经验初始化权重
         existing.add(scenario)
         created.append({"scenario": scenario, "category": category})
+    # force：无可提炼但用户明确要求记录 → 原文原样存为 note 经验（如实标注来源）
+    if not created and force and len(convo) >= 6:
+        scenario = convo.strip()[:30]
+        cur = conn.execute(
+            "INSERT INTO experiences (category,scenario,goal,attempts,outcome,lesson,project_id,source,ts) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("note", scenario, "", "", "", convo.strip()[:500], META_PID, "manual·force",
+             datetime.now().isoformat()),
+        )
+        _refresh_experience_weights(conn, cur.lastrowid)
+        created.append({"scenario": scenario, "category": "note", "forced": True})
     conn.commit()
     conn.close()
-    return {"ok": True, "extracted": len(created), "items": created, "method": method}
+    note = ""
+    if not created:
+        note = ("未提炼出带可复用教训的经验；如需原样记录这段内容，请带 force=true 重新提交。"
+                if text_in else "最近对话未提炼出带可复用教训的经验；可传入 text + force 直接记录。")
+    return {"ok": True, "extracted": len(created), "items": created, "method": method, "note": note}
 
 
 # ── P0-A：项目群聊自动蒸馏（记忆树原料）────────────────────────
@@ -8599,7 +8657,11 @@ async def meta_morning_brief(project_id: str = ""):
     """P1-B 元神潜意识晨报（对齐 OpenHuman Subconscious）：汇总自上次查看以来项目状态 diff + 元神主动建议关注。
     返回结构化 stats + focus（主动建议）+ brief（自然语言晨报，离线/无 key 时降级为模板）。"""
     if not project_id:
-        return {"ok": False, "error": "project_id 必填"}
+        conn = get_db()
+        plist = conn.execute("SELECT id,name FROM projects ORDER BY created_at DESC LIMIT 5").fetchall()
+        conn.close()
+        hint = "；可用项目：" + "、".join(f"{r['name']}({r['id'][:12]})" for r in plist) if plist else ""
+        return {"ok": False, "error": f"project_id 必填{hint}"}
     conn = get_db()
     proj = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     if not proj:
