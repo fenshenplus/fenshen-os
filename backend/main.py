@@ -5719,6 +5719,128 @@ def list_topic_messages(tid: str):
     return [dict(r) for r in rows]
 
 
+# ── P1-3 语义搜索（关键词召回 + LLM 语义重排，跨 模块/任务/话题/消息）──
+SEMSEARCH_RANK_SYSTEM = """你是语义搜索引擎的重排器。下面给出用户查询与候选条目列表（每行格式：[序号][类型] 标题 | 附加字段）。
+对每条候选判断它与查询的语义相关度（同义改写、意图相近也算相关，不只是字面匹配），输出 JSON 数组，每项：
+{"i": 候选序号, "score": 0-100 整数, "snippet": "一句话摘要（≤40字），从该条目内容提炼并点明为何与查询相关"}
+只保留 score>=50 的条目；全部不相关返回 []。只输出 JSON，不要任何解释。"""
+
+
+@app.post("/api/search")
+async def api_search(req: Request):
+    """P1-3 语义搜索：先关键词召回（模块/任务/话题/消息），再交给 LLM 语义重排打分。"""
+    data = await req.json()
+    q = (data.get("q") or "").strip()
+    pid = (data.get("project_id") or "").strip()
+    if not q:
+        return {"ok": False, "error": "搜索词不能为空"}
+    conn = get_db()
+    try:
+        # 分词：整句 + 按空格/标点拆分（中文可整体命中）
+        pats = [q]
+        for w in re.split(r"[\s,，、;；:：]+", q):
+            w = w.strip()
+            if w and w not in pats:
+                pats.append(w)
+        pats = pats[:6]
+
+        def _like(cols):
+            parts, args = [], []
+            for c in cols:
+                for p in pats:
+                    parts.append(f"{c} LIKE ?")
+                    args.append(f"%{p}%")
+            return "(" + " OR ".join(parts) + ")", args
+
+        scope, sc_arg = "", []
+        if pid:
+            scope = "AND project_id=?"
+            sc_arg = [pid]
+        scope_t = scope.replace("project_id", "t.project_id")  # 话题查询带 LEFT JOIN，需消歧义
+
+        # ① 模块召回
+        lc, la = _like(["name", "desc", "domain", "flow"])
+        mods = [dict(r) for r in conn.execute(
+            f"SELECT id,project_id,name,desc,domain,flow,status,owner_role FROM modules WHERE {lc} {scope} ORDER BY sort LIMIT 8",
+            la + sc_arg).fetchall()]
+        # ② 任务召回
+        lc, la = _like(["name", "done_criteria"])
+        tasks = [dict(r) for r in conn.execute(
+            f"SELECT id,project_id,module_id,topic_id,name,owner_role,status,stage FROM tasks WHERE {lc} {scope} ORDER BY updated_at DESC LIMIT 8",
+            la + sc_arg).fetchall()]
+        # ③ 话题召回（带模块名，便于展示）
+        lc, la = _like(["t.name"])
+        topics = [dict(r) for r in conn.execute(
+            f"SELECT t.id,t.project_id,t.module_id,t.name,t.status,m.name AS module_name FROM topics t LEFT JOIN modules m ON m.id=t.module_id WHERE {lc} {scope_t} ORDER BY t.created_at DESC LIMIT 8",
+            la + sc_arg).fetchall()]
+        # ④ 消息召回（话题消息 + 项目群聊）
+        lc, la = _like(["text"])
+        msgs = [dict(r) for r in conn.execute(
+            f"SELECT id,project_id,topic_id,sender,kind,text,ts FROM messages WHERE {lc} {scope} ORDER BY id DESC LIMIT 8",
+            la + sc_arg).fetchall()]
+
+        # ── 组装候选（给 LLM 的紧凑文本）──
+        cand = []
+        for m in mods:
+            cand.append({"type": "module", "raw": m, "text": f"[模块] {m['name']} | 业务域:{m.get('domain','')} 流程:{m.get('flow','')} 状态:{m.get('status','')} | 描述:{m.get('desc','')[:60]}"})
+        for t in tasks:
+            cand.append({"type": "task", "raw": t, "text": f"[任务] {t['name']} | 模块:{t.get('module_id','')} 负责人:{t.get('owner_role','')} 状态:{t.get('status','')} 阶段:{t.get('stage','')}"})
+        for tp in topics:
+            cand.append({"type": "topic", "raw": tp, "text": f"[话题] {tp['name']} | 模块:{tp.get('module_name') or tp.get('module_id','')} 状态:{tp.get('status','')}"})
+        for ms in msgs:
+            cand.append({"type": "message", "raw": ms, "text": f"[消息] {ms.get('sender','')}: {ms.get('text','')[:80]}"})
+
+        if not cand:
+            conn.close()
+            return {"ok": True, "query": q, "results": []}
+
+        # ── LLM 语义重排 ──
+        lines = "\n".join(f"{i} {c['text']}" for i, c in enumerate(cand))
+        ranked, _m = await _llm_extract(
+            SEMSEARCH_RANK_SYSTEM,
+            f"用户查询：{q}\n候选条目：\n{lines}\n\n输出相关条目的打分 JSON。")
+        scored = {}
+        if ranked is not None:
+            for it in ranked:
+                try:
+                    i = int(it.get("i", -1))
+                    score = int(it.get("score", 0))
+                    if 0 <= i < len(cand) and score >= 50:
+                        scored[i] = {"score": score, "snippet": str(it.get("snippet", ""))[:120]}
+                except (TypeError, ValueError):
+                    continue
+        # LLM 失败或空 → 兜底：按原序返回（score 0）
+        results = []
+        for i, c in enumerate(cand):
+            sc = scored.get(i)
+            r = c["raw"]
+            if c["type"] == "module":
+                results.append({"type": "module", "id": r["id"], "project_id": r["project_id"], "title": r["name"],
+                                "snippet": sc["snippet"] if sc else (r.get("desc") or "")[:120],
+                                "score": sc["score"] if sc else 0, "module_id": r["id"], "status": r.get("status", ""),
+                                "domain": r.get("domain", ""), "flow": r.get("flow", "")})
+            elif c["type"] == "task":
+                results.append({"type": "task", "id": r["id"], "project_id": r["project_id"], "title": r["name"],
+                                "snippet": sc["snippet"] if sc else "",
+                                "score": sc["score"] if sc else 0, "module_id": r.get("module_id", ""),
+                                "topic_id": r.get("topic_id", ""), "stage": r.get("stage", ""), "status": r.get("status", "")})
+            elif c["type"] == "topic":
+                results.append({"type": "topic", "id": r["id"], "project_id": r["project_id"], "title": r["name"],
+                                "snippet": sc["snippet"] if sc else "",
+                                "score": sc["score"] if sc else 0, "module_id": r.get("module_id", "")})
+            else:
+                results.append({"type": "message", "id": str(r["id"]), "project_id": r.get("project_id", ""),
+                                "title": f"{r.get('sender','')} 说", "snippet": sc["snippet"] if sc else (r.get("text") or "")[:120],
+                                "score": sc["score"] if sc else 0, "topic_id": r.get("topic_id", ""),
+                                "sender": r.get("sender", "")})
+        results.sort(key=lambda x: x["score"], reverse=True)
+        conn.close()
+        return {"ok": True, "query": q, "results": results[:20]}
+    except Exception as e:
+        conn.close()
+        return {"ok": False, "error": f"搜索异常：{e}"}
+
+
 @app.post("/api/topics/{tid}/chat")
 async def topic_chat(tid: str, req: Request):
     """话题对话（Phase C：上下文按模块隔离——只注入该模块的上下文窗口，token 针对性投入）。"""

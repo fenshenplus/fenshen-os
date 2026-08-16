@@ -285,6 +285,7 @@
     <div class="spacer"></div>
     <span class="ver">v6.1</span>
     <span id="userChip" class="user-chip" style="display:none"></span>
+    <button class="btn" onclick="openSearchDlg()" title="跨模块/任务/话题/群聊消息语义搜索">🔍 搜索</button>
     <button class="btn" id="btnAnnot">标注模式：关</button>
     <button class="btn" onclick="showAbout()">原型说明</button>
   </div>
@@ -1501,7 +1502,97 @@ async function fetchTrajectoryLive(pid){
   }
   body.scrollTop = body.scrollHeight;
 }
-/* 元神中止：真的把正在跑的请求取消掉（AbortController），不再插一条假的系统消息 */
+
+/* P1-3：语义搜索 —— 关键词召回 + AI 语义重排，跨 模块/任务/话题/群聊消息 */
+let _lastSearch = [];
+function openSearchDlg(){
+  const m = document.getElementById('searchMask');
+  if(!m) return;
+  m.style.display = 'flex';
+  setTimeout(()=>{ const i=document.getElementById('searchInput'); if(i) i.focus(); }, 60);
+}
+function closeSearchDlg(){
+  const m = document.getElementById('searchMask');
+  if(m) m.style.display = 'none';
+}
+async function runSearch(){
+  const inp = document.getElementById('searchInput');
+  const box = document.getElementById('searchResults');
+  const q = (inp ? inp.value : '').trim();
+  if(!q){ if(box) box.innerHTML = '<div class="sr-empty">输入关键词或自然语句，回车搜索</div>'; return; }
+  if(box) box.innerHTML = '<div class="sr-loading">🧠 语义搜索中（关键词召回 + AI 重排）…</div>';
+  let j = null;
+  try{
+    j = await apiJson('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q})});
+  }catch(e){
+    if(box) box.innerHTML = '<div class="sr-empty">请求失败：'+escapeHtml(errText(e))+'</div>';
+    return;
+  }
+  if(!j || !j.ok){
+    if(box) box.innerHTML = '<div class="sr-empty">'+escapeHtml((j&&j.error)||'搜索失败')+'</div>';
+    return;
+  }
+  _lastSearch = j.results || [];
+  renderSearchResults(_lastSearch);
+}
+function renderSearchResults(list){
+  const box = document.getElementById('searchResults');
+  if(!box) return;
+  if(!list.length){ box.innerHTML = '<div class="sr-empty">没有找到相关内容 —— 换个说法，或搜索更宽泛的关键词</div>'; return; }
+  const icon = {module:'📦', task:'✅', topic:'💬', message:'✉️'};
+  const label = {module:'模块', task:'任务', topic:'话题', message:'消息'};
+  box.innerHTML = list.map(r=>{
+    const sc = typeof r.score === 'number' && r.score>0 ? r.score : 0;
+    return `<div class="sr-item" onclick="gotoSearchResult('${r.type}','${jsStr(r.id)}')">
+      <div class="sr-line1">${icon[r.type]||'🔎'} <b>${escapeHtml(r.title||'')}</b> <span class="sr-type">${label[r.type]||r.type}</span>
+        <span class="sr-score">${sc}%</span></div>
+      <div class="sr-line2">${escapeHtml(r.snippet||'')}</div>
+      <div class="sr-line3">${escapeHtml(r.project_id||'')}${r.domain?' · '+escapeHtml(r.domain):''}${r.flow?' · '+escapeHtml(r.flow):''}${r.sender?' · '+escapeHtml(r.sender):''}</div>
+    </div>`;
+  }).join('');
+}
+async function gotoSearchResult(type,id){
+  closeSearchDlg();
+  const r = _lastSearch.find(x=>x.type===type && String(x.id)===String(id));
+  if(!r) return;
+  // 跨项目：先切到结果所在项目
+  if(r.project_id && r.project_id!==curRoom){
+    selectRoom(r.project_id);
+    await new Promise(res=>setTimeout(res,450));
+  }
+  const sleep = ms=>new Promise(res=>setTimeout(res,ms));
+  try{
+    if(type==='module'){
+      document.querySelector('.navitem[data-sec="board"]')?.click();
+      await sleep(600);
+      openCellDlg(r.module_id||r.id, r.status||'');
+    } else if(type==='topic'){
+      await openTopicDlg(r.module_id||'');
+      await sleep(300);
+      const t = (window.curTopics||[]).find(x=>String(x.id)===String(r.id));
+      if(t) selectTopic(t.id); else selectTopic(r.id);
+    } else if(type==='task'){
+      if(r.topic_id){
+        await openTopicDlg(r.module_id||'');
+        await sleep(300);
+        selectTopic(r.topic_id);
+      } else {
+        document.querySelector('.navitem[data-sec="board"]')?.click();
+        await sleep(600);
+        openCellDlg(r.module_id||'', r.stage||r.status||'');
+      }
+    } else if(type==='message'){
+      if(r.topic_id){
+        await openTopicDlg(r.module_id||'');
+        await sleep(300);
+        selectTopic(r.topic_id);
+      } else {
+        document.querySelector('.navitem[data-sec="chat"]')?.click();
+        loadChat(curRoom);
+      }
+    }
+  }catch(e){ console.error('gotoSearchResult:', e); }
+}
 function metaStop(){
   if(!activeChatAbort){ toast('现在没有正在进行的请求'); return; }
   activeChatAbort.abort();
@@ -4187,6 +4278,41 @@ async function syncDirect(mid){
             font-size:16px;padding:0 4px;line-height:1">×</button>
   </div>
   <div id="livePanelBody" style="flex:1;overflow-y:auto;padding:8px 12px;max-height:340px"></div>
+</div>
+
+<!-- P1-3：语义搜索弹窗（关键词召回 + AI 重排，跨 模块/任务/话题/消息） -->
+<style>
+.search-mask{position:fixed;inset:0;background:rgba(15,12,40,.45);display:flex;align-items:flex-start;justify-content:center;z-index:9500;padding:9vh 16px 16px}
+.search-card{width:560px;max-width:94vw;background:#fff;border-radius:16px;box-shadow:0 14px 48px rgba(0,0,0,.22);overflow:hidden;display:flex;flex-direction:column;max-height:74vh}
+.search-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;font-size:14px;font-weight:600;color:#221c4a;border-bottom:.5px solid var(--gray-200)}
+.search-head button{background:none;border:none;font-size:15px;cursor:pointer;color:var(--gray-400)}
+.search-row{display:flex;gap:8px;padding:12px 16px;border-bottom:.5px solid var(--gray-200)}
+.search-row input{flex:1;padding:9px 12px;border:.5px solid var(--gray-300);border-radius:9px;font-size:13px;outline:none;background:#f7f7fb}
+.search-row input:focus{border-color:#6d5bd0}
+.search-results{flex:1;overflow-y:auto;padding:8px 12px}
+.sr-empty{color:var(--gray-400);font-size:12px;text-align:center;padding:28px 0}
+.sr-loading{color:var(--meta);font-size:12px;text-align:center;padding:28px 0}
+.sr-item{padding:9px 11px;border:.5px solid var(--gray-200);border-radius:10px;margin-bottom:7px;cursor:pointer;background:#fff;transition:background .15s}
+.sr-item:hover{background:var(--meta-50);border-color:#cfc9ef}
+.sr-line1{font-size:13px;color:#221c4a;display:flex;align-items:center;gap:6px}
+.sr-type{font-size:10px;color:#fff;background:var(--gray-status);border-radius:4px;padding:1px 5px;flex-shrink:0}
+.sr-score{margin-left:auto;font-size:11px;color:#34c98e;font-weight:600;flex-shrink:0}
+.sr-line2{font-size:11px;color:var(--gray-500);margin-top:3px;line-height:1.45;word-break:break-word}
+.sr-line3{font-size:10px;color:var(--gray-400);margin-top:3px}
+</style>
+<div class="search-mask" id="searchMask" style="display:none" onclick="if(event.target===this)closeSearchDlg()">
+  <div class="search-card">
+    <div class="search-head">🔍 语义搜索 <span style="font-size:11px;font-weight:400;color:var(--gray-400)">跨 模块/任务/话题/群聊消息 · AI 语义重排</span>
+      <button onclick="closeSearchDlg()">✕</button></div>
+    <div class="search-row">
+      <input id="searchInput" placeholder="如：登录鉴权方案、数据库迁移、用户增长…（回车搜索）"
+             onkeydown="if(event.key==='Enter')runSearch()">
+      <button class="btn sm meta" onclick="runSearch()" style="flex-shrink:0">搜索</button>
+    </div>
+    <div class="search-results" id="searchResults">
+      <div class="sr-empty">输入关键词或自然语句，回车搜索；支持跨项目检索</div>
+    </div>
+  </div>
 </div>
 
 </body>
