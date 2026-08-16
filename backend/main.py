@@ -2363,11 +2363,12 @@ async def market_feedback_to_board(fid: str):
         conn.close()
         return {"ok": False, "error": "模块还没有话题对话组"}
     text = (fb["text"] or "")[:120]
+    _stg, _trk = _derive_task_stage_track(conn, mod["id"], proj["id"])
     conn.execute(
-        "INSERT INTO tasks (project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO tasks (project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (proj["id"], mod["id"], topic["id"], f"[用户反馈] {text}", "前端工程师", "todo",
-         f"处理用户反馈：{text}", datetime.now().isoformat()))
+         f"处理用户反馈：{text}", _stg, _trk, datetime.now().isoformat()))
     conn.execute("UPDATE market_feedback SET status='done' WHERE id=?", (fid,))
     conn.commit()
     conn.close()
@@ -5358,10 +5359,11 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
                         "VALUES (?,?,?,?,?,?,?)",
                         (topic_id, pid, mod_id, "默认讨论", "[]", "open", datetime.now().isoformat()),
                     )
+            _stg, _trk = _derive_task_stage_track(conn, mod_id, pid)
             conn.execute(
-                "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, datetime.now().isoformat(), datetime.now().isoformat()),
+                "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (task_id, pid, mod_id, topic_id, task_name, role, "todo", done_criteria, _stg, _trk, datetime.now().isoformat(), datetime.now().isoformat()),
             )
             conn.commit()
             conn.close()
@@ -5628,10 +5630,11 @@ async def plan_project(pid: str, req: Request):
             tname = (t.get("name") or "").strip()
             if not tname:
                 continue
+            _stg, _trk = _derive_task_stage_track(conn, mid, pid)
             conn.execute(
-            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (f"tk{time.time_ns()}", pid, mid, tid, tname[:60], owner, "todo",
-             (t.get("done_criteria") or "").strip()[:300], now, now),
+             (t.get("done_criteria") or "").strip()[:300], _stg, _trk, now, now),
             )
             task_count += 1
     conn.commit()
@@ -6167,10 +6170,17 @@ async def distill_task(tid: str, req: Request):
         return {"ok": False, "error": "话题不存在"}
     tid2 = f"tk{int(datetime.now().timestamp() * 1000)}"
     done_criteria = (data.get("done_criteria") or "").strip()[:300]
+    # P0-4：优先用前端显式传入的 stage/track，缺失则从模块生命周期推导
+    _explicit_stg = (data.get("stage") or "").strip()
+    _explicit_trk = (data.get("track") or "").strip()
+    if _explicit_stg:
+        _stg, _trk = _explicit_stg, (_explicit_trk or "web")
+    else:
+        _stg, _trk = _derive_task_stage_track(conn, topic["module_id"], topic["project_id"])
     conn.execute(
-        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tasks (id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (tid2, topic["project_id"], topic["module_id"], tid, name,
-         data.get("owner_role", "后端"), "todo", done_criteria, datetime.now().isoformat(), datetime.now().isoformat()),
+         data.get("owner_role", "后端"), "todo", done_criteria, _stg, _trk, datetime.now().isoformat(), datetime.now().isoformat()),
     )
     # 同步：话题内落一条系统消息
     conn.execute(
@@ -6327,6 +6337,32 @@ def narrowcast_targets(project_id: str = "", module_id: str = ""):
 def _cell_stage_of_task(task: dict) -> str:
     """看板格的纵轴键 = 任务的 stage（生命周期阶段）；缺省回落 status。"""
     return (task.get("stage") or task.get("status") or "").strip()
+
+
+def _derive_task_stage_track(conn, module_id: str, project_id: str) -> tuple:
+    """P0-4：对话流任务落 stage——从模块当前生命周期推导新任务应落 stage/track。
+    优先级：① 该模块已有任务的 stage（模块当前阶段）→ ② 项目该轨道阶段链首阶段 → ③ '策划'。
+    返回 (stage, track)。
+    """
+    if not module_id:
+        return ("", "web")
+    mod = conn.execute("SELECT track FROM modules WHERE id=?", (module_id,)).fetchone()
+    track = (mod["track"] if mod and (mod["track"] or "") else "web")
+    # ① 模块已有任务的 stage（取最近更新的）
+    ex = conn.execute(
+        "SELECT stage FROM tasks WHERE module_id=? AND stage<>'' ORDER BY updated_at DESC LIMIT 1",
+        (module_id,)).fetchone()
+    if ex and ex["stage"]:
+        return (ex["stage"], track)
+    # ② 项目轨道阶段链首阶段
+    try:
+        stages = get_stage_chain(conn, project_id, track)
+        if stages:
+            return (stages[0], track)
+    except Exception:
+        pass
+    # ③ 兜底
+    return ("策划", track)
 
 
 def _cell_latest(conn, mid: str, stage: str) -> dict:
