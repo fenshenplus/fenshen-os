@@ -511,6 +511,11 @@
               <select id="newModRoleB" style="padding:6px 10px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff">
                 <option>后端</option><option>前端</option><option>产品</option>
               </select>
+              <input id="newModDomainB" placeholder="业务域(如:用户增长)" style="width:130px;padding:6px 8px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:11px">
+              <input id="newModFlowB" placeholder="流程(如:注册登录)" style="width:120px;padding:6px 8px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:11px">
+              <select id="newModLayerB" style="padding:6px 8px;border:0.5px solid var(--gray-200);border-radius:8px;font-size:11px;background:#fff">
+                <option value="">技术层(可选)</option><option value="ui">UI</option><option value="api">API</option><option value="service">Service</option><option value="data">Data</option><option value="model">Model</option><option value="ops">Ops</option>
+              </select>
               <button class="btn sm meta" onclick="createMod()">+ 建模块</button>
               <button class="btn sm" onclick="openTopicDlgNew()">+ 新建话题</button>
             </div>
@@ -2372,6 +2377,31 @@ async function toggleBoardAutonomy(){
 /* ── v6.1 矩阵看板（模块 × 阶段） ── */
 window._boardView = window._boardView || 'matrix';
 window._curTrack = window._curTrack || 'web';
+window._persona = window._persona || 'exec';        // P0-1 角色视角：strategy / manage / exec
+window._boardAxis = window._boardAxis || 'matrix';  // P0-2 组织轴：matrix / flow(业务流)
+window._legendDim = window._legendDim || 'status';  // P1-2 图例维度：status / layer / owner
+window._tour = window._tour || {active:false, idx:0, path:[]};  // P1-1 引导导览状态
+function setPersona(p){ window._persona=p; if(window._mx) renderMatrix(window._mx); }
+function setBoardAxis(a){ window._boardAxis=a; if(window._mx) renderMatrix(window._mx); }
+function setLegendDim(d){ window._legendDim=d; if(window._mx) renderMatrix(window._mx); }
+// P1-2 技术层固定调色板
+const LAYER_COLORS = {ui:'#722ed1', api:'#13c2c2', service:'#fa8c16', data:'#1890ff', model:'#eb2f96', ops:'#52c41a', '':'#bfbfbf'};
+function ownerColor(role){ const s=String(role||''); let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))%360; return 'hsl('+h+',62%,52%)'; }
+function modStatusColor(m){ // 依据模块 cells 推断整体状态色
+  const cells = (window._mx && window._mx.cells && window._mx.cells[m.id]) || {};
+  let anyBlocked=false, allDone=true, anyWip=false;
+  Object.values(cells).forEach(c=>{ const st=(c&&c.status)||'blank'; if(st==='blocked') anyBlocked=true; if(st!=='done'&&st!=='blank') allDone=false; if(st==='wip'||st==='todo') anyWip=true; });
+  if(anyBlocked) return '#d6455b';
+  if(allDone) return '#52c41a';
+  if(anyWip) return '#fa8c16';
+  return '#bfbfbf';
+}
+function legendAccent(m){
+  const dim = window._legendDim||'status';
+  if(dim==='layer') return LAYER_COLORS[String(m.layer||'').toLowerCase()] || LAYER_COLORS[''];
+  if(dim==='owner') return ownerColor(m.owner_role);
+  return modStatusColor(m);
+}
 const CELL_BG = {blank:'#ffffff', todo:'#fafafa', doing:'#fff7e6', review:'#e6f4ff', done:'#f6ffed', blocked:'#fff1f0'};
 const CELL_LABEL = {blank:'空白', todo:'待办', doing:'进行中', review:'待审核', done:'已完成', blocked:'阻塞'};
 const MATRIX_COLS = ['idea','todo','doing','review','done'];
@@ -2406,35 +2436,120 @@ function renderMatrix(j, elId){
   const g=document.getElementById(elId||'boardMatrix');
   if(!j.modules||!j.modules.length){ g.innerHTML='<div style="padding:40px;color:var(--gray-400);font-size:13px;width:100%;text-align:center">还没有模块 —— 用上方输入框添加第一个模块，或成立项目时解构</div>'; return; }
   const stages=j.stages||[];
+  const persona=window._persona||'exec';
+  const axis=window._boardAxis||'matrix';
   let h='<div style="min-width:max-content">';
+  // ── P0-1/P0-2 看板控制条：角色视角 + 组织轴 ──
+  h+=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+    <span style="font-size:11px;color:var(--gray-400)">视角</span>
+    ${['strategy','manage','exec'].map(p=>`<button onclick="setPersona('${p}')" style="border:none;border-radius:999px;padding:3px 12px;font-size:11px;cursor:pointer;${persona===p?'background:var(--meta);color:#fff':'background:var(--gray-100);color:var(--gray-500)'}">${{strategy:'战略',manage:'管理',exec:'执行'}[p]}</button>`).join('')}
+    <span style="font-size:11px;color:var(--gray-400);margin-left:6px">组织</span>
+    ${['matrix','flow'].map(a=>`<button onclick="setBoardAxis('${a}')" style="border:none;border-radius:999px;padding:3px 12px;font-size:11px;cursor:pointer;${axis===a?'background:var(--meta);color:#fff':'background:var(--gray-100);color:var(--gray-500)'}">${{matrix:'模块矩阵',flow:'业务流'}[a]}</button>`).join('')}
+    <span style="font-size:11px;color:var(--gray-400);margin-left:6px">配色</span>
+    ${['status','layer','owner'].map(d=>`<button onclick="setLegendDim('${d}')" style="border:none;border-radius:999px;padding:3px 12px;font-size:11px;cursor:pointer;${window._legendDim===d?'background:var(--meta);color:#fff':'background:var(--gray-100);color:var(--gray-500)'}">${{status:'状态',layer:'技术层',owner:'负责人'}[d]}</button>`).join('')}
+    <button onclick="openTour()" style="border:none;border-radius:999px;padding:3px 12px;font-size:11px;cursor:pointer;background:#fff7e6;color:#fa8c16;border:.5px solid #ffd591;margin-left:6px">🧭 导览</button>
+    <span style="font-size:10px;color:var(--gray-400);margin-left:auto">${{strategy:'只看进度与风险',manage:'进度·负责人·阻塞',exec:'全密度(版本/任务)'}[persona]}</span>
+  </div>`;
+  // ── P1-2 图例条 ──
+  h+=renderLegendBar();
+  // 表头
   h+='<div style="display:flex;align-items:flex-end;margin-bottom:6px">';
   h+='<div style="width:160px;flex-shrink:0;font-size:10px;color:var(--gray-400)">模块 ＼ 阶段</div>';
   h+=stages.map(s=>`<div style="flex:1;min-width:120px;text-align:center;font-size:11px;color:var(--gray-500);padding:4px 0;line-height:1.3">${escapeHtml(s==='__uncat__'?'未分环节':s)}<br><span style="color:var(--meta);font-weight:600">${j.row_pct[s]||0}%</span></div>`).join('');
   h+='</div>';
-  j.modules.forEach(m=>{
+  // 模块排序（业务流视图按 domain/flow 分组）
+  let mods=j.modules.slice();
+  if(axis==='flow'){ mods.sort((a,b)=> (a.domain||'~').localeCompare(b.domain||'~') || (a.flow||'~').localeCompare(b.flow||'~') || a.name.localeCompare(b.name)); }
+  let lastDomain='\u0000', lastFlow='\u0000';
+  mods.forEach(m=>{
+    if(axis==='flow'){
+      if((m.domain||'')!==lastDomain){ lastDomain=m.domain||''; lastFlow='';
+        h+=`<div style="font-size:12px;font-weight:700;color:var(--meta);margin:10px 0 4px;padding:3px 8px;background:#f4f3fe;border-radius:8px">🏢 业务域：${escapeHtml(lastDomain||'未归类')}</div>`; }
+      if((m.flow||'')!==lastFlow){ lastFlow=m.flow||'';
+        h+=`<div style="font-size:10px;color:var(--gray-500);margin:4px 0 2px 12px">↳ 流程：${escapeHtml(lastFlow||'未归类')}</div>`; }
+    }
     const isCrit=(j.critical_path||[]).includes(m.id);
-    h+='<div style="display:flex;align-items:stretch;margin-bottom:8px">';
-    h+=`<div onclick="openModuleFiles('${jsStr(m.id)}')" style="width:160px;flex-shrink:0;border:.5px solid var(--gray-200);border-radius:8px;padding:6px 8px;margin-right:6px;background:${isCrit?'#fff7e6':'var(--gray-100)'};cursor:pointer;position:relative">
-      <div style="font-size:12px;font-weight:500">${escapeHtml(m.name)}</div>
-      <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${escapeHtml(m.owner_role||'')} · ${j.column_pct[m.id]||0}%</div>
-      ${isCrit?'<div style="font-size:9px;color:#fa8c16;margin-top:2px">⚡关键路径</div>':''}
-    </div>`;
+    const blk=(j.cells[m.id]&&Object.values(j.cells[m.id]).some(c=>c.status==='blocked'));
+    // 模块名行（按视角控制密度）
+    let mline='';
+    if(persona==='strategy'){
+      mline=`<div style="font-size:13px;font-weight:700;color:var(--gray-700)">${escapeHtml(m.name)}</div><div style="font-size:12px;color:var(--meta);font-weight:700;margin-top:2px">${j.column_pct[m.id]||0}%</div>${isCrit?'<div style="font-size:9px;color:#fa8c16;margin-top:2px">⚡关键路径</div>':(blk?'<div style="font-size:9px;color:#d6455b;margin-top:2px">⛔阻塞</div>':'')}`;
+    } else if(persona==='manage'){
+      mline=`<div style="font-size:12px;font-weight:500">${escapeHtml(m.name)}</div><div style="font-size:10px;color:var(--gray-400);margin-top:2px">${escapeHtml(m.owner_role||'')} · ${j.column_pct[m.id]||0}%</div>${isCrit?'<div style="font-size:9px;color:#fa8c16;margin-top:2px">⚡关键路径</div>':(blk?'<div style="font-size:9px;color:#d6455b;margin-top:2px">⛔阻塞</div>':'')}`;
+    } else {
+      mline=`<div style="font-size:12px;font-weight:500">${escapeHtml(m.name)}</div><div style="font-size:10px;color:var(--gray-400);margin-top:2px">${escapeHtml(m.owner_role||'')} · ${j.column_pct[m.id]||0}%</div>${isCrit?'<div style="font-size:9px;color:#fa8c16;margin-top:2px">⚡关键路径</div>':''}<button onclick="openModuleEdit('${jsStr(m.id)}')" style="position:absolute;top:4px;right:6px;font-size:11px;border:none;background:transparent;color:var(--gray-400);cursor:pointer">✎</button>`;
+    }
+    h+=`<div style="display:flex;align-items:stretch;margin-bottom:8px">`;
+    h+=`<div onclick="openModuleFiles('${jsStr(m.id)}')" style="width:160px;flex-shrink:0;border:.5px solid var(--gray-200);border-left:3px solid ${legendAccent(m)};border-radius:8px;padding:6px 8px;margin-right:6px;background:${isCrit?'#fff7e6':'var(--gray-100)'};cursor:pointer;position:relative">${mline}</div>`;
     stages.forEach(s=>{
-      const c=(j.cells[m.id]&&j.cells[m.id][s])||{status:'blank',pct:0,done:0,total:0,tasks:[]};
-      const inner = c.status==='blank'
-        ? '<div style="font-size:10px;color:var(--gray-400);text-align:center;padding:10px 0">＋ 空白</div>'
-        : `<div style="font-size:10px;font-weight:600;color:#333">${c.pct}% · ${c.done}/${c.total}</div>`
+      const c=(j.cells[m.id]&&j.cells[m.id][s])||{status:'blank',pct:0,done:0,total:0,tasks:[],versions:{}};
+      let inner;
+      if(c.status==='blank'){ inner='<div style="font-size:10px;color:var(--gray-400);text-align:center;padding:10px 0">＋ 空白</div>'; }
+      else if(persona==='strategy'){ inner=`<div style="font-size:12px;font-weight:700;color:#333;text-align:center;padding:8px 0">${c.pct}%</div>`; }
+      else if(persona==='manage'){
+        inner=`<div style="font-size:10px;font-weight:600;color:#333">${c.pct}% · ${c.done}/${c.total}</div>`
+          + (c.versions&&c.versions.confirmed?'<div style="font-size:9px;color:#52c41a;margin-top:1px">✓ 已确认基线</div>':'')
+          + (c.status==='blocked'?'<div style="font-size:9px;color:#d6455b;margin-top:1px">⛔阻塞</div>':'');
+      } else {
+        inner=`<div style="font-size:10px;font-weight:600;color:#333">${c.pct}% · ${c.done}/${c.total}</div>`
           + (c.versions&&c.versions.confirmed?'<div style="font-size:9px;color:#52c41a;margin-top:1px">✓ 已确认基线</div>':(c.versions&&c.versions.count?`<div style="font-size:9px;color:var(--gray-400);margin-top:1px">🕑 ${c.versions.count} 版</div>`:''))
           + c.tasks.slice(0,3).map(t=>`<div style="font-size:9px;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">• ${escapeHtml(t.name)}</div>`).join('')
           + (c.tasks.length>3?`<div style="font-size:9px;color:var(--gray-400)">+${c.tasks.length-3}</div>`:'');
+      }
       h+=`<div onclick="openCellDlg('${jsStr(m.id)}','${jsStr(s)}')" style="flex:1;min-width:120px;background:${CELL_BG[c.status]||'#fff'};border:.5px solid var(--gray-200);border-radius:8px;padding:5px;margin:0 3px;cursor:pointer">${inner}</div>`;
     });
     h+='</div>';
   });
   h+=`<div style="font-size:11px;color:var(--gray-400);margin-top:6px">项目进度 <b style="color:var(--gray-600)">${j.project_pct}%</b> · 任务 ${j.task_total} / 已完成 ${j.task_done} · 空白格 <b style="color:#fa8c16">${j.blank_count}</b>（可补）${j.uncat_count?(' · <span style="color:#bfbfbf">未分环节 '+j.uncat_count+'（建议运行迁移整理）</span>'):''}</div>`;
-  h+=`<div style="font-size:10px;color:var(--gray-400);margin-top:3px">📐 看板=事（<b style="color:var(--meta)">魂轴=功能聚合</b> × <b style="color:var(--meta)">纵轴=流程/时间线</b>，进度一目了然） · 💬 群聊=人（团队沟通/迭代）· 点格 → 🕑版本 / 🎯定位群聊</div>`;
+  h+=`<div style="font-size:10px;color:var(--gray-400);margin-top:3px">📐 看板=事（<b style="color:var(--meta)">魂轴=功能聚合${axis==='flow'?' / 业务域':''}</b> × <b style="color:var(--meta)">纵轴=流程/时间线</b>） · 💬 群聊=人 · 点格 → 🕑版本 / 🎯定位群聊${persona==='strategy'?' · 当前：战略视角(大图)':persona==='manage'?' · 当前：管理视角':''}</div>`;
   h+='</div>';
   g.innerHTML=h;
+}
+
+// ── P1-2 图例条 ──
+function renderLegendBar(){
+  const dim=window._legendDim||'status';
+  let items=[];
+  if(dim==='status'){
+    items=Object.keys(CELL_BG).map(k=>`<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--gray-500)"><span style="width:10px;height:10px;border-radius:3px;background:${CELL_BG[k]};border:.5px solid var(--gray-200)"></span>${CELL_LABEL[k]}</span>`);
+  } else if(dim==='layer'){
+    items=Object.keys(LAYER_COLORS).filter(k=>k).map(k=>`<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--gray-500)"><span style="width:10px;height:10px;border-radius:3px;background:${LAYER_COLORS[k]}"></span>${String(k).toUpperCase()}</span>`);
+  } else {
+    items=['<span style="font-size:10px;color:var(--gray-500)">负责人项按角色名自动配色（同一角色同色）</span>'];
+  }
+  return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px;padding:2px 0">${items.join('')}</div>`;
+}
+
+// ── P1-1 引导导览 ──
+const TOUR_STEPS=[
+  {t:'模块矩阵总览', d:'看板把项目拆成「模块（功能聚合）× 阶段（流程时间线）」的矩阵。每个格子是可点击的任务单元，点格可看版本、定位群聊。'},
+  {t:'三种视角', d:'战略视角只看进度与风险；管理视角加负责人与阻塞；执行视角显示版本与任务明细。点顶部「视角」切换信息密度。'},
+  {t:'业务流视图', d:'点「组织→业务流」按业务域 / 流程分组，看清端到端链路，避免矩阵太散。'},
+  {t:'配色维度', d:'点「配色」可在状态色 / 技术层色 / 负责人色间切换：状态色快速看瓶颈，技术层色看分层，负责人色看负载。'},
+  {t:'影响涟漪', d:'点任意格子 → 🌊 影响分析，列出依赖本模块的下游模块，改前先评估波及面。'},
+  {t:'版本基线', d:'点格子 → 🕑 版本，冻结确认基线（confirmed），保证群聊交付可回放、可追责。'},
+  {t:'群聊联动', d:'点格子 → 🎯 定位群聊，把看板任务与对应项目群聊对齐，元神在群里调度团队。'},
+];
+function openTour(){ window._tour={active:true, idx:0, path:TOUR_STEPS}; renderTour(); }
+function nextTour(){ if(!window._tour||!window._tour.active) return; if(window._tour.idx>=window._tour.path.length-1){ closeTour(); return; } window._tour.idx++; renderTour(); }
+function closeTour(){ window._tour={active:false, idx:0, path:[]}; document.getElementById('tourOverlay')?.remove(); }
+function renderTour(){
+  const t=window._tour; if(!t||!t.active) return;
+  const step=t.path[t.idx];
+  document.getElementById('tourOverlay')?.remove();
+  const ov=document.createElement('div'); ov.id='tourOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(20,20,30,.4);z-index:9999;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:#fff;border-radius:16px;max-width:420px;width:90%;padding:24px;box-shadow:0 12px 40px rgba(0,0,0,.22)">
+    <div style="font-size:12px;color:var(--meta);font-weight:700">看板导览 ${t.idx+1} / ${t.path.length}</div>
+    <div style="font-size:18px;font-weight:700;margin:8px 0 6px;color:var(--gray-700)">${step.t}</div>
+    <div style="font-size:13px;color:var(--gray-500);line-height:1.65">${step.d}</div>
+    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+      <button onclick="closeTour()" style="border:none;background:var(--gray-100);color:var(--gray-500);border-radius:999px;padding:7px 16px;font-size:13px;cursor:pointer">跳过</button>
+      <button onclick="nextTour()" style="border:none;background:var(--meta);color:#fff;border-radius:999px;padding:7px 18px;font-size:13px;cursor:pointer">${t.idx>=t.path.length-1?'完成':'下一步'}</button>
+    </div>
+  </div>`;
+  ov.onclick=(e)=>{ if(e.target===ov) closeTour(); };
+  document.body.appendChild(ov);
 }
 
 function openCellDlg(mid,stage){
@@ -2469,6 +2584,7 @@ function openCellDlg(mid,stage){
     <div style="display:flex;gap:6px;margin-top:8px">
       <button class="btn sm meta" onclick="openCellVersions('${jsStr(mid)}','${jsStr(stage)}')">🕑 版本</button>
       <button class="btn sm" onclick="closeCellDlg();openTopicDlg('${jsStr(mid)}')">🎯 定位群聊</button>
+      <button class="btn sm" onclick="openImpact('${jsStr(mid)}','${jsStr(stage)}')">🌊 影响分析</button>
       <span id="cellVerBadge" style="font-size:10px;color:var(--gray-400);align-self:center"></span>
     </div>
     <div style="display:flex;gap:6px;margin-top:12px">
@@ -2520,6 +2636,12 @@ async function openCellVersions(mid,stage){
   await verReload(mid,stage);
 }
 function closeVerDlg(){ document.getElementById('verOverlay')?.remove(); }
+// 版本徽章底色：避免模板字符串内双层三元解析歧义（node 在「前缀文字+双层三元」下报 Missing }）
+function verKindStyle(kind){
+  if(kind==='confirmed') return 'background:#f6ffed;color:#52c41a;border:.5px solid #b7eb8e';
+  if(kind==='restored') return 'background:#e6f4ff;color:#1677ff;border:.5px solid #91caff';
+  return 'background:var(--gray-100);color:var(--gray-500)';
+}
 async function verReload(mid,stage){
   const el=document.getElementById('verList'); if(!el) return;
   try{
@@ -2529,7 +2651,7 @@ async function verReload(mid,stage){
     el.innerHTML=j.versions.map(v=>`<div style="border:.5px solid var(--gray-200);border-radius:8px;padding:8px;margin-bottom:6px">
       <div style="display:flex;align-items:center;gap:6px">
         <b style="font-size:13px">v${v.version_no}</b>
-        <span style="font-size:10px;padding:1px 6px;border-radius:6px;${v.kind==='confirmed'?'background:#f6ffed;color:#52c41a;border:.5px solid #b7eb8e':v.kind==='restored'?'background:#e6f4ff;color:#1677ff;border:.5px solid #91caff':'background:var(--gray-100);color:var(--gray-500)'">${v.kind}</span>
+        <span style="font-size:10px;padding:1px 6px;border-radius:6px;${verKindStyle(v.kind)}">${v.kind}</span>
         <span style="font-size:10px;color:var(--gray-400)">${escapeHtml((v.created_at||'').slice(0,19).replace('T',' '))}</span>
         <span style="font-size:10px;color:var(--gray-400);margin-left:auto">${(v.content_len||0)} 字</span>
       </div>
@@ -2673,13 +2795,75 @@ async function openModuleFiles(mid){
   }catch(e){ toast('打开失败：'+errText(e)); }
 }
 function closeFileMask(){ document.getElementById('fileMask').style.display='none'; }
+// ── P0-2 模块编辑（含业务域/流程维度）──
+async function openModuleEdit(mid){
+  const m=(window._mx&&window._mx.modules||[]).find(x=>x.id===mid); if(!m){ toast('模块不存在'); return; }
+  const ov=document.createElement('div'); ov.id='modEditOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:330;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:#fff;border-radius:14px;width:min(460px,92vw);padding:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div style="font-size:15px;font-weight:600">✎ 编辑模块</div><button class="btn sm" onclick="document.getElementById('modEditOverlay')?.remove()">✕</button></div>
+    <div class="field"><label>模块名</label><input id="meName" value="${escapeHtml(m.name||'')}" style="width:100%;padding:6px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px"></div>
+    <div class="field" style="margin-top:8px"><label>负责角色</label><select id="meRole" style="width:100%;padding:6px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff"><option ${m.owner_role==='后端'?'selected':''}>后端</option><option ${m.owner_role==='前端'?'selected':''}>前端</option><option ${m.owner_role==='产品'?'selected':''}>产品</option></select></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <div class="field" style="flex:1"><label>业务域(domain)</label><input id="meDomain" value="${escapeHtml(m.domain||'')}" placeholder="如：用户增长" style="width:100%;padding:6px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px"></div>
+      <div class="field" style="flex:1"><label>流程(flow)</label><input id="meFlow" value="${escapeHtml(m.flow||'')}" placeholder="如：注册登录" style="width:100%;padding:6px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px"></div>
+      <div class="field" style="flex:1"><label>技术层(layer)</label><select id="meLayer" style="width:100%;padding:6px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px;background:#fff"><option value="">未设</option><option value="ui" ${m.layer==='ui'?'selected':''}>UI</option><option value="api" ${m.layer==='api'?'selected':''}>API</option><option value="service" ${m.layer==='service'?'selected':''}>Service</option><option value="data" ${m.layer==='data'?'selected':''}>Data</option><option value="model" ${m.layer==='model'?'selected':''}>Model</option><option value="ops" ${m.layer==='ops'?'selected':''}>Ops</option></select></div>
+    </div>
+    <div class="field" style="margin-top:8px"><label>描述</label><textarea id="meDesc" style="width:100%;padding:6px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px">${escapeHtml(m.desc||'')}</textarea></div>
+    <div style="display:flex;gap:6px;margin-top:12px;justify-content:flex-end"><button class="btn sm" onclick="document.getElementById('modEditOverlay')?.remove()">取消</button><button class="btn sm primary" onclick="saveModuleEdit('${jsStr(mid)}')">保存</button></div>
+  </div>`;
+  ov.onclick=e=>{ if(e.target===ov) ov.remove(); };
+  document.getElementById('modEditOverlay')?.remove();
+  document.body.appendChild(ov);
+}
+async function saveModuleEdit(mid){
+  const d={ name:document.getElementById('meName').value.trim(), owner_role:document.getElementById('meRole').value,
+    domain:document.getElementById('meDomain').value.trim(), flow:document.getElementById('meFlow').value.trim(), layer:document.getElementById('meLayer').value, desc:document.getElementById('meDesc').value.trim() };
+  try{ const r=await fetch('/api/projects/'+curRoom+'/modules/'+encodeURIComponent(mid),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+    const j=await r.json(); if(j.ok){ toast('✅ 已保存'); document.getElementById('modEditOverlay')?.remove(); await loadMatrix(); } else toast('❌ '+j.error);
+  }catch(e){ toast('请求失败：'+e); }
+}
+// ── P0-3 影响分析（基于 depends_on 反向推导下游涟漪）──
+async function openImpact(mid,stage){
+  const mods=(window._mx&&window._mx.modules)||[];
+  const cur=mods.find(m=>m.id===mid); if(!cur){ return; }
+  const down=mods.filter(m=>(m.depends_on||[]).includes(mid));
+  const stageName=stage==='__uncat__'?'未分环节':stage;
+  let h='';
+  if(!down.length){ h='<div style="font-size:12px;color:var(--gray-400);padding:10px 0">暂无其他模块依赖「'+escapeHtml(cur.name)+'」——本次改动暂无下游涟漪。</div>'; }
+  else{
+    h='<div style="font-size:12px;color:var(--gray-500);margin-bottom:6px">改动「'+escapeHtml(cur.name)+' · '+escapeHtml(stageName)+'」将影响 <b style="color:#d6455b">'+down.length+'</b> 个下游模块：</div>';
+    down.forEach(d=>{
+      const c=(window._mx.cells[d.id]&&window._mx.cells[d.id][stage])||{status:'blank',pct:0};
+      h+=`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:.5px solid var(--gray-200);font-size:12px">
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(d.name)}</span>
+        <span style="font-size:10px;color:var(--gray-400)">${escapeHtml(d.owner_role||'')}</span>
+        <span style="font-size:11px;color:var(--meta);font-weight:600">${c.pct}%</span>
+        <button class="btn sm" onclick="document.getElementById('impactOverlay')?.remove();openCellDlg('${jsStr(d.id)}','${jsStr(stage)}')">查看晶格</button>
+      </div>`;
+    });
+  }
+  const ov=document.createElement('div'); ov.id='impactOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:340;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:#fff;border-radius:14px;width:min(520px,94vw);max-height:86vh;overflow:auto;padding:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:15px;font-weight:600">🌊 影响分析 · 改动涟漪</div><button class="btn sm" onclick="document.getElementById('impactOverlay')?.remove()">✕</button></div>
+    <div style="font-size:11px;color:var(--gray-500);margin-bottom:8px">基于模块依赖关系（depends_on）自动推算下游影响范围——呼应版本护栏，改前先看清牵连。</div>
+    ${h}
+  </div>`;
+  ov.onclick=e=>{ if(e.target===ov) ov.remove(); };
+  document.getElementById('impactOverlay')?.remove();
+  document.body.appendChild(ov);
+}
 function copyPath(p){ try{ navigator.clipboard.writeText(p).then(()=>toast('✅ 路径已复制'),()=>toast('复制失败')); }catch(e){ toast('复制失败'); } }
 async function createMod(){
   const name=document.getElementById('newModNameB').value.trim();
   if(!name){ toast('填写模块名'); return; }
   const role=document.getElementById('newModRoleB').value;
-  try{ const r=await fetch('/api/projects/'+curRoom+'/modules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,owner_role:role})});
-    const j=await r.json(); if(j.ok){ document.getElementById('newModName').value=''; await loadBoard(); } else toast('❌ '+j.error);
+  const domain=document.getElementById('newModDomainB').value.trim();
+  const flow=document.getElementById('newModFlowB').value.trim();
+  const layer=document.getElementById('newModLayerB').value;
+  try{ const r=await fetch('/api/projects/'+curRoom+'/modules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,owner_role:role,domain,flow,layer})});
+    const j=await r.json(); if(j.ok){ document.getElementById('newModNameB').value=''; document.getElementById('newModDomainB').value=''; document.getElementById('newModFlowB').value=''; document.getElementById('newModLayerB').value=''; await loadBoard(); } else toast('❌ '+j.error);
   }catch(e){ toast('请求失败：'+e); }
 }
 async function runPlan(){

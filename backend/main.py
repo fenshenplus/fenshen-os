@@ -928,6 +928,15 @@ def init_db():
     tcols = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
     if "updated_at" not in tcols:
         cur.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT DEFAULT ''")
+    # ── v6.3 P0-2 业务域视图：modules 增加 domain / flow 维度（旧库升级）──
+    mcols = {r[1] for r in cur.execute("PRAGMA table_info(modules)").fetchall()}
+    if "domain" not in mcols:
+        cur.execute("ALTER TABLE modules ADD COLUMN domain TEXT DEFAULT ''")
+    if "flow" not in mcols:
+        cur.execute("ALTER TABLE modules ADD COLUMN flow TEXT DEFAULT ''")
+    # ── v6.3 P1-2 分层图例：modules 增加 layer（技术层）维度 ──
+    if "layer" not in mcols:
+        cur.execute("ALTER TABLE modules ADD COLUMN layer TEXT DEFAULT ''")
     # ── 兼容迁移：应用市场上架字段（v5.1：publish 状态 + 产品元数据 + 访问统计）──
     if "published" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN published INTEGER DEFAULT 0")
@@ -4758,10 +4767,11 @@ async def create_module(pid: str, req: Request):
     if conn.execute("SELECT 1 FROM modules WHERE id=?", (mid,)).fetchone():
         mid = f"{pid}-m{max_sort + 1}"
     conn.execute(
-        "INSERT INTO modules (id,project_id,name,desc,depends_on,owner_role,status,sort,created_at,updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO modules (id,project_id,name,desc,depends_on,owner_role,status,sort,domain,flow,layer,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (mid, pid, name, data.get("desc", ""), json.dumps(data.get("depends_on") or [], ensure_ascii=False),
          data.get("owner_role", "后端"), data.get("status", "idea"), max_sort + 1,
+         data.get("domain", ""), data.get("flow", ""), data.get("layer", ""),
          datetime.now().isoformat(), datetime.now().isoformat()),
     )
     conn.commit()
@@ -4778,7 +4788,7 @@ async def update_module(pid: str, mid: str, req: Request):
         conn.close()
         return {"ok": False, "error": "模块不存在"}
     fields, vals = [], []
-    for k in ("name", "desc", "owner_role", "context_summary"):
+    for k in ("name", "desc", "owner_role", "context_summary", "domain", "flow", "layer"):
         if k in data:
             fields.append(f"{k}=?")
             vals.append(data[k])
