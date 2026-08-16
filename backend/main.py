@@ -1494,12 +1494,15 @@ def _is_conn_error(e: Exception) -> bool:
     ))
 
 
-def call_llm(agent_id: str, history: list, system_prompt: str = None):
+def call_llm(agent_id: str, history: list, system_prompt: str = None,
+             phase: str = "", scope_modules: int = -1, project_id: str = ""):
     """统一 LLM 调用（Phase 5：埋点 + 降级链）。主模型失败自动尝试其他可用模型。
-    debug v4.1：连接类瞬时故障在同一 provider 自动重试一次，再进降级链。"""
+    debug v4.1：连接类瞬时故障在同一 provider 自动重试一次，再进降级链。
+    评测 P1（2026-08-16）：新增 phase/scope_modules/project_id 透传——话题/记忆/磨/蒸馏等
+    直调调用点可携带项目维度记账，修复 token 报告的项目级归集缺失。"""
     cands = _available_providers(agent_id)
     if not cands:
-        _log_usage(agent_id, "none", "", 0, "offline")
+        _log_usage(agent_id, "none", "", 0, "offline", phase=phase, scope_modules=scope_modules, project_id=project_id)
         return "[元神·离线] 当前该角色未配置可用模型 Key，已记录你的输入，配置后联网补答。"
     errors = []
     for provider, base, key, model in cands:
@@ -1508,7 +1511,8 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None):
             text, usage = _call_single_provider(provider, base, key, model, history, system_prompt)
             latency = int((datetime.now() - t0).total_seconds() * 1000)
             _log_usage(agent_id, provider, model, latency, "success",
-                       usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
+                       usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                       phase=phase, scope_modules=scope_modules, project_id=project_id)
             return text
         except Exception as e:
             if _is_conn_error(e):
@@ -1517,15 +1521,18 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None):
                     text, usage = _call_single_provider(provider, base, key, model, history, system_prompt)
                     latency = int((datetime.now() - t0).total_seconds() * 1000)
                     _log_usage(agent_id, provider, model, latency, "success",
-                               usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
+                               usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                               phase=phase, scope_modules=scope_modules, project_id=project_id)
                     return text
                 except Exception as e2:
                     latency = int((datetime.now() - t0).total_seconds() * 1000)
-                    _log_usage(agent_id, provider, model, latency, "degraded")
+                    _log_usage(agent_id, provider, model, latency, "degraded",
+                               phase=phase, scope_modules=scope_modules, project_id=project_id)
                     errors.append(f"{provider}: {e2}")
                     continue
             latency = int((datetime.now() - t0).total_seconds() * 1000)
-            _log_usage(agent_id, provider, model, latency, "degraded")
+            _log_usage(agent_id, provider, model, latency, "degraded",
+                       phase=phase, scope_modules=scope_modules, project_id=project_id)
             errors.append(f"{provider}: {e}")
     return f"[元神·降级] 所有模型调用失败（{'；'.join(errors[:2])}）。已记录你的输入，可稍后重试。"
 
@@ -5910,7 +5917,7 @@ async def topic_chat(tid: str, req: Request):
     agent_id = _role_id_by_name(mod["owner_role"]) if mod else "architect"
     if not agent_id:
         agent_id = "architect"
-    reply = call_llm(agent_id, hist, sys_prompt)
+    reply = call_llm(agent_id, hist, sys_prompt, phase="topic-chat", scope_modules=1, project_id=pid)
     # 落库 agent 回复（带 topic_id）
     conn = get_db()
     conn.execute(
