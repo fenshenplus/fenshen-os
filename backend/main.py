@@ -5555,7 +5555,7 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     except Exception:
         pass
     return {"reply": meta_reply, "actions": role_results, "ok": True, "rounds": round_no, "all_done": all_done,
-            "blast_radius": sorted(_blast) if _blast else [], "blast_scope": _blast_scope}
+            "blast_radius": sorted(_blast) if _blast else [], "blast_scope": _blast_scope, "run_id": run_id}
 
 
 # ── v4.2 立项自动拆解：沟通内容 → 看板（模块 + 任务 + 目标/标准）──
