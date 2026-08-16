@@ -1032,6 +1032,27 @@ def init_db():
     mscols = {r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()}
     if "report_json" not in mscols:
         cur.execute("ALTER TABLE messages ADD COLUMN report_json TEXT DEFAULT ''")
+    # ── 版本管理：module_versions（按看板格 module×stage 版本化：冻结确认基线/预编辑分支/恢复/对比）──
+    cur.execute("""CREATE TABLE IF NOT EXISTS module_versions (
+        id TEXT PRIMARY KEY,
+        module_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        stage TEXT DEFAULT '',
+        version_no INTEGER DEFAULT 1,
+        kind TEXT DEFAULT 'wip',
+        snapshot_name TEXT DEFAULT '',
+        snapshot_desc TEXT DEFAULT '',
+        snapshot_acceptance TEXT DEFAULT '',
+        snapshot_owner TEXT DEFAULT '',
+        snapshot_status TEXT DEFAULT '',
+        content TEXT DEFAULT '',
+        source_task_id TEXT DEFAULT '',
+        topic_id TEXT DEFAULT '',
+        parent_version TEXT DEFAULT '',
+        created_at TEXT,
+        created_by TEXT DEFAULT 'local'
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_mv_module_stage ON module_versions(module_id, stage)")
     # ── v6.2 短信验证码表（频率限制 + 一次性消费）──
     cur.execute(
         """CREATE TABLE IF NOT EXISTS sms_codes (
@@ -4891,6 +4912,18 @@ def _task_status(task_id: str, status: str, pid: str = "", note: str = "") -> No
     try:
         conn = get_db()
         conn.execute("UPDATE tasks SET status=?, updated_at=? WHERE id=?", (status, datetime.now().isoformat(), task_id))
+        # 版本护栏：格子已有确认基线，重新进入 doing = 开始改 → 先打 wip 预编辑快照保留改前态
+        if status == "doing":
+            try:
+                _rw = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+                if _rw and (_rw["module_id"] or ""):
+                    _st = _cell_stage_of_task(dict(_rw))
+                    if _cell_has_confirmed(conn, _rw["module_id"], _st):
+                        _freeze_cell_version(conn, _rw["module_id"], _st, pid,
+                                             kind="wip", content="", source_task_id=task_id,
+                                             created_by="pre-edit")
+            except Exception:
+                pass
         if note and pid:
             conn.execute(
                 "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
@@ -5367,6 +5400,24 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
                     _rm_lines.append("该模块待推进任务：" + "、".join(t["name"] for t in _rm_tasks[:5]))
                 role_sys_ctx += "\n\n【你负责的模块（爆炸半径聚焦，仅这些模块在此上下文）】\n" + "\n".join(_rm_lines)
                 _role_scope = len(_role_mods)
+                # 版本护栏：该角色负责的模块若有确认基线，提醒改动将生成新版本、不要整体覆写
+                try:
+                    _rc = get_db()
+                    _confirmed = []
+                    for _rm in _role_mods:
+                        _rs = conn.execute(
+                            "SELECT stage FROM tasks WHERE module_id=? AND stage<>'' LIMIT 1",
+                            (_rm["id"],)).fetchone()
+                        _stg = (_rs["stage"] if _rs else "")
+                        if _cell_has_confirmed(_rc, _rm["id"], _stg):
+                            _confirmed.append(_rm["name"])
+                    _rc.close()
+                    if _confirmed:
+                        role_sys_ctx += (f"\n\n⚠️ 版本护栏：模块「{'、'.join(_confirmed)}」已有确认版本基线。"
+                                         f"你的改动会自动生成新版本（旧基线可随时回滚），"
+                                         f"严禁整体覆写已确认功能，只改被明确要求的部分。")
+                except Exception:
+                    pass
         except Exception:
             _role_scope = 0
         # 疗效归因第⑤环：召回与任务最相关的经验（按 5 维权重排序），注入角色执行上下文
@@ -5813,6 +5864,17 @@ def project_matrix(pid: str, track: str = "web"):
             conn.execute("SELECT * FROM modules WHERE project_id=? ORDER BY sort, created_at", (pid,)).fetchall()]
     tasks = [dict(r) for r in
              conn.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY created_at", (pid,)).fetchall()]
+    # 版本管理：一次性汇总本项目所有格子版本信息（confirmed 标记 + 计数），供矩阵角标
+    _vrows = conn.execute(
+        "SELECT module_id,stage,kind FROM module_versions WHERE project_id=?", (pid,)).fetchall()
+    ver_map = {}
+    for _vr in _vrows:
+        _k = (_vr["module_id"], _vr["stage"])
+        _e = ver_map.get(_k, {"count": 0, "confirmed": False})
+        _e["count"] += 1
+        if _vr["kind"] == "confirmed":
+            _e["confirmed"] = True
+        ver_map[_k] = _e
     conn.close()
 
     # v6.2 P2：生命周期轨道（infra/release/ops）按阶段汇总项目级任务，渲染为单列阶段清单
@@ -5832,6 +5894,7 @@ def project_matrix(pid: str, track: str = "web"):
             c = {"stage": s, "status": _cell_status(tk), "pct": pct,
                  "total": total, "done": done_n,
                  "task_ids": [t["id"] for t in tk],
+                 "versions": ver_map.get(("__life__", s), {"count": 0, "confirmed": False}),
                  "tasks": [{"id": t["id"], "name": t["name"], "owner_role": t.get("owner_role", ""),
                             "status": t["status"], "done_criteria": t.get("done_criteria", "")} for t in tk]}
             cells["__life__"][s] = c
@@ -5862,6 +5925,7 @@ def project_matrix(pid: str, track: str = "web"):
                 c = {"stage": s, "status": _cell_status(tk), "pct": pct,
                      "total": total, "done": done_n,
                      "task_ids": [t["id"] for t in tk],
+                     "versions": ver_map.get((m["id"], s), {"count": 0, "confirmed": False}),
                      "tasks": [{"id": t["id"], "name": t["name"], "owner_role": t.get("owner_role", ""),
                                 "status": t["status"], "done_criteria": t.get("done_criteria", "")} for t in tk]}
                 cells[m["id"]][s] = c
@@ -6249,6 +6313,50 @@ def narrowcast_targets(project_id: str = "", module_id: str = ""):
     return {"ok": True, "targets": targets}
 
 
+# ── 版本管理（看板格 module×stage 版本化：冻结确认基线 / 预编辑分支 / 恢复 / 对比）──
+def _cell_stage_of_task(task: dict) -> str:
+    """看板格的纵轴键 = 任务的 stage（生命周期阶段）；缺省回落 status。"""
+    return (task.get("stage") or task.get("status") or "").strip()
+
+
+def _cell_latest(conn, mid: str, stage: str) -> dict:
+    row = conn.execute(
+        "SELECT * FROM module_versions WHERE module_id=? AND stage=? ORDER BY version_no DESC LIMIT 1",
+        (mid, stage)).fetchone()
+    return dict(row) if row else None
+
+
+def _cell_has_confirmed(conn, mid: str, stage: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM module_versions WHERE module_id=? AND stage=? AND kind='confirmed' LIMIT 1",
+        (mid, stage)).fetchone()
+    return bool(row)
+
+
+def _freeze_cell_version(conn, mid: str, stage: str, pid: str, kind: str = "wip",
+                         content: str = "", source_task_id: str = "", topic_id: str = "",
+                         created_by: str = "local", parent: str = "") -> int:
+    """对 (模块,阶段) 格打一个版本快照；返回 version_no。自动捕获模块规约（可恢复基线）。"""
+    mod = conn.execute("SELECT * FROM modules WHERE id=?", (mid,)).fetchone()
+    if not mod:
+        return 0
+    cur_no = conn.execute(
+        "SELECT COALESCE(MAX(version_no),0) FROM module_versions WHERE module_id=? AND stage=?",
+        (mid, stage)).fetchone()[0]
+    nxt = cur_no + 1
+    conn.execute(
+        """INSERT INTO module_versions (id,module_id,project_id,stage,version_no,kind,
+            snapshot_name,snapshot_desc,snapshot_acceptance,snapshot_owner,snapshot_status,
+            content,source_task_id,topic_id,parent_version,created_at,created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (f"mv_{mid}_{stage}_{nxt}", mid, pid, stage, nxt, kind,
+         mod["name"], mod["desc"] or "", "", mod["owner_role"] or "", mod["status"] or "",
+         content or "", source_task_id or "", topic_id or "", parent or "",
+         datetime.now().isoformat(), created_by))
+    conn.commit()
+    return nxt
+
+
 @app.post("/api/tasks/{task_id}/verify")
 async def verify_task(task_id: str, req: Request):
     """P0-C 看板验收门：用任务验收标准（或 done_criteria / 项目 standards）对照产出判定；达标转 done，否则标记 review。"""
@@ -6275,11 +6383,98 @@ async def verify_task(task_id: str, req: Request):
     mention = (" @" + " @".join(targets)) if targets else ""
     if status == "done":
         _task_status(task_id, "done", pid, f"✅ 验收通过：{task['name']}（{reason}）")
+        # 版本管理：冻结该 (模块,阶段) 格的确认基线（满意的部分被钉死，后续改动生成新版本、可回滚）
+        _vstage = _cell_stage_of_task(dict(task))
+        try:
+            _vconn = get_db()
+            _freeze_cell_version(_vconn, task["module_id"] or "", _vstage, pid,
+                                 kind="confirmed", content=output, source_task_id=task_id,
+                                 topic_id=task["topic_id"] or "", created_by="verify")
+            _vconn.close()
+        except Exception:
+            pass
         _narrowcast_notify(pid, f"✅ 验收通过：{task['name']}（{reason}）{mention}", targets)
         return {"ok": True, "pass": True, "status": "done", "reason": reason, "narrowcast": targets}
     _task_status(task_id, "review", pid, f"🔍 验收未通过：{task['name']}（{reason}）")
     _narrowcast_notify(pid, f"🔍 验收未通过：{task['name']}（{reason}）{mention}", targets)
     return {"ok": True, "pass": False, "status": "review", "reason": reason, "narrowcast": targets}
+
+
+# ── 版本管理 API：按看板格 (module×stage) 版本化 ──────────────────────────────
+@app.get("/api/cells/{mid}/{stage}/versions")
+def cell_versions(mid: str, stage: str):
+    """列出某格全部版本（含 confirmed 标记、内容长度、关联话题）。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id,version_no,kind,snapshot_name,created_at,created_by,source_task_id,topic_id,"
+        "LENGTH(content) AS content_len FROM module_versions WHERE module_id=? AND stage=? ORDER BY version_no DESC",
+        (mid, stage)).fetchall()
+    conn.close()
+    return {"ok": True, "module_id": mid, "stage": stage, "versions": [dict(r) for r in rows]}
+
+
+@app.post("/api/cells/{mid}/{stage}/version")
+async def cell_version_create(mid: str, stage: str, req: Request):
+    """手动打快照（body: kind/content/source_task_id/project_id）。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    conn = get_db()
+    n = _freeze_cell_version(conn, mid, stage, data.get("project_id") or "",
+                             kind=data.get("kind") or "wip", content=data.get("content") or "",
+                             source_task_id=data.get("source_task_id") or "", created_by="manual")
+    conn.close()
+    return {"ok": True, "version_no": n}
+
+
+@app.get("/api/cells/{mid}/{stage}/versions/diff")
+def cell_version_diff(mid: str, stage: str, a: str = "", b: str = ""):
+    """两版本 content 行级 diff（unified_diff）。声明在 {vid} 路由之前，避免被 /versions/{vid} 抢匹配。"""
+    import difflib
+    conn = get_db()
+    def _get(vid):
+        r = conn.execute("SELECT content FROM module_versions WHERE id=?", (vid,)).fetchone()
+        return (r["content"] if r else "") or ""
+    ca, cb = _get(a), _get(b)
+    conn.close()
+    if not a or not b or a == b:
+        return {"ok": True, "diff": [], "note": "需提供两个不同版本 id"}
+    d = difflib.unified_diff(ca.splitlines(), cb.splitlines(),
+                             fromfile=f"v({a})", tofile=f"v({b})", lineterm="")
+    return {"ok": True, "diff": list(d)}
+
+
+@app.get("/api/cells/{mid}/{stage}/versions/{vid}")
+def cell_version_get(mid: str, stage: str, vid: str):
+    """取某版本完整快照内容（预览）。"""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM module_versions WHERE id=?", (vid,)).fetchone()
+    conn.close()
+    if not row:
+        return {"ok": False, "error": "版本不存在"}
+    return {"ok": True, "version": dict(row)}
+
+
+@app.post("/api/cells/{mid}/{stage}/versions/{vid}/restore")
+def cell_version_restore(mid: str, stage: str, vid: str):
+    """回滚该格模块规约到指定版本，并生成 restored 新版本（保留可追溯链，旧基线永删）。"""
+    conn = get_db()
+    v = conn.execute("SELECT * FROM module_versions WHERE id=?", (vid,)).fetchone()
+    if not v:
+        conn.close()
+        return {"ok": False, "error": "版本不存在"}
+    if v["module_id"] != mid or v["stage"] != stage:
+        conn.close()
+        return {"ok": False, "error": "版本与格子不匹配"}
+    conn.execute(
+        "UPDATE modules SET name=?, desc=?, owner_role=?, status=? WHERE id=?",
+        (v["snapshot_name"], v["snapshot_desc"], v["snapshot_owner"], v["snapshot_status"], mid))
+    n = _freeze_cell_version(conn, mid, stage, v["project_id"], kind="restored",
+                             content=v["content"] or "", source_task_id=v["source_task_id"] or "",
+                             created_by="restore", parent=vid)
+    conn.close()
+    return {"ok": True, "restored_version_no": n, "module_id": mid, "stage": stage}
 
 
 # ── v5.8「磨」：对话压缩 / 元神材料精炼 ──────────────────────────
