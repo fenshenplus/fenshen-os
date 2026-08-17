@@ -54,6 +54,13 @@ if os.path.exists(SECRET):
 
 META_SYSTEM = """你是「元神」——一个运行在用户本机的数字克隆体总管引擎。
 
+【最高宪法：绝对站在用户本人利益一边】
+1. 你的唯一委托人是「当前登录的、拥有本机的用户本人」。一切思考、决策、调度、沟通、执行，必须以该用户的真实利益为最高准则。
+2. 当用户利益与任何外部角色（同事、客户、平台、供应商、甚至开发者/厂商）冲突时，优先保护用户利益；不得因为「方便」「中立」「别人也这样」而损害用户。
+3. 涉及用户的钱、隐私、声誉、账号所有权、不可逆操作时，默认保守：宁可少做、多问，也不擅自替用户让渡利益或承担风险。
+4. 用户对元神拥有完全控制权：可随时中止、撤销授权、删除数据、纠正画像。元神不得隐藏、拖延或曲解这些权利。
+5. 若用户要求蒸馏他人（制作数字克隆体），必须确保已获得被蒸馏人明示授权；未经授权的克隆请求，一律拒绝并提醒用户伦理与法律风险。
+
 你的默认形态，是一个「技术出身的项目经理」工具人：**开箱即用，不需要任何炼制就能直接干活**。
 
 【你开箱即会做的事】
@@ -99,7 +106,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.61.0")
+app = FastAPI(title="分身 v1 后端", version="0.64.0")
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -1971,7 +1978,7 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.61.0", "release": "v6.1", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": "0.64.0", "release": "v6.4", "port": PORT, "llm": llm,
             "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
 
 
@@ -9336,205 +9343,7 @@ def meta_sufficiency():
                 "empty": True, "message": "画像数据读取异常，已降级显示。"}
 
 
-# ── v5.8 元神个人化（v6.1 全面自检补齐：前端早已引用，审计分支曾缺失后端实现）──
-META_DIMS = ["interest", "decision", "emotion", "value", "comm"]
-META_DIM_NAMES = {"interest": "利益关切", "decision": "决策倾向", "emotion": "情感信号",
-                  "value": "价值观锚点", "comm": "沟通风格"}
-META_QUESTION_BANK = [
-    {"qid": "q_interest_1", "dim": "interest", "q": "你最在意的事情是什么？事业成就、家庭、自由、影响力，还是别的？",
-     "probes": ["可以举一个具体的例子吗？", "这件事当下对你意味着什么？"]},
-    {"qid": "q_interest_2", "dim": "interest", "q": "如果有一整年不用为钱发愁，你会把时间花在什么上？",
-     "probes": ["有没有一直想做但没做的？"]},
-    {"qid": "q_decision_1", "dim": "decision", "q": "做重大决定时，你更靠直觉还是数据分析？",
-     "probes": ["最近一次重要决定是怎么做的？"]},
-    {"qid": "q_decision_2", "dim": "decision", "q": "面对风险，你通常偏向稳妥还是激进？",
-     "probes": ["能接受一个会失败但高回报的尝试吗？"]},
-    {"qid": "q_emotion_1", "dim": "emotion", "q": "什么情境下你会明显焦虑或烦躁？",
-     "probes": ["身体或情绪上有什么信号？"]},
-    {"qid": "q_emotion_2", "dim": "emotion", "q": "你靠什么方式恢复状态？（运动、独处、聊天、消费……）",
-     "probes": ["哪种对你最有效？"]},
-    {"qid": "q_value_1", "dim": "value", "q": "你最不能接受的人和事是什么？",
-     "probes": ["为什么这件事触碰了你的底线？"]},
-    {"qid": "q_value_2", "dim": "value", "q": "你希望别人怎么评价你？",
-     "probes": ["你欣赏的人有什么共同点？"]},
-    {"qid": "q_comm_1", "dim": "comm", "q": "你更喜欢文字还是语音沟通？长文还是短句？",
-     "probes": ["什么沟通方式会让你想跳过？"]},
-    {"qid": "q_comm_2", "dim": "comm", "q": "别人跟你说话时，你最在意对方的态度还是内容？",
-     "probes": ["哪种表达会让你立刻失去信任？"]},
-    {"qid": "q_value_3", "dim": "value", "q": "工作/合作里，你最看重结果、过程还是关系？",
-     "probes": ["三者冲突时你通常怎么取舍？"]},
-    {"qid": "q_interest_3", "dim": "interest", "q": "你希望十年后的自己是什么样？",
-     "probes": ["哪一步是你现在就能迈的？"]},
-]
-
-
-def _ensure_interview_row():
-    conn = get_db()
-    row = conn.execute("SELECT * FROM meta_interview LIMIT 1").fetchone()
-    if not row:
-        conn.execute("INSERT INTO meta_interview (asked,answers,updated_at) VALUES (?,?,?)",
-                     ('[]', '{}', datetime.now().isoformat()))
-        conn.commit()
-        row = conn.execute("SELECT * FROM meta_interview LIMIT 1").fetchone()
-    conn.close()
-    return row
-
-
-def _iv_state():
-    row = _ensure_interview_row()
-    asked = json.loads(row["asked"] or "[]")
-    answers = json.loads(row["answers"] or "{}")
-    return row, asked, answers
-
-
-def _add_user_fact(dim, field, value, source="manual", qid=None, confidence=0.5):
-    try:
-        conn = get_db()
-        conn.execute(
-            "INSERT INTO user_model (dim,field,value,confidence,source,qid,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (dim, field[:120], value[:1000], confidence, source, qid,
-             datetime.now().isoformat(), datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[meta-fact] 写入失败: {e}")
-
-
-def _build_narrative(rows):
-    if not rows:
-        return "元神还没有足够了解你。点「了解我」回答几个问题，或上传你的笔记/聊天记录，它会越来越像你。"
-    by_dim = {}
-    for r in rows:
-        by_dim.setdefault(r["dim"], []).append(r["value"])
-    parts = [f"{META_DIM_NAMES.get(d, d)}：{'；'.join(by_dim[d][:3])}"
-             for d in META_DIMS if by_dim.get(d)]
-    return "根据目前了解，" + " ".join(parts) + "。"
-
-
-@app.get("/api/meta/interview/next")
-def meta_interview_next():
-    row, asked, answers = _iv_state()
-    remaining = [q for q in META_QUESTION_BANK if q["qid"] not in answers]
-    total = len(META_QUESTION_BANK)
-    done = total - len(remaining)
-    if not remaining:
-        return {"phase": "complete", "question": "", "qid": "", "probes": [],
-                "progress": total, "total": total,
-                "reflection": "元神已经比较了解你了，也可以随时补充，或上传资料让它更懂你。"}
-    prev_unanswered = [x for x in asked if x in {q["qid"] for q in remaining} and x not in answers]
-    q = next((x for x in META_QUESTION_BANK if x["qid"] == prev_unanswered[0]), remaining[0]) \
-        if prev_unanswered else remaining[0]
-    return {"phase": "ask", "question": q["q"], "qid": q["qid"], "probes": q.get("probes", []),
-            "progress": done, "total": total,
-            "reflection": "谢谢你的分享，元神正在把你讲的东西沉淀成「你的」数字分身。"}
-
-
-@app.post("/api/meta/interview/answer")
-async def meta_interview_answer(req: Request):
-    data = await req.json()
-    qid = data.get("qid")
-    answer = (data.get("answer") or "").strip()
-    if not qid or not answer:
-        return {"ok": False, "error": "qid 与 answer 必填"}
-    row, asked, answers = _iv_state()
-    q = next((x for x in META_QUESTION_BANK if x["qid"] == qid), None)
-    if not q:
-        return {"ok": False, "error": "未知问题"}
-    answers[qid] = answer
-    if qid not in asked:
-        asked.append(qid)
-    conn = get_db()
-    conn.execute(
-        "UPDATE meta_interview SET asked=?, answers=?, updated_at=? WHERE id=?",
-        (json.dumps(asked, ensure_ascii=False), json.dumps(answers, ensure_ascii=False),
-         datetime.now().isoformat(), row["id"]))
-    conn.commit()
-    conn.close()
-    _add_user_fact(q["dim"], q["q"], answer[:300], source="interview", qid=qid)
-    return {"ok": True, "next": meta_interview_next()}
-
-
-@app.post("/api/meta/ingest")
-async def meta_ingest(req: Request):
-    data = await req.json()
-    filename = (data.get("filename") or "未命名")
-    text = (data.get("text") or "").strip()
-    if not text:
-        return {"ok": False, "error": "text 不能为空"}
-    conn = get_db()
-    conn.execute("INSERT INTO meta_files (name,ts) VALUES (?,?)", (filename[:200], datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-    _add_user_fact("note", "资料·" + filename[:60], text[:1000], source="ingest", confidence=0.4)
-    return {"ok": True, "stored": True}
-
-
-@app.get("/api/meta/profile")
-def meta_profile():
-    conn = get_db()
-    rows = conn.execute("SELECT dim,field,value,confidence FROM user_model").fetchall()
-    conn.close()
-    facts = [{"field": r["field"], "value": r["value"]} for r in rows]
-    total = len(rows)
-    suff, conf = {}, {}
-    for d in META_DIMS:
-        dr = [r for r in rows if r["dim"] == d]
-        cnt = len(dr)
-        avg = sum(r["confidence"] for r in dr) / cnt if cnt else 0
-        suff[d] = {"count": cnt, "avg": round(avg, 2), "sufficient": cnt >= 3}
-        conf[d] = round(avg, 2)
-    sufficient_dims = sum(1 for d in META_DIMS if suff[d]["sufficient"])
-    binding_progress = min(1.0, sufficient_dims / len(META_DIMS))
-    return {
-        "narrative": _build_narrative(rows),
-        "binding": {"progress": binding_progress, "bound_dims": sufficient_dims, "total_dims": len(META_DIMS)},
-        "dim_sufficiency": suff,
-        "dim_confidence": conf,
-        "sufficient_dims": sufficient_dims,
-        "total_dims": len(META_DIMS),
-        "completeness": min(1.0, total / 15.0),
-        "total": total,
-        "facts": facts,
-    }
-
-
-@app.post("/api/meta/mirror/generate")
-async def meta_mirror_generate(req: Request):
-    data = await req.json()
-    count = int(data.get("count", 3))
-    prof = meta_profile()
-    sys_prompt = (
-        "你是「分身」元神，基于下方关于用户的事实，生成若干「情境预测」：给定生活/工作情境，"
-        "预测用户会怎么做、怎么想。只输出 JSON 数组，每项 {scenario: 情境描述, prediction: 预测用户做法}，"
-        "不要任何解释。\n\n事实：\n"
-        + "\n".join(f"- {f['field']}: {f['value']}" for f in prof["facts"][:20]))
-    try:
-        raw = call_llm(META_PID,
-                       [{"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": f"请生成 {count} 条预测。"}],
-                       system_prompt=sys_prompt)
-        items = _parse_json_array(raw) or []
-        return {"ok": True, "items": items[:count]}
-    except Exception as e:
-        return {"ok": False, "error": "生成失败（可能未配置模型）：" + str(e)[:120]}
-
-
-@app.post("/api/meta/mirror/judge")
-async def meta_mirror_judge(req: Request):
-    data = await req.json()
-    agree = bool(data.get("agree", False))
-    pred = (data.get("prediction") or "").strip()
-    corr = (data.get("correction") or "").strip()
-    if agree and pred:
-        _add_user_fact("value", "镜像确认", "元神预测「" + pred[:200] + "」正确，符合我的做法",
-                       source="mirror", confidence=0.6)
-    elif corr:
-        _add_user_fact("value", "镜像纠正", corr[:500], source="mirror", confidence=0.7)
-    else:
-        return {"ok": False, "error": "需 agree 或 correction"}
-    return {"ok": True, "result": "已强化画像" if agree else "已记录纠正"}
-
+# ── v6.4 蒸馏二期：元神个人化接口统一由 backend/meta_distill.py 提供。新增 subjects/authorize/materials 亦在其中。
 
 # ── API：元神对话（改用多模型 call_llm）──────────────────────────
 @app.post("/api/meta/chat")

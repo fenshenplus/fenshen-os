@@ -565,10 +565,11 @@
         <div class="chat">
           <div class="chat-head">
             <div><div class="t">元神 · 我的个人分身</div><div class="sub">完全代表你的利益与风格</div></div>
-            <div style="display:flex;gap:6px;align-items:center">
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
               <button class="btn sm meta" id="metaViewToggle" onclick="toggleMetaView()">总看板</button>
               <button class="btn sm meta" onclick="toggleInterview()">了解我</button>
               <button class="btn sm meta" onclick="toggleProfile()">画像</button>
+              <button class="btn sm meta" onclick="openDistillOthers()">蒸馏他人</button>
               <button class="btn sm meta" onclick="showMetaInfo()">这是谁</button>
             </div>
           </div>
@@ -597,6 +598,13 @@
               <span>我的画像 · 元神对你的理解</span><button class="btn sm ghost" onclick="toggleProfile()">收起</button>
             </div>
             <div style="padding:14px;overflow:auto;height:calc(100% - 44px)">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                <span style="font-size:12px;color:var(--gray-400)">当前对象</span>
+                <select id="pvSubjectSelect" class="btn sm" style="padding:4px 8px;font-size:12px" onchange="onProfileSubjectChange(this.value)">
+                  <option value="self">我（元神）</option>
+                </select>
+                <span id="pvAuthBadge" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--gray-200);color:var(--gray-500)"></span>
+              </div>
               <div id="pvNarrative" style="font-size:13px;line-height:1.7"></div>
               <!-- v5.8 绑定进度：把"通用工具人"炼成"用户自己的数字克隆体" -->
               <div id="pvBinding" style="margin:12px 0 4px;padding:10px;background:var(--gray-100);border-radius:8px">
@@ -1702,10 +1710,17 @@ async function sendMeta(){
   inp.placeholder='和元神说点什么…（回车发送）'; inp.disabled=false;
   await loadMeta(); }
 function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.value='';
+  const mtMap={'1':'resume','2':'experience','3':'chat','4':'document','5':'creation','6':'feedback'};
+  const mtLabel={'resume':'自我介绍/简历','experience':'个人经历','chat':'聊天记录','document':'工作文档','creation':'创作内容','feedback':'他人评价'};
+  const choice=prompt('选择这份资料的素材类型（输入数字）：\n1 自我介绍/简历\n2 个人经历\n3 聊天记录\n4 工作文档\n5 创作内容\n6 别人对我的评价','4');
+  const material_type=mtMap[choice]||'document';
   const reader=new FileReader();
   reader.onload=async ()=>{ const text=String(reader.result||'').slice(0,8000);
-    await fetch('/api/meta/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,text})});
-    await postMsg(META_PID,'分身 · 元神','meta',`已接收资料「${f.name}」，正在学习你的风格与偏好…`); await loadMeta(); };
+    const r=await fetch('/api/meta/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,text,subject:'self',target_type:'self',material_type})});
+    const j=await r.json().catch(()=>({}));
+    const facts=j.extracted||0, q=j.quality_score||0;
+    await postMsg(META_PID,'分身 · 元神','meta',`已接收${mtLabel[material_type]}「${f.name}」，蒸馏出 ${facts} 条事实（质量分 ${Math.round((q||0)*100)}%）。`);
+    await loadMeta(); };
   reader.readAsText(f); }
 function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元神 = 你的个人人格分身：代表你的利益与风格，拥有最高管理权限，但不替代你做最终决策。'); await loadMeta(); })(); }
 
@@ -1747,16 +1762,41 @@ async function submitInterview(btn){ const a=document.getElementById('ivAnswer')
     renderInterview(d.next||d);
   });
 }
-async function showProfile(){ try{ const d=await apiJson('/api/meta/profile');
+let curProfileSubject='self';
+async function loadSubjectsIntoSelect(){
+  try{
+    const d=await apiJson('/api/meta/distill/subjects');
+    const sel=document.getElementById('pvSubjectSelect');
+    const cur=sel?sel.value:curProfileSubject;
+    if(sel){
+      sel.innerHTML='<option value="self">我（元神）</option>'+(d.subjects||[]).map(s=>`<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)} ${s.target_type==='other'?'· 赛博人类':''}</option>`).join('');
+      sel.value=curProfileSubject;
+    }
+  }catch(e){ console.error('loadSubjects',e); }
+}
+function onProfileSubjectChange(v){ curProfileSubject=v||'self'; showProfile(); }
+async function showProfile(){ try{
+  await loadSubjectsIntoSelect();
+  const d=await apiJson('/api/meta/profile?subject='+encodeURIComponent(curProfileSubject));
   document.getElementById('pvNarrative').innerHTML='<div>'+ escapeBr(d.narrative||'') +'</div>';
+  // 授权徽章
+  const badge=document.getElementById('pvAuthBadge');
+  if(badge){
+    const auth=d.authorization_status||'owner';
+    const authMap={owner:'本人',authorized:'已授权',pending:'待授权',revoked:'已撤销',denied:'已拒绝'};
+    badge.textContent=authMap[auth]||auth;
+    badge.style.background=auth==='authorized'||auth==='owner'?'#d4edda':(auth==='pending'?'#fff3cd':'#f8d7da');
+    badge.style.color=auth==='authorized'||auth==='owner'?'#155724':(auth==='pending'?'#856404':'#721c24');
+  }
   // v5.8 绑定进度
   const bp=(d.binding)||{progress:0,bound_dims:0,total_dims:5};
   const pct=Math.round((bp.progress||0)*100);
   document.getElementById('pvBindingPct').textContent=pct+'%';
   document.getElementById('pvBindingBar').style.width=pct+'%';
-  document.getElementById('pvBindingHint').textContent = pct>=100 ? '✅ 已深度绑定——这就是「你的」数字克隆体。'
-    : (pct===0 ? '蒸馏炼制后，元神会从「通用工具人」变成「你的」数字克隆体——利益、决策、情感、价值观、沟通都像你。'
-               : '绑定进行中——元神正在变成「你的」数字克隆体（'+ (bp.bound_dims||0) +' / '+(bp.total_dims||5)+' 维已沉淀）。');
+  const subName=d.subject_name||'你';
+  document.getElementById('pvBindingHint').textContent = pct>=100 ? `✅ 已深度绑定——这就是「${subName}」的数字克隆体。`
+    : (pct===0 ? `蒸馏炼制后，元神会从「通用工具人」变成「${subName}」的数字克隆体——利益、决策、情感、价值观、沟通都像${subName==='你'?'你':'TA'}。`
+               : `绑定进行中——元神正在变成「${subName}」的数字克隆体（${bp.bound_dims||0} / ${bp.total_dims||5} 维已沉淀）。`);
   // 绑定五维充足度
   const dims={interest:'利益关切',decision:'决策倾向',emotion:'情感信号',value:'价值观锚点',comm:'沟通风格'};
   const suff=d.dim_sufficiency||{};
@@ -1767,8 +1807,26 @@ async function showProfile(){ try{ const d=await apiJson('/api/meta/profile');
     h+='<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px"><div style="width:64px">'+dims[k]+'</div><div style="flex:1;height:8px;background:var(--gray-200);border-radius:4px"><div style="width:'+Math.round(c*100)+'%;height:100%;background:'+(s.sufficient?'#34c98e':'var(--meta-700)')+';border-radius:4px"></div></div><div style="width:64px;text-align:right">'+Math.round(c*100)+'% '+ok+'</div></div>'; }
   h+='<div style="font-size:11px;color:var(--gray-400);margin-top:4px">已绑定 '+escapeHtml(d.sufficient_dims||0)+' / '+escapeHtml(d.total_dims||5)+' 个维度'+(d.completeness?(' · 事实 '+Math.round(d.completeness*100)+'%'):'')+'</div>';
   document.getElementById('pvBars').innerHTML=h;
-  document.getElementById('pvFacts').innerHTML='<div style="font-size:12px;color:var(--gray-400);margin:10px 0 4px">已蒸馏 '+escapeHtml(d.total)+' 条关于你的事实</div>'+(d.facts||[]).map(f=>'<div style="font-size:12px;margin:3px 0"><b>'+escapeHtml(f.field)+'</b>：'+escapeHtml(f.value)+'</div>').join('');
+  document.getElementById('pvFacts').innerHTML='<div style="font-size:12px;color:var(--gray-400);margin:10px 0 4px">已蒸馏 '+escapeHtml(d.total)+' 条关于'+escapeHtml(subName)+'的事实</div>'+(d.facts||[]).map(f=>'<div style="font-size:12px;margin:3px 0"><b>'+escapeHtml(f.field)+'</b>：'+escapeHtml(f.value)+'<span style="color:var(--gray-400);font-size:10px;margin-left:6px">'+(f.material_type?escapeHtml(f.material_type)+' · ':'')+'质量 '+Math.round((f.quality_score||0)*100)+'%</span></div>').join('');
 }catch(e){ toast('画像加载失败：'+errText(e),'err'); } }
+
+/* ── v6.4 蒸馏他人（赛博人类）：创建被蒸馏对象并授权 ── */
+async function openDistillOthers(){
+  const name=prompt('要蒸馏谁？输入姓名/昵称（例如：张雪峰、同事小王、主管）');
+  if(!name) return;
+  const proof=prompt(`请确认已获得「${name}」的明示授权，并简要记录授权方式/证据（如：口头同意、微信确认、公开演讲授权）：`);
+  if(proof===null) return;
+  await withBusy(null,'创建中…',async()=>{
+    const r=await apiJson('/api/meta/distill/subjects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    if(!r.ok){ toast(r.error||'创建失败','err'); return; }
+    const sid=r.subject.id;
+    if(proof.trim()){
+      await apiJson('/api/meta/distill/authorize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:sid,status:'authorized',proof:proof.trim()})});
+    }
+    toast(`已创建「${name}」的数字克隆体对象。现在可在“画像”里切换对象，并上传${name}的聊天记录/演讲稿/工作文档进行蒸馏。`);
+    curProfileSubject=sid; toggleProfile();
+  });
+}
 
 /* ── 蒸馏二期：镜像校验（预测→反馈闭环） ── */
 async function mirrorGenerate(btn){
