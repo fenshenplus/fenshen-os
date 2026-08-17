@@ -29,3 +29,13 @@ dist/
 build/
 *.spec
 分身.app/
+
+# 签名凭据与密钥（绝不入库！）
+*.pfx
+*.p12
+*.pfx.*
+.env
+.env.*
+secrets/
+*.key.*
+
