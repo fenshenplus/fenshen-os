@@ -2727,16 +2727,15 @@ BUILTIN_TEMPLATES = [
                  {"name": "用量/计费", "owner_role": "后端", "depends_on": ["AI 对话/生成"]},
                  {"name": "管理后台", "owner_role": "后端", "depends_on": ["登录/注册"]},
                  {"name": "对话界面", "owner_role": "前端", "depends_on": ["AI 对话/生成"]}]},
-    {"name": "学习考试产品", "desc": "登录 → 题库 → 刷题 → 错题本 → 付费解锁（选择大于努力类）",
-     "goal": "一个可刷题学习、按科目付费解锁的学习考试产品",
+    {"name": "分身运营工作台", "desc": "蒸馏自己 → 元神 → 看板 → 记忆/磨 → 自动调度：用分身运营你自己的数字团队",
+     "goal": "搭建并运营我自己的分身工作台：蒸馏出元神，让它驾驶 harness 替我「想、做、管、留」",
      "roles": ["architect", "backend", "frontend", "tester"],
-     "meta": {"version": "1.0", "tags": ["教育", "题库", "知识付费"], "scenario": "题库刷题 + 付费解锁的学习产品（如驾考/资格证）"},
-     "modules": [{"name": "登录/注册", "owner_role": "后端", "depends_on": []},
-                 {"name": "题库管理", "owner_role": "后端", "depends_on": ["登录/注册"]},
-                 {"name": "刷题/练习", "owner_role": "后端", "depends_on": ["题库管理"]},
-                 {"name": "错题本/进度", "owner_role": "后端", "depends_on": ["刷题/练习"]},
-                 {"name": "付费解锁", "owner_role": "后端", "depends_on": ["登录/注册", "题库管理"]},
-                 {"name": "学习页面", "owner_role": "前端", "depends_on": ["刷题/练习", "错题本/进度"]}]},
+     "meta": {"version": "1.0", "tags": ["分身", "元神", "数字团队", "自运营"], "scenario": "想用分身（数字克隆体+harness）运营/管理自己的 AI 生产力"},
+     "modules": [{"name": "蒸馏自己 → 元神", "owner_role": "architect", "depends_on": []},
+                 {"name": "群聊团队搭建", "owner_role": "后端", "depends_on": ["蒸馏自己 → 元神"]},
+                 {"name": "看板与进度", "owner_role": "前端", "depends_on": ["群聊团队搭建"]},
+                 {"name": "记忆/磨·经验沉淀", "owner_role": "后端", "depends_on": ["看板与进度"]},
+                 {"name": "自动调度与汇报", "owner_role": "tester", "depends_on": ["记忆/磨·经验沉淀"]}]},
     {"name": "营销落地页+付费", "desc": "落地页 → 支付 → 用户管理 → 数据分析（投流转化类）",
      "goal": "一个承接投流流量的营销落地页，支持付费转化与数据追踪",
      "roles": ["architect", "backend", "frontend", "tester"],
@@ -2925,6 +2924,11 @@ _seed_builtin_skills()
 
 def _seed_templates(conn):
     """内置模板 upsert（幂等）：不存在则插入，存在则按 name 更新 desc/goal/roles/modules/meta（v0.27.0 支持补新字段）。"""
+    # 清理已废弃的「学习考试产品」样板（已改用「分身运营工作台」）
+    try:
+        conn.execute("DELETE FROM project_templates WHERE is_builtin=1 AND name='学习考试产品'")
+    except Exception:
+        pass
     for t in BUILTIN_TEMPLATES:
         row = conn.execute("SELECT id FROM project_templates WHERE name=? AND is_builtin=1", (t["name"],)).fetchone()
         if row:
