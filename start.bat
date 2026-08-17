@@ -4,7 +4,7 @@ title 分身 v5.4 · 桌面托管（Windows）
 cd /d %~dp0
 
 echo ============================================
-echo  分身 v5.4 · Windows 启动器
+echo  分身 v6.3 · Windows 启动器
 echo  端口 8002 · 浏览器将自动打开
 echo  局域网访问: FENSHEN_ALLOW_LAN=1 见 README
 echo ============================================
@@ -24,10 +24,10 @@ if not defined PY (
 )
 
 echo [1/2] 检查依赖...
-%PY% -c "import fastapi, uvicorn" >nul 2>nul
+%PY% -c "import fastapi, uvicorn, requests" >nul 2>nul
 if errorlevel 1 (
   echo       首次运行，正在安装依赖（约 1 分钟）...
-  %PY% -m pip install -r requirements-dist.txt
+  %PY% -m pip install -r backend/requirements.txt
   if errorlevel 1 (
     echo [错误] 依赖安装失败，请检查网络后重试。
     pause

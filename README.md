@@ -1,6 +1,6 @@
-# 分身 v1 · 实装版（阶段 1）
+# 分身 v6.3 · 实装版
 
-coding 版群聊团队助手。手机端 H5 客户端，桌面托管，本地 SQLite 持久化。
+群聊形态 AI 团队总管：每个项目 = 一个群聊；元神（Meta-Agent）调度角色、跟踪进度、交付。桌面托管，本地 SQLite 持久化。
 
 ## 架构
 - 前端：`frontend/index.html`（单文件 H5，响应式，手机可用）
@@ -32,8 +32,21 @@ bash start.sh
 ### 停止服务
 双击 `停止分身.command`，或 `pkill -f "uvicorn.*8002"`。
 
-### 换机器 / 发给同事
-整目录 `~/WorkBuddy/fenshen-v1/` 直接打包（zip）拷到另一台 Mac 即可，**前提**对方也装了 WorkBuddy（提供受管 venv）；否则需先 `pip install -r backend/requirements.txt`。
+### 换机器 / 发给同事（独立部署）
+打包 `分身-启动器包-v6.3.zip` 发给对方，**不要求**对方装 WorkBuddy。对方解压后：
+
+```bash
+# macOS / Linux
+bash start.sh
+# 或： python3 start.py
+
+# Windows
+双击 start.bat
+# 或： py -3 start.py
+```
+
+首次运行会自动联网安装 `backend/requirements.txt` 里的依赖（fastapi / uvicorn / requests，约 1 分钟），之后直接启动并打开浏览器到 `http://localhost:8002/`。
+> 可选功能（SSH 终端、浏览器自动化、元神蒸馏）需额外 `paramiko` / `playwright`，为按需懒加载，缺失不影响核心启动。
 
 ## 手机访问
 桌面与手机同一局域网，手机浏览器打开 `http://<桌面局域网IP>:8002/`
