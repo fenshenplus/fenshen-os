@@ -73,6 +73,7 @@
   .toast.err { background:#991b1b; }
   .btn:disabled { opacity:.55; cursor:not-allowed; }
   .send:disabled { opacity:.55; cursor:not-allowed; }
+  .send.voice-on { background:#ff3b30 !important; transform:scale(1.06); box-shadow:0 0 0 4px rgba(255,59,48,.18); }
   body { font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; font-size:13px; color:var(--gray-900); background:var(--gray-100); line-height:1.6; -webkit-font-smoothing:antialiased; }
   .app { max-width:1100px; margin:0 auto; background:#fff; min-height:100vh; display:flex; flex-direction:column; }
 
@@ -255,6 +256,23 @@
     #boardGrid [style*="cursor:pointer"] { min-height:44px; display:flex; flex-direction:column; justify-content:center; }
     #topicMask .mb { flex-direction:column; }
     #topicMask .mb > div:first-child { width:100%; border-right:none; border-bottom:.5px solid var(--gray-200); padding-bottom:8px; }
+    /* 移动端整体收紧：原尺寸偏大 */
+    html, body { height:100%; }
+    .app { min-height:100dvh; }
+    .topbar { height:44px; padding:0 10px; }
+    .rooms-head { padding:9px 12px; }
+    .room { padding:9px 12px; min-height:42px; }
+    .room .t, .room .name { font-size:13px; }
+    .chat-head { padding:9px 11px; }
+    .chat-body { padding:10px 10px; }
+    .chat-input { padding:8px 8px; padding-bottom:calc(8px + env(safe-area-inset-bottom)); }
+    .chat-input input { font-size:16px; padding:9px 12px; }
+    .chat-input .send { width:38px; height:38px; }
+    .bubble { font-size:14px; padding:7px 11px; line-height:1.45; }
+    .sidenav .navitem { padding:8px 2px; font-size:11px; min-height:42px; }
+    .btn, .btn.sm, .btn.primary { min-height:38px; padding:8px 12px; font-size:13px; }
+    .modal { padding:14px !important; }
+    #sec-meta .chat-head, #sec-meta .chat-body { padding-left:12px; padding-right:12px; }
   }
   @media (max-width:768px){ html { -webkit-tap-highlight-color:transparent; } }
   /* v5.0 移动端：看板卡片快捷操作按钮（触控友好） */
@@ -453,7 +471,7 @@
           <div id="chatGoalBar" style="font-size:12px;color:var(--gray-600);padding:4px 14px;border-bottom:.5px solid var(--gray-200);display:none"></div>
           <div class="chat-body" id="chatBody"></div>
           <div class="chat-input">
-            <button class="send" id="btnVoice" onclick="toggleVoiceInput()" title="语音转文字" style="background:#1D9E75">🎙</button>
+            <button class="send" id="btnVoice" onpointerdown="voiceHoldStart('msgInput','btnVoice')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" title="按住说话" style="background:#1D9E75;touch-action:none">🎙</button>
             <input id="msgInput" placeholder="发消息给团队…（回车发送）" onkeydown="if(event.key==='Enter')sendMsg()">
             <button class="send" id="btnSendMsg" onclick="sendMsg()">↑</button>
           </div>
@@ -601,7 +619,7 @@
             </div>
           </div>
           <div class="chat-input" id="metaInputBar">
-            <button class="send" id="btnVoiceMeta" onclick="toggleMetaVoice()" title="语音转文字" style="background:#1D9E75">🎙</button>
+            <button class="send" id="btnVoiceMeta" onpointerdown="voiceHoldStart('metaInput','btnVoiceMeta')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" title="按住说话" style="background:#1D9E75;touch-action:none">🎙</button>
             <input id="metaInput" placeholder="和元神说点什么…（回车发送）" onkeydown="if(event.key==='Enter')sendMeta()">
             <button class="send" id="btnSendMeta" onclick="sendMeta()">↑</button>
             <button class="btn ghost sm" id="btnMetaStop2" onclick="metaStop()">中止</button>
@@ -959,7 +977,7 @@
     <div class="mb">
       <div class="steps"><div class="st on" id="ws1"></div><div class="st" id="ws2"></div><div class="st" id="ws3"></div></div>
       <div id="wz1">
-        <div class="field"><label>项目名称</label><input id="wName" placeholder="例如：高考志愿评测平台"></div>
+        <div class="field"><label>项目名称</label><input id="wName" placeholder="例如：蒸馏我自己 · 元神工作台"></div>
         <div class="field"><label>一句话目标</label><input id="wGoal" placeholder="这个项目要交付什么"></div>
         <div class="field"><label>完成标准（验收准则）</label><textarea id="wStandards" rows="3" placeholder="例如：微信登录可用 / 课程可浏览下单 / 微信支付回调落单 / 测试覆盖≥80% / 扫码可开。未达标团队继续推进，不反复问你"></textarea></div>
         <div class="field"><label>UI 设计规范（可选，建项后前端/产品角色按此规范产出）</label>
@@ -3606,23 +3624,26 @@ function onbGo(target){
 }
 setTimeout(checkOnboarding, 1500);
 
-/* v5.1 移动端信息架构：语音输入（Web Speech → 文字 → 与打字同链路发送） */
-function startVoiceInto(inpId, btnId){
+/* v5.1 移动端信息架构：语音输入（Web Speech → 文字 → 与打字同链路；移动端「按住说话」） */
+function voiceHoldStart(inpId, btnId){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){ toast('当前浏览器不支持语音识别（需 Safari/Chrome）'); return; }
-  const inp=document.getElementById(inpId), btn=document.getElementById(btnId); if(!inp) return;
-  if(window.__listening__){ window.__recog__&&window.__recog__.stop(); window.__listening__=false; inp.placeholder='和元神说点什么…（回车发送）'; return; }
+  if(!SR){ toast('当前浏览器不支持语音识别（需 Safari/Chrome，且页面须为 https 或 localhost）'); return; }
+  const inp=document.getElementById(inpId), btn=document.getElementById(btnId); if(!inp||!btn) return;
+  if(window.__listening__){ if(window.__recog__) window.__recog__.stop(); return; }
   try{
-    window.__recog__=new SR(); window.__recog__.lang='zh-CN'; window.__recog__.interimResults=false; window.__recog__.maxAlternatives=1;
-    window.__recog__.onresult=(e)=>{ inp.value=e.results[0][0].transcript; inp.focus(); };
-    window.__recog__.onerror=()=>{ window.__listening__=false; inp.placeholder='和元神说点什么…（回车发送）'; toast('语音识别未成功，可重试'); };
-    window.__recog__.onend=()=>{ window.__listening__=false; };
-    window.__recog__.start(); window.__listening__=true;
-    inp.placeholder='🎙 正在听…（识别后自动填入，可编辑再发送）';
-  }catch(e){ toast('语音识别启动失败：'+e.message); }
+    const rec=new SR(); rec.lang='zh-CN'; rec.interimResults=false; rec.maxAlternatives=1;
+    window.__recog__=rec; window.__listening__=true; btn.classList.add('voice-on');
+    rec.onresult=(e)=>{ inp.value=e.results[0][0].transcript; };
+    rec.onerror=()=>{ window.__listening__=false; btn.classList.remove('voice-on'); };
+    rec.onend=()=>{ window.__listening__=false; btn.classList.remove('voice-on');
+      const v=inp.value.trim(); if(v){ if(inpId==='msgInput') sendMsg(); else if(inpId==='metaInput') sendMeta(); } };
+    rec.start();
+    inp.placeholder='🎙 按住说话中…（松开自动发送）';
+  }catch(e){ toast('语音识别启动失败：'+e.message); window.__listening__=false; btn.classList.remove('voice-on'); }
 }
-function toggleVoiceInput(){ startVoiceInto('msgInput','btnVoice'); }
-function toggleMetaVoice(){ startVoiceInto('metaInput','btnVoiceMeta'); }
+function voiceHoldEnd(){ if(window.__recog__ && window.__listening__){ try{ window.__recog__.stop(); }catch(e){} } }
+function toggleVoiceInput(){ voiceHoldStart('msgInput','btnVoice'); }   /* 桌面点按兜底 */
+function toggleMetaVoice(){ voiceHoldStart('metaInput','btnVoiceMeta'); }
 
 /* v5.2 部署一键化 + 服务监控自动兜底 */
 function openDeployDlg(){
