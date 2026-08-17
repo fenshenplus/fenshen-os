@@ -992,6 +992,12 @@ def init_db():
     # ── 群聊↔看板联动：messages 增加 task_id 列（任务引用，可跳转看板卡片）──
     if "task_id" not in mcols:
         cur.execute("ALTER TABLE messages ADD COLUMN task_id TEXT DEFAULT ''")
+    # ── v6.4 真·8态状态机：状态转移日志表（事件溯源，驾驶舱可见状态轨迹）──
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS meta_state_log ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, from_state TEXT, to_state TEXT, "
+        "event TEXT, reason TEXT, rejected INTEGER DEFAULT 0, ts TEXT)"
+    )
     # ── 兼容迁移：projects 增加 standards 列（完成标准/验收准则）──
     pcols2 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
     if "standards" not in pcols2:
@@ -8512,6 +8518,8 @@ async def _autonomy_loop():
             _AUTONOMY_WAKE.clear()
             AUTONOMY_STATE["last_tick"] = time.time()
             AUTONOMY_STATE["ticks"] += 1
+            # v6.4 真·8态状态机：每 tick 同步基础态（idle/autopilot/rest/supervising/blocked 跟随续航 flags）
+            meta_reconcile()
 
             if get_setting("autonomy_enabled", "1") != "1":
                 continue
@@ -9187,6 +9195,8 @@ def _auto_upgrade_member(mid: str, reason_type: str = "manual", context: str = "
         conn.close()
         return None
     now = datetime.now().isoformat()
+    # v6.4 真·8态状态机：进入「升级中」瞬态（受 META_TRANSITIONS 守卫，仅 idle/autopilot/supervising/dispatching/rest → upgrading）
+    meta_transition("upgrade_start", reason=f"auto-upgrade member {mid} ({reason_type})")
     skills = json.loads(r["skills"] or "[]")
     evo = json.loads(r["evo_tree"] or "[]")
     model_cfg = json.loads(r["model_cfg"] or "{}") or {}
@@ -9251,6 +9261,8 @@ def _auto_upgrade_member(mid: str, reason_type: str = "manual", context: str = "
          f"[自动升级] {note}", "auto-upgrade", now))
     conn.commit()
     conn.close()
+    # v6.4 真·8态状态机：离开「升级中」瞬态，回到基础态（由后续 reconcile 决定实际态）
+    meta_transition("upgrade_done", reason=f"auto-upgrade member {mid} done")
     return {"version": new_ver, "level": new_level, "experience": exp,
             "added": added, "skills": skills, "model_cfg": model_cfg}
 
@@ -9291,8 +9303,86 @@ def _resolve_member_for_task(pid: str, t: dict) -> str:
         return None
 
 
-# ── v6.2 元神状态机（8 态）+ 蒸馏充足度 ──
-META_STATE = {"state": "idle", "focus_project": "", "upgrading": False, "blocked": False}
+# ── v6.4 真·8态状态机（事件驱动 + 守卫 + 事件溯源）──
+# 此前 v6.2 的 META_STATE 仅作派生展示（无转移/守卫/持久化），本次升级为权威状态变量：
+# ① 基础态(idle/autopilot/supervising/rest) 由续航 flags 派生并经 reconcile 同步；
+# ② 瞬态(upgrading/blocked) 由显式事件进入/退出，受 META_TRANSITIONS 守卫保护；
+# ③ 每次转移写入 meta_state_log（事件溯源），驾驶舱可回看状态轨迹。
+META_STATE = {"state": "idle", "prev_state": "idle", "focus_project": "", "upgrading": False, "blocked": False}
+
+# 显式转移表（守卫）：仅表中允许的 (当前态, 事件) → 目标态 才可通过；其余视为非法转移被拒绝并记录。
+META_TRANSITIONS = {
+    "init":        {"boot_ok": "idle"},
+    "idle":        {"upgrade_start": "upgrading", "manual": "idle"},
+    "dispatching": {"upgrade_start": "upgrading", "manual": "idle"},
+    "autopilot":   {"upgrade_start": "upgrading", "manual": "idle", "supervise": "supervising"},
+    "supervising": {"upgrade_start": "upgrading", "manual": "idle", "autonomy_on": "autopilot"},
+    "rest":        {"upgrade_start": "upgrading", "wake": "idle", "autonomy_on": "autopilot"},
+    "upgrading":   {"upgrade_done": "idle"},
+    "blocked":     {"resolve": "idle", "manual": "idle", "autonomy_on": "autopilot", "rest": "rest"},
+}
+
+
+def _meta_log(frm, to, event, reason, rejected=False):
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO meta_state_log (from_state,to_state,event,reason,rejected,ts) VALUES (?,?,?,?,?,?)",
+            (frm, to, event, reason, 1 if rejected else 0, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as ex:
+        print("[meta_state] log err", ex)
+
+
+def _meta_natural_state(ap: dict, blocked: bool) -> str:
+    """由续航 flags 派生"应有"基础态（不含升级/需决策瞬态）。"""
+    if ap.get("rest_window_active"):
+        return "rest"
+    if ap.get("mode") == "autopilot":
+        return "blocked" if blocked else "supervising"
+    return "idle"
+
+
+def meta_transition(event: str, reason: str = "", to_state: str = None) -> str:
+    """显式事件驱动转移：经 META_TRANSITIONS 守卫校验（to_state 显式给定时跳过表查，用于 reconcile 派生）。
+    返回转移后的权威状态。非法/未定义转移：拒绝并写日志，状态不变。"""
+    cur = META_STATE["state"]
+    nxt = to_state if to_state else META_TRANSITIONS.get(cur, {}).get(event)
+    if not nxt or nxt not in ("init", "idle", "dispatching", "supervising", "autopilot", "rest", "upgrading", "blocked"):
+        _meta_log(cur, cur, event, (reason or "guard:illegal-transition"), rejected=True)
+        return cur
+    if nxt == cur:
+        return cur
+    _meta_log(cur, nxt, event, reason)
+    META_STATE["prev_state"] = cur
+    META_STATE["state"] = nxt
+    if nxt == "upgrading":
+        META_STATE["upgrading"] = True
+    if cur == "upgrading" and nxt != "upgrading":
+        META_STATE["upgrading"] = False
+    if nxt == "blocked":
+        META_STATE["blocked"] = True
+    if cur == "blocked" and nxt != "blocked":
+        META_STATE["blocked"] = False
+    return nxt
+
+
+def meta_reconcile() -> str:
+    """每 tick 调用：瞬态(upgrading/blocked)优先不被改写；否则让基础态跟随续航 flags 派生。"""
+    try:
+        ap = _autopilot_state_dict()
+        blocked = bool(META_STATE.get("blocked") or ap.get("circuit_open"))
+        nat = _meta_natural_state(ap, blocked)
+        cur = META_STATE["state"]
+        if cur in ("upgrading", "blocked"):
+            return cur
+        if cur != nat:
+            meta_transition("derive", reason=f"flags→{nat}", to_state=nat)
+    except Exception as ex:
+        print("[meta_state] reconcile err", ex)
+    return META_STATE["state"]
 
 
 @app.get("/api/meta/state")
@@ -9300,24 +9390,34 @@ def meta_state():
     """元神状态机：返回当前 8 态之一（init/idle/dispatching/supervising/autopilot/rest/upgrading/blocked）
     及叠加态 flags。由续航调度器状态派生，并叠加升级中/需决策。"""
     ap = _autopilot_state_dict()
-    st = META_STATE.get("state", "idle")
-    if st in ("idle", "supervising", "dispatching"):
-        if ap["mode"] == "autopilot":
-            st = "blocked" if META_STATE.get("blocked") else "supervising"
-        elif ap.get("rest_window_active"):
-            st = "rest"
-        else:
-            st = "idle"
+    st = META_STATE.get("state", "idle")  # 权威态：由 reconcile(每 tick)/显式事件维护，非读取时派生
     flags = []
     if META_STATE.get("upgrading"):
         flags.append("upgrading")
     if META_STATE.get("blocked") or ap.get("circuit_open"):
         flags.append("blocked")
+    # 状态轨迹（事件溯源）：最近 12 条转移，供驾驶舱回看"元神如何走到此刻"
+    try:
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT from_state,to_state,event,reason,rejected,ts FROM meta_state_log "
+            "ORDER BY id DESC LIMIT 12"
+        ).fetchall()
+        conn.close()
+        history = [
+            {"from": r["from_state"], "to": r["to_state"], "event": r["event"],
+             "reason": r["reason"], "rejected": bool(r["rejected"]), "ts": r["ts"]}
+            for r in rows
+        ]
+    except Exception:
+        history = []
     return {
         "ok": True,
         "state": st,
         "states": ["init", "idle", "dispatching", "supervising", "autopilot", "rest", "upgrading", "blocked"],
         "flags": flags,
+        "prev_state": META_STATE.get("prev_state", "idle"),
+        "history": history,
         "focus_project": META_STATE.get("focus_project", ""),
         "mode": ap["mode"],
         "today_dispatched": ap.get("dispatched_total", 0),

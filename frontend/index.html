@@ -3996,7 +3996,9 @@ async function renderCockpit(){
   document.getElementById('ckMetrics').innerHTML = [
     ['今日派单', s.today_dispatched || 0], ['模式', s.mode || '-'],
     ['token/时', (b.used_hour||0) + '/' + (b.hour||'∞')], ['休息窗', s.rest_window_active ? '激活' : '关']
-  ].map(([k,v])=>`<div><div style="font-size:10px;color:var(--gray-400)">${k}</div><div style="font-size:14px;font-weight:600;color:var(--gray-700)">${v}</div></div>`).join('');
+    ].map(([k,v])=>`<div><div style="font-size:10px;color:var(--gray-400)">${k}</div><div style="font-size:14px;font-weight:600;color:var(--gray-700)">${v}</div></div>`).join('');
+  // 状态轨迹（事件溯源）
+  try { renderCkHistory(s.history || []); } catch(e){}
   // 蒸馏充足度环
   try { const sf = await apiJson('/api/meta/sufficiency'); if(sf.ok){ renderSuffRing(sf); } } catch(e){}
   // 项目列表
@@ -4018,6 +4020,18 @@ async function renderCockpit(){
   if(ckFocus) loadCockpitProject(ckFocus);
 }
 function ckSelect(pid){ ckFocus = pid; renderCockpit(); }
+function renderCkHistory(hist){
+  const el = document.getElementById('ckHist');
+  if(!el) return;
+  if(!hist || !hist.length){ el.innerHTML = '<span class="lbl">状态轨迹：</span><span style="color:var(--gray-400)">暂无转移记录</span>'; return; }
+  const hops = hist.slice().reverse().map(h=>{
+    const fc = CK_DOT_COLOR[h.from]||'#bfbfbf', tc = CK_DOT_COLOR[h.to]||'#bfbfbf';
+    const fn = CK_STATE_NAME[h.from]||h.from, tn = CK_STATE_NAME[h.to]||h.to;
+    if(h.rejected) return `<span class="hop"><span class="st" style="background:${fc}">${fn}</span><span class="arrow">⇢</span><span class="ev rej">⛔${escapeHtml(h.event)}被拒</span></span>`;
+    return `<span class="hop"><span class="st" style="background:${fc}">${fn}</span><span class="arrow">→</span><span class="st" style="background:${tc}">${tn}</span><span class="ev">${escapeHtml(h.event)}</span></span>`;
+  }).join('<span class="arrow">·</span>');
+  el.innerHTML = '<span class="lbl">状态轨迹：</span>' + hops;
+}
 async function loadCockpitProject(pid){
   document.getElementById('ckCenterTitle').textContent = '项目看板 · ' + pid;
   try {
@@ -4271,6 +4285,13 @@ async function delMember(mid){
 .ck-suff{display:flex;align-items:center;gap:8px}
 .ck-ring{width:46px;height:46px;border-radius:50%;background:conic-gradient(#6d5bd0 0deg,#eee 0);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--gray-700)}
 .ck-ring span{background:#fff;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.ck-hist{display:flex;align-items:center;gap:6px;padding:6px 18px;background:#fff;border-bottom:.5px solid var(--gray-200);font-size:11px;color:var(--gray-500);overflow-x:auto;flex-shrink:0}
+.ck-hist .lbl{color:var(--gray-400);flex-shrink:0}
+.ck-hist .hop{display:inline-flex;align-items:center;gap:3px;flex-shrink:0;white-space:nowrap}
+.ck-hist .st{display:inline-block;padding:1px 7px;border-radius:7px;font-size:10px;font-weight:600;color:#fff}
+.ck-hist .arrow{color:var(--gray-300);margin:0 1px}
+.ck-hist .ev{color:var(--gray-400);font-size:10px}
+.ck-hist .rej{color:#f5222d}
 .ck-body{display:flex;flex:1;min-height:0}
 .ck-left{width:240px;border-right:.5px solid var(--gray-200);display:flex;flex-direction:column;background:#fff}
 .ck-center{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -4321,6 +4342,8 @@ async function delMember(mid){
         <div style="font-size:11px;color:var(--gray-500);line-height:1.3">蒸馏充足度<div id="ckSuffLabel" style="font-size:10px;color:var(--gray-400)">元神懂你多少</div></div>
       </div>
     </div>
+    <!-- 状态轨迹：元神如何走到此刻（事件溯源，来自 /api/meta/state.history） -->
+    <div class="ck-hist" id="ckHist"><span class="lbl">状态轨迹：</span><span style="color:var(--gray-400)">加载中…</span></div>
     <div class="ck-body">
       <!-- 左：项目列表 -->
       <div class="ck-left">
