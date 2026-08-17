@@ -718,7 +718,8 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id TEXT, sender TEXT, kind TEXT, text TEXT, tag TEXT, ts TEXT
+            project_id TEXT, sender TEXT, kind TEXT, text TEXT, tag TEXT, ts TEXT,
+            task_id TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS meta_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ts TEXT
@@ -988,6 +989,9 @@ def init_db():
     mcols = {r[1] for r in cur.execute("PRAGMA table_info(messages)").fetchall()}
     if "topic_id" not in mcols:
         cur.execute("ALTER TABLE messages ADD COLUMN topic_id TEXT DEFAULT ''")
+    # ── 群聊↔看板联动：messages 增加 task_id 列（任务引用，可跳转看板卡片）──
+    if "task_id" not in mcols:
+        cur.execute("ALTER TABLE messages ADD COLUMN task_id TEXT DEFAULT ''")
     # ── 兼容迁移：projects 增加 standards 列（完成标准/验收准则）──
     pcols2 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
     if "standards" not in pcols2:
@@ -6281,6 +6285,11 @@ async def create_cell_task(pid: str, req: Request):
          (data.get("done_criteria") or "").strip()[:300], stage, track,
          datetime.now().isoformat()),
     )
+    # 群聊↔看板联动：新卡建成立即回写主群聊一条可跳转的系统动态
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,task_id) VALUES (?,?,?,?,?,?,?)",
+        (pid, "系统", "sys", f"📌 新建任务「{name}」于看板（{stage}）", "done", datetime.now().isoformat(), tid),
+    )
     conn.commit()
     conn.close()
     return {"ok": True, "task_id": tid}
@@ -6383,6 +6392,12 @@ async def distill_task(tid: str, req: Request):
         (topic["project_id"], "系统", "sys", f"✅ 已提炼为任务「{name}」→ 进入看板待办列", "done",
          datetime.now().isoformat(), tid),
     )
+    # 群聊↔看板联动：提炼出的任务同步回写主群聊一条可跳转动态
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,task_id) VALUES (?,?,?,?,?,?,?)",
+        (topic["project_id"], "系统", "sys", f"📌 已提炼任务「{name}」→ 看板待办", "done",
+         datetime.now().isoformat(), tid2),
+    )
     conn.commit()
     conn.close()
     return {"ok": True, "task_id": tid2}
@@ -6401,6 +6416,12 @@ async def move_task(task_id: str, req: Request):
         conn.close()
         return {"ok": False, "error": "任务不存在"}
     conn.execute("UPDATE tasks SET status=?, updated_at=? WHERE id=?", (to, datetime.now().isoformat(), task_id))
+    # 群聊↔看板联动：看板列流转回写主群聊一条可跳转的系统动态
+    conn.execute(
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,task_id) VALUES (?,?,?,?,?,?,?)",
+        (row["project_id"], "系统", "sys", f"📌 已将「{row['name']}」移至【{to}】", to,
+         datetime.now().isoformat(), task_id),
+    )
     conn.commit()
     # Phase D：任务完成 → 自动沉淀（经验 + 技能草稿 + 模块摘要更新）
     settled = False

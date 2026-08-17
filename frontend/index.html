@@ -187,6 +187,9 @@
   .tag.block { background:rgba(239,68,68,.12); color:var(--danger-strong); }
   .sysmsg { text-align:center; margin:4px 0; }
   .sysmsg span { display:inline-block; background:rgba(0,0,0,.05); color:var(--gray-400); padding:3px 10px; border-radius:8px; font-size:11px; }
+  /* 群聊↔看板联动：系统动态里的可跳转看板卡片标记 */
+  .task-jump { display:inline-block; margin-left:6px; padding:1px 8px; border-radius:10px; background:var(--accent-weak); color:var(--accent-strong); font-size:10px; cursor:pointer; vertical-align:middle; }
+  .task-jump:hover { background:var(--accent); color:var(--on-accent); }
   .chat-input { display:flex; gap:8px; padding:12px 16px; border-top:0.5px solid var(--gray-200); }
   .chat-input input { flex:1; padding:8px 14px; border-radius:var(--r-pill); border:0.5px solid var(--gray-200); background:var(--gray-100); font-size:13px; outline:none; }
   .chat-input .send { width:32px; height:32px; border-radius:50%; border:none; background:var(--blue-500); color:var(--on-accent); cursor:pointer; flex-shrink:0; }
@@ -1394,7 +1397,10 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
   msgs.forEach(m=>{ const row=document.createElement('div');
     if(m.kind==='sys'){
       if(m.tag==='自动驾驶汇报'){ row.className='msg left'; row.innerHTML=renderReportCard(m); }
-      else { row.className='sysmsg'; row.innerHTML=`<span>${escapeHtml(m.text)}</span>`; }
+      else { row.className='sysmsg';
+        const jump = m.task_id ? ` <span class="task-jump" onclick="openTaskCard('${jsStr(m.task_id)}')">📌 看板</span>` : '';
+        row.innerHTML=`<span>${escapeHtml(m.text)}${jump}</span>`;
+      }
     }
     else { row.className='msg '+(m.kind==='self'?'right':'left');
       const cls=escapeHtml(m.kind==='meta'?'meta':m.kind); const tag=m.tag?`<span class="tag ${escapeHtml(m.tag)}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
@@ -2816,6 +2822,25 @@ function renderTour(){
   </div>`;
   ov.onclick=(e)=>{ if(e.target===ov) closeTour(); };
   document.body.appendChild(ov);
+}
+
+// ── 群聊↔看板联动：从群聊里带 task_id 的系统动态，跳转到对应看板卡片 ──
+async function openTaskCard(tid){
+  if(!curRoom){ toast('先选择项目'); return; }
+  await loadMatrix();          // 刷新矩阵，定位任务所在 module×stage
+  const j = window._mx;
+  if(!j || !j.cells){ toast('看板数据未加载','err'); return; }
+  for(const mid in j.cells){
+    for(const st in j.cells[mid]){
+      const cell = j.cells[mid][st];
+      if(cell && cell.tasks && cell.tasks.some(t=>t.id===tid)){
+        gotoBoardOf(curRoom);  // 切到看板 section（保留群聊上下文）
+        openCellDlg(mid, st);   // 弹出该格，定位到具体任务
+        return;
+      }
+    }
+  }
+  toast('未在该项目看板中找到此任务卡片（可能属于其他轨道）','err');
 }
 
 function openCellDlg(mid,stage){
