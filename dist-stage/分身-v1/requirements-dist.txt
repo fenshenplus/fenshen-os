@@ -1,4 +1,0 @@
-fastapi==0.115.6
-uvicorn[standard]==0.32.1
-requests==2.32.3
-paramiko>=3.4
