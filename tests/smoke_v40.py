@@ -13,6 +13,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import urllib.error
 import urllib.request
 
+# 版本单一真源：从 backend/version.py 动态读取，禁止硬编码版本号
+try:
+    from backend.version import RELEASE, SEMVER
+except Exception:
+    RELEASE, SEMVER = "v6.4", "0.64.0"  # 兜底（非仓库环境）
+
 BASE = "http://127.0.0.1:8002"
 TOKEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".auth_token")
 PASS, FAIL = [], []
@@ -231,7 +237,7 @@ def test_batch_b():
     code, h = call("GET", "/api/health")
     check("批次B：approval_mode 默认 danger", isinstance(h, dict) and h.get("approval_mode") == "danger",
           str(h.get("approval_mode")))
-    check("批次B：release 版本 v6.1", isinstance(h, dict) and h.get("release") == "v6.1",
+    check("批次B：release 版本与单一真源一致", isinstance(h, dict) and h.get("release") == RELEASE,
           str(h.get("release")) + "/" + str(h.get("version")))
 
     # ── v5.6 借鉴 DeepSeek Harness：工作区限定 + PTC 批处理 ──

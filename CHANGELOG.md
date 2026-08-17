@@ -1,0 +1,77 @@
+# Changelog
+
+本项目版本管理遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范，版本号遵循语义化版本（MAJOR.MINOR.PATCH）。
+
+> 维护说明：每次发版由 `scripts/bump_version.py` 半自动追加条目；手写条目请归入对应版本段，分 `Added / Changed / Fixed / Removed` 四类。
+
+## [Unreleased]
+
+## [v6.4] — 2026-08-17
+### Added
+- 蒸馏功能升级：素材类型扩展为 6 类（简历 / 经历 / 聊天记录 / 工作文档 / 创作内容 / 他人评价），ingest 按类型调抽取提示。
+- 蒸馏授权模型 `owner / pending / authorized / revoked / denied` + 可审计表 `distill_authorizations`；蒸馏他人必须获明示授权，否则拒绝 ingestion（伦理护栏）。
+- 质量分 `quality_score`（长度对数 + 事实数 + 维度覆盖 + 平均置信度），写入每素材与每事实。
+- 多对象支持 `distill_subjects`（self 本人元神 + other 赛博人类），按对象编译画像 / 访谈 / 查询；新增 4 个 API（subjects 列表/创建、authorize、materials 列表）。
+- 元神宪法写入 `META_SYSTEM` 最底层：5 条最高原则，绝对站在本机用户本人利益一边。
+- 版本管理基建：版本单一真源 `backend/version.py` + `GET /api/version` 结构化返回（semver/release/schema/git_commit/build_date）。
+### Changed
+- 前端元神 tab 增加「蒸馏他人」入口、画像对象选择器 + 授权徽章、上传前选素材类型。
+- `main.py` 删除与 `meta_distill.py` 重复的蒸馏路由，统一由模块提供。
+
+## [v6.1] — 2026-08-14
+### Added
+- 矩阵看板 M1（模块 × 阶段数据模型 + `/matrix` + 前端矩阵默认视图）。
+- 元神长续航调度器 M2（autopilot/normal/rest 三模式 + 事件回调 + 护栏）、M3 关键路径优先级、M4 多轨道补空白 + 休息窗口。
+- 6 个 meta 蒸馏端点（interview/ingest/profile/mirror）+ autopilot 控制台。
+
+## [v6.0] — 2026-08-14
+### Added
+- 新 UI 外壳落地真实前端（图标栏 + 设置抽屉 + 联系人列元神置顶 + 分栏进程轨迹/看板 + 聊天内思考链 inline）。
+
+## [v5.8] — 2026-08-14
+### Added
+- 元神 PM 定位 + 蒸馏重排为绑定（利益/情感，非增强能力）。
+- 双维度存储（项目/成员/模块文件夹 + 点模块开文件 + 旧项目迁移）。
+- UI 设计规范库（apple_hig/wechat，建项自选无默认，注入角色执行）。
+
+## [v5.9] — 2026-08-14
+### Added
+- Trajectory 事件级回放（一次派单/对话 = 一个 run）。
+- 底部实时 token 条（进程级 LIVE_TOKENS 累加器）。
+- 扩展内置供方（通义 qwen / 月之暗面 moonshot / 智谱 zhipu）。
+
+## [v5.5 → v5.7] — 2026-08-11~13
+### Changed
+- 战略修正 P0（首启不阻塞 / 技能只读 / 市场折叠 / 局域网一键开关）+ P1 token 节约。
+- 工作区限定 + PTC 批处理（借鉴 DeepSeek Harness）。
+
+## [v5.0 → v5.4] — 2026-08-11~12
+### Added
+- 移动端体验闭环（异步派单 / PWA 可安装离线 / 移动端看板快捷操作）。
+- 应用市场上架（内测）+ 12 技能执行验证。
+- 移动端遥控器（群聊首页 / 元神置顶 / 左滑看板 / 语音）。
+
+## [v4.2] — 2026-08-10
+### Added
+- 自主闭环：立项自动拆解 + 看板完成度 + 阶段自动流转 + 团队自主推进循环 + 派单并行化。
+
+## [v4.1] — 2026-08-10
+### Added
+- 任务完成标准 + 对照标准判定 + 工具分级（元神只读搭建 / 角色才动手）+ 元神搭建 `_bootstrap_project` + autonomy 有界循环 + 护栏收敛。
+- 角色动态加载 + 预设技能活配件（12 种）+ 并行上限放开。
+
+## [v4.0] — 2026-08-09
+### Changed
+- 全面安全重构 + 诚实性修复 + 能派状态流转（P0 本地 Token 鉴权 / Host·Origin 中间件 / 危险命令确认 / exec 真实返回 / 70+ 处 XSS 修复）。
+
+## [v3.8] — 2026-08-07
+### Added
+- 元神人格蒸馏、演示视频。
+
+## [v1.0 → v3.7]
+### Added
+- 基础架构、元神对话引擎、群聊形态 AI 团队总管、看板、立项拆解、派单、记忆/经验库、技能库、阶段流转。
+
+---
+
+_历史更早版本见 `VERSION_MANAGEMENT.md`（含签字记录与部署日志）。_

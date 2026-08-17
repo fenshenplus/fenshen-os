@@ -205,6 +205,34 @@
 
 ---
 
+## Schema 迁移兼容说明（前向 / 后向 / 回滚）
+
+> 原则（来自 2026 SCM 实践）：**迁移一律 append-only**——只 `ALTER TABLE … ADD COLUMN` 带默认值，不删列、不删表、不改列类型、不做破坏性数据转换。任何破坏性变更必须走「新列 + 双写 + 旧列作废标记」的渐进路径。
+
+### 兼容性约定
+- **前向兼容（新代码跑老库）**：`init_db` 启动自动 `ALTER ADD COLUMN`（带默认值）；读取处用 `COALESCE(col, default)`，老库缺列不报错。旧库已含新列则跳过（`IF NOT EXISTS` 语义）。
+- **后向兼容（老代码跑新库）**：新增列对老代码透明（被忽略）；老代码不引用新列即不报错。故回退代码版本不需要回退 DB。
+- **回滚**：因迁移可加，回滚 = 代码 git revert；新增列**保留不删**（避免再次迁移时 `ADD COLUMN` 冲突）。作废数据以「标记列」隔离，不物理删除。
+- **发布门禁**：`scripts/bump_version.py` 在 bump 前强制跑 `tests/smoke_v40.py`（隔离 8011 或本机 8002），不绿不发布（fail-closed）。
+
+### 已落地迁移清单（兼容性 / 回滚）
+
+| 迁移 | 新增列 / 表 | 前向兼容 | 后向兼容 | 回滚 |
+|------|------------|----------|----------|------|
+| 矩阵看板 M1 | `tasks.stage` / `tasks.track` / `modules.track` / `modules.weight` / `projects.tracks` / `projects.stage_chains` | ✅ 缺列自动补，读用默认值 | ✅ 老代码忽略新列 | 代码回退；列保留 |
+| 双维度存储 v5.8 | `files` 表 + `storage_root` / `file_path`（模块目录树） | ✅ `migrate_storage_v58.py` 幂等，未 `--apply` 不写 | ✅ | 代码回退；`files` 表保留 |
+| 蒸馏 v6.4 | `user_model.subject` / `authorization_status` / `material_type` / `quality_score`；新表 `distill_subjects` / `distill_authorizations` / `distill_materials` | ✅ 旧数据 `subject='self'` 回填；读用 `COALESCE` | ✅ 新表对老代码透明 | 代码回退；新表保留 |
+| 用量统计 v5.9 | `model_usage.input_tokens` / `output_tokens` | ✅ 缺列补，读用 `COALESCE` | ✅ | 代码回退；列保留 |
+
+### 新迁移提交检查单
+- [ ] 仅 `ADD COLUMN`（带默认值）或新建表，无 `DROP` / 无类型变更
+- [ ] 读取处用 `COALESCE` 兼容缺列
+- [ ] 提供幂等迁移（重复执行安全）
+- [ ] 破坏性意图必须走「新列 + 双写」，并登记到上表
+- [ ] `bump_version.py` 门禁通过后才允许合并
+
+---
+
 ## 中枢回填
 
 元神中枢 `~/Desktop/元神/VERSION_MANAGEMENT.md` 第 140 行「分身 / 分身桌面版」指针由 **待登记** 改为 **已登记**。

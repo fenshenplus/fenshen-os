@@ -31,6 +31,9 @@ from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
+# 版本单一真源：所有版本号从这里读，禁止在别处硬编码
+from backend.version import SEMVER, RELEASE, SCHEMA_VERSION, BUILD_DATE, COMMIT, as_dict
+
 # v5.4 PyInstaller 兼容：打包后静态资源在 sys._MEIPASS 下
 _MEI = getattr(sys, "_MEIPASS", None)
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -106,7 +109,7 @@ ROLE_MODEL_RECS = {
 }
 FALLBACK_ORDER = ["deepseek", "openai", "claude", "ollama"]  # 降级链：失败自动尝试下一个
 
-app = FastAPI(title="分身 v1 后端", version="0.64.0")
+app = FastAPI(title="分身 v1 后端", version=SEMVER)
 
 # ══ 安全层 v4.0 ══════════════════════════════════════════════════
 # 威胁模型：分身运行在用户本机且拥有最高权限（能执行 shell / 改文件）。
@@ -1978,8 +1981,15 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
-    return {"status": "ok", "version": "0.64.0", "release": "v6.4", "port": PORT, "llm": llm,
+    return {"status": "ok", "version": SEMVER, "release": RELEASE, "schema_version": SCHEMA_VERSION,
+            "build_date": BUILD_DATE, "git_commit": COMMIT, "port": PORT, "llm": llm,
             "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
+
+
+@app.get("/api/version")
+def api_version():
+    """结构化版本信息（单一真源 backend/version.py）。"""
+    return {"ok": True, **as_dict()}
 
 
 # ── 移动端中转 WebSocket：手机 App ↔ 引擎（同源同端口 8002）──
