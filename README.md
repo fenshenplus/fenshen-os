@@ -67,6 +67,27 @@ bash start.sh
 
 元神私聊消息使用特殊 project_id：`__meta__`。
 
+## 维护者：Windows 安装版构建与签名（GitHub Actions）
+
+源码启动器包（`fenshen-launcher-v6.3.zip`）适合高级用户；给普通用户的"下载安装即用"安装版由 CI 产出：
+
+- 工作流：`.github/workflows/build-windows.yml`（打 `v*` tag 或手动触发 → `windows-latest` 构建 → 签名 → 发布到 GitHub Release）。
+- 构建产物：`分身.exe`（one-file，数据持久化于用户目录 `~/.fenshen`，退出不丢）。
+
+**证书（在阿里云云市场向 锐成/亚数 等代购 Sectigo/DigiCert/GlobalSign 代码签名证书）有两种交付形态，决定签名方式：**
+
+1. **可导出 PFX**（多为 OV，或少数允许导出的场景）
+   - 仓库 Secrets 配 `CODESIGN_PFX`（证书 Base64）+ `CODESIGN_PWD`。CI 用 `signtool` 自动签名（含双时间戳）。
+   - 注意：2023-06 起 **EV 证书私钥必须存硬件**，通常**不能**导出 PFX。
+
+2. **USB 硬件令牌**（Sectigo/DigiCert EV 常见，如 SafeNet eToken）
+   - CI 无法签名（无令牌）。需在一台插着令牌的 Windows 机器上本地签名，或选下面的云签名。
+
+3. **云 HSM / 云签名**（推荐，CI 无需硬件）
+   - 把你的 CA 提供的签名命令整段填进 Secret `CODESIGN_CMD`，CI 直接执行（命令内务必带 RFC3161 时间戳）。厂商中立，适配 SSL.com eSigner / DigiCert Software Trust Manager / 锐成云签名等。
+
+> 选型建议：想要用户下载**零 SmartScreen 警告**，优先 **EV 或云签名**；OV 新证初期会被 SmartScreen 拦。法律主体名（UAC 显示）用分发主体（如「安徽叒叕创业投资有限公司」）。
+
 ## 元神 LLM（人格分身）
 - 引擎：`backend/main.py` 调 DeepSeek `deepseek-chat`，系统提示含岳衡人格 grounding（中文、coding 聚焦、砍臃肿、授权红线）。
 - 密钥：读取 `~/.workbuddy/config/secrets/deepseek.key`。

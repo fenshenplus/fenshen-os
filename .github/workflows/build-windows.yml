@@ -1,10 +1,14 @@
 name: Build Windows (分身 v6.x)
 
+# 触发：手动 / 打 v* tag 时自动构建并发布到 GitHub Release
 on:
   workflow_dispatch:
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: write   # 打 tag 时需写入 Release
 
 jobs:
   build-windows:
@@ -21,31 +25,68 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller fastapi uvicorn requests
+          pip install pyinstaller fastapi "uvicorn[standard]" requests
 
-      - name: PyInstaller 构建 exe
-        run: pyinstaller 分身.spec --noconfirm --distpath dist
+      - name: PyInstaller 构建 exe（onedir → 单文件自解压，数据落 ~/.fenshen 持久化）
+        # 用 Windows 专用 spec（入口 packaging/windows/run.py，端口 8002，自动开浏览器）
+        run: pyinstaller packaging/windows/fenshen.spec --noconfirm --distpath dist
 
-      - name: 代码签名（Authenticode EV）
-        # 前置：仓库 Secrets 配置
-        #   WIN_SIGN_PFX：EV 证书导出的 PFX（Base64 或原始，放在 secret）
-        #   WIN_SIGN_PWD：PFX 密码
-        # 说明：EV 证书（DigiCert/Sectigo ~$300-500/年）插硬件密钥，
-        #       Windows SmartScreen 立即信任，用户下载不被报毒。
-        if: ${{ env.WIN_SIGN_PFX != '' }}
+      - name: 代码签名（Authenticode）
+        # ───────────────────────────────────────────────────────────
+        # 前置：仓库 Settings → Secrets 配置其一
+        #   【A. PFX 文件（OV 或可导出私钥的证书）】
+        #       CODESIGN_PFX : 证书 PFX 的 Base64 内容
+        #       CODESIGN_PWD : PFX 密码
+        #   【B. 云 HSM / eSigner（推荐，CI 无需硬件，例如阿里云云市场买的
+        #        Sectigo/DigiCert 经由 锐成/亚数 代发，可选云签名）】
+        #       见下方注释的 es_sign / smctl 分支
+        # 注：2023-06 起 EV 代码签名私钥必须存于硬件（USB 令牌或云 HSM），
+        #     通常无法导出为 PFX。若你拿到的是 USB 令牌（如 SafeNet），
+        #     本步需改为在插着令牌的 Windows 机器上本地签名（见 README）。
+        # ───────────────────────────────────────────────────────────
+        if: ${{ env.CODESIGN_PFX != '' }}
         env:
-          WIN_SIGN_PFX: ${{ secrets.WIN_SIGN_PFX }}
-          WIN_SIGN_PWD: ${{ secrets.WIN_SIGN_PWD }}
+          CODESIGN_PFX: ${{ secrets.CODESIGN_PFX }}
+          CODESIGN_PWD: ${{ secrets.CODESIGN_PWD }}
         shell: pwsh
         run: |
           $pfx = "$env:RUNNER_TEMP\sign.pfx"
-          [System.Convert]::FromBase64String($env:WIN_SIGN_PFX) | Set-Content -AsByteStream $pfx
+          [System.Convert]::FromBase64String($env:CODESIGN_PFX) | Set-Content -AsByteStream $pfx
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1
-          & $signtool.FullName sign /f $pfx /p $env:WIN_SIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\分身.exe"
+          if (-not $signtool) { Write-Error "signtool 未找到（Windows SDK 缺失）"; exit 1 }
+          # 双时间戳冗余：主 DigiCert，备 Sectigo，保证证书过期后签名仍有效
+          & $signtool.FullName sign /f $pfx /p $env:CODESIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /v "dist\分身.exe"
+          if ($LASTEXITCODE -ne 0) {
+            & $signtool.FullName sign /f $pfx /p $env:CODESIGN_PWD /fd SHA256 /tr http://timestamp.sectigo.com /td SHA256 /v "dist\分身.exe"
+          }
           if ($LASTEXITCODE -ne 0) { Write-Error "签名失败"; exit 1 }
+          Write-Host "✅ 签名完成"
 
-      - name: 上传构建产物
+      - name: 代码签名（云 HSM 分支，CI 无需硬件，厂商中立）
+        # 若证书走云签名（阿里云云市场代发的 Sectigo/DigiCert/GlobalSign 常可选云 HSM），
+        # 把你的 CA 提供的签名命令整段填进 Secret「CODESIGN_CMD」即可，CI 直接执行。
+        # 示例（占位，按你的 CA 文档替换；务必带 RFC3161 时间戳）：
+        #   CODESIGN_CMD="<你的CA签名命令> dist\分身.exe"
+        # 例如 SSL.com eSigner / DigiCert Software Trust Manager / 锐成云签名 各自一条命令。
+        if: ${{ env.CODESIGN_CMD != '' }}
+        env:
+          CODESIGN_CMD: ${{ secrets.CODESIGN_CMD }}
+        shell: pwsh
+        run: |
+          Invoke-Expression $env:CODESIGN_CMD
+          if ($LASTEXITCODE -ne 0) { Write-Error "云签名失败"; exit 1 }
+          Write-Host "✅ 云签名完成"
+
+      - name: 上传构建产物（未签名也可下载测试）
         uses: actions/upload-artifact@v4
         with:
           name: 分身-windows
           path: dist/分身.exe
+
+      - name: 发布到 GitHub Release（仅打 tag 时）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/分身.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
