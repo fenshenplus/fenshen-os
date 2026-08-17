@@ -378,8 +378,8 @@ async def auth_status(request: Request):
 
 
 # ── v6.2 短信验证码（阿里云 DysmsAPI，自包含 HMAC 签名，无第三方 SDK 依赖）──
-_ALIYUN_SMS_AK = os.environ.get("ALIYUN_SMS_AK", "REDACTED_ALIYUN_AK")
-_ALIYUN_SMS_SK = os.environ.get("ALIYUN_SMS_SK", "REDACTED_ALIYUN_SK")
+_ALIYUN_SMS_AK = os.environ.get("ALIYUN_SMS_AK", "")
+_ALIYUN_SMS_SK = os.environ.get("ALIYUN_SMS_SK", "")
 _ALIYUN_SMS_SIGN = os.environ.get("ALIYUN_SMS_SIGN", "安徽叒叕创业投资有限公司")
 _ALIYUN_SMS_TPL = os.environ.get("ALIYUN_SMS_TPL", "REDACTED_ALIYUN_SMS_TEMPLATE")
 _DEV_SMS = os.environ.get("FENSHEN_DEV_SMS", "") == "1"
@@ -404,6 +404,8 @@ def send_sms_code(phone: str, code: str) -> dict:
     """调用阿里云短信发送验证码。返回阿里云原始响应（Code=='OK' 为成功）。"""
     if _DEV_SMS:
         return {"Code": "OK", "Message": "dev-skip", "dev_code": code}
+    if not _ALIYUN_SMS_AK or not _ALIYUN_SMS_SK:
+        return {"Code": "ERR", "Message": "短信服务未配置（缺少 ALIYUN_SMS_AK / ALIYUN_SMS_SK 环境变量）"}
     params = {
         "AccessKeyId": _ALIYUN_SMS_AK,
         "Action": "SendSms",
