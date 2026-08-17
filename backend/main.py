@@ -27,7 +27,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -1973,6 +1973,17 @@ def health():
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
     return {"status": "ok", "version": "0.61.0", "release": "v6.1", "port": PORT, "llm": llm,
             "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
+
+
+# ── 移动端中转 WebSocket：手机 App ↔ 引擎（同源同端口 8002）──
+try:
+    from backend.relay_ws import relay_websocket
+
+    @app.websocket("/ws")
+    async def _relay_ws(websocket: WebSocket):
+        await relay_websocket(websocket)
+except Exception as _relay_err:
+    print("[relay] 中转模块加载失败(已跳过，不影响其余功能):", _relay_err)
 
 
 @app.get("/api/projects")
