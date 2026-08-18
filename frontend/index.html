@@ -979,6 +979,14 @@
             <button class="btn sm" onclick="loadReviews('')">全部</button>
           </div>
           <div id="reviewList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
+          <!-- E7 元神记忆面板 -->
+          <div style="margin-top:14px;border-top:0.5px solid var(--gray-200);padding-top:12px">
+            <div class="grid-head" style="margin-bottom:8px">
+              <span class="t" style="font-size:13px">元神记忆面板</span>
+              <span class="rl" style="font-size:11px;color:var(--gray-400)">它记得什么 · 依据哪次验收 · 经验库分布</span>
+            </div>
+            <div id="memPanel" style="font-size:12px;color:var(--gray-400)">（需在设置开启 memory_panel_enabled）</div>
+          </div>
           <!-- 复盘弹窗 -->
           <div class="mask" id="reviewMask" style="display:none">
             <div class="modal" style="max-width:460px">
@@ -2266,7 +2274,42 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
   if(n.dataset.sec==='autopilot'){ loadAutopilot(); }
   // v6.2 元神驾驶舱：切过来渲染状态卡 + 项目 + 战队
   if(n.dataset.sec==='cockpit'){ renderCockpit(); }
+  // E7 元神记忆面板：切过来拉取经验库聚合
+  if(n.dataset.sec==='evolution'){ loadMemPanel(); }
 });
+
+/* E7 元神记忆面板：读取经验库聚合（受 memory_panel_enabled 门控，关→后端返回 403 前端隐藏） */
+async function loadMemPanel(){
+  const el=document.getElementById('memPanel'); if(!el) return;
+  try{
+    const j=await apiJson('/api/meta/memory/panel');
+    if(!j.ok){ el.innerHTML='<span style="color:var(--gray-400)">（memory_panel_enabled 未开启）</span>'; return; }
+    const d=j; let html='';
+    html+='<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px">';
+    html+='<span>总经验 <b>'+d.total+'</b></span>';
+    html+='<span>已固化 <b style="color:var(--meta)">'+d.persistent+'</b></span>';
+    html+='<span>草稿 <b>'+d.drafts+'</b></span>';
+    html+='<span>已淘汰 <b>'+d.eliminated+'</b></span>';
+    html+='<span>护栏拦截 <b style="color:#e5484d">'+d.unsafe+'</b></span>';
+    html+='</div>';
+    const cats=Object.entries(d.by_category||{});
+    if(cats.length){ html+='<div style="margin-bottom:8px"><b>分类分布</b>：'+cats.map(([k,v])=>k+' '+v).join(' · ')+'</div>'; }
+    if((d.recent||[]).length){
+      html+='<div><b>最近沉淀（含验收标注）</b><div style="margin-top:4px">';
+      html+=d.recent.map(r=>{
+        return '<div style="padding:4px 0;border-top:.5px solid var(--gray-200)">'
+          +'<span style="color:var(--meta)">'+(r.category||'').toUpperCase()+'</span> '
+          +'<span style="color:var(--fg)">'+(r.scenario||'').slice(0,60)+'</span>'
+          +(r.acceptance_result?' <span style="color:var(--gray-400)">· 验收:'+r.acceptance_result+'</span>':'')
+          +(r.version_fingerprint?' <span style="color:var(--gray-400)">· '+r.version_fingerprint+'</span>':'')
+          +(r.unsafe?' <span style="color:#e5484d">· 护栏拦截</span>':'')
+          +'</div>';
+      }).join('');
+      html+='</div></div>';
+    }
+    el.innerHTML=html;
+  }catch(e){ el.innerHTML='<span style="color:var(--gray-400)">记忆面板加载失败</span>'; }
+}
 
 // v5.0 移动端首页：手机默认进「项目群聊」（最常用），桌面保持元神窗
 if(innerWidth<768 && document.querySelector('.navitem[data-sec="chat"]')){ document.querySelector('.navitem[data-sec="chat"]').click(); }

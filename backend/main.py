@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -912,6 +913,23 @@ def init_db():
             created_at TEXT,
             expires_at TEXT
         );
+        -- E6 无损会话归档：节点树（parent_id 预留，当前按 project_id+session_id 扁平归档）。
+        -- 压缩只建摘要节点、原节点标记 archived=1 但数据保留（无损）。
+        CREATE TABLE IF NOT EXISTS session_nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            session_id TEXT NOT NULL DEFAULT '',
+            parent_id INTEGER DEFAULT 0,
+            role TEXT DEFAULT '',
+            kind TEXT DEFAULT 'message',
+            content TEXT DEFAULT '',
+            token_est INTEGER DEFAULT 0,
+            is_summary INTEGER DEFAULT 0,
+            summary_of TEXT DEFAULT '',
+            archived INTEGER DEFAULT 0,
+            created_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_snode_pid ON session_nodes(project_id, session_id);
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id TEXT NOT NULL,
@@ -1230,6 +1248,8 @@ def init_db():
         for col in ("input_tokens", "output_tokens"):
             if col not in mu_cols:
                 cur.execute(f"ALTER TABLE model_usage ADD COLUMN {col} INTEGER DEFAULT 0")
+        if "task_id" not in mu_cols:
+            cur.execute("ALTER TABLE model_usage ADD COLUMN task_id TEXT DEFAULT ''")
     except Exception:
         pass
     # ── 疗效归因（类脑自进化第⑤环）：experiences 补 5 维权重 + 淘汰列（老库兼容）──
@@ -1246,6 +1266,11 @@ def init_db():
             ("neg_streak", "INTEGER DEFAULT 0"),
             ("persistent", "INTEGER DEFAULT 0"),
             ("eliminated", "INTEGER DEFAULT 0"),
+            ("source_task_id", "TEXT DEFAULT ''"),
+            ("acceptance_result", "TEXT DEFAULT ''"),
+            ("snippet", "TEXT DEFAULT ''"),
+            ("version_fingerprint", "TEXT DEFAULT ''"),
+            ("unsafe", "INTEGER DEFAULT 0"),
         ):
             if col not in exp_cols:
                 cur.execute(f"ALTER TABLE experiences ADD COLUMN {col} {ddl}")
@@ -1334,15 +1359,17 @@ def _live_add(provider, model, inp, out):
 
 def _log_usage(agent_id: str, provider: str, model: str, latency_ms: int, status: str,
                input_tokens: int = 0, output_tokens: int = 0, phase: str = "", scope_modules: int = -1,
-               project_id: str = ""):
-    """记录一次 LLM 调用（v5.9 起含 token 计数；P1-A 加 phase 区分元神调度/角色执行、scope_modules 记录爆炸半径范围、project_id 按项目归因）。"""
+               project_id: str = "", task_id: str = ""):
+    """记录一次 LLM 调用（v5.9 起含 token 计数；P1-A 加 phase 区分元神调度/角色执行、scope_modules 记录爆炸半径范围、project_id 按项目归因；
+    v6.4 P0 快赢：task_id 按任务归因（显式传入优先，否则取角色执行期 _TOOL_TASK）。"""
     try:
         _live_add(provider, model, input_tokens, output_tokens)
+        _tid = (task_id or _TOOL_TASK.get() or "")
         conn = get_db()
         conn.execute(
-            "INSERT INTO model_usage (ts,agent_id,provider,model,latency_ms,status,input_tokens,output_tokens,phase,scope_modules,project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO model_usage (ts,agent_id,provider,model,latency_ms,status,input_tokens,output_tokens,phase,scope_modules,project_id,task_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (datetime.now().isoformat(), agent_id, provider, model, latency_ms, status,
-             int(input_tokens or 0), int(output_tokens or 0), phase or "", int(scope_modules or -1), project_id or ""),
+             int(input_tokens or 0), int(output_tokens or 0), phase or "", int(scope_modules or -1), project_id or "", _tid),
         )
         conn.commit()
         conn.close()
@@ -1976,6 +2003,10 @@ def needs_approval(command: str) -> bool:
     if mode == "off":
         return False
     if mode == "all":
+        # 批次B D6：代理VCS 开启时，任务内安全 git 子集（branch/add/commit/...）不弹窗，
+        # 仍受 DANGER_RE 兜底硬拦（push --force/reset --hard/clean -fdx 等仍需确认）。
+        if _code_vcs_enabled() and _GIT_SAFE_RE.match((command or "").strip()):
+            return False
         return True
     return bool(DANGER_RE.search(command) or SENSITIVE_PATH_RE.search(command))
 
@@ -3694,6 +3725,8 @@ _TOOL_PROJECT: contextvars.ContextVar = contextvars.ContextVar("tool_project", d
 _TOOL_MODULE: contextvars.ContextVar = contextvars.ContextVar("tool_module", default="")
 _TOOL_ACTOR: contextvars.ContextVar = contextvars.ContextVar("tool_actor", default="")
 _TOOL_ROOT: contextvars.ContextVar = contextvars.ContextVar("tool_root", default="")
+# v6.4 P0 快赢：成本可观测——角色执行期把当前任务 id 注入，LLM 调用由此按任务归因 token
+_TOOL_TASK: contextvars.ContextVar = contextvars.ContextVar("tool_task", default="")
 # v5.9：当前 trajectory run（仅在项目角色执行期被设置，用于工具级事件回放）
 _TRAJ_RUN: contextvars.ContextVar = contextvars.ContextVar("traj_run", default=None)
 
@@ -4027,6 +4060,608 @@ async def _run_meta_tool(name: str, args: dict, agent_id: str = META_PID) -> str
 FILE_SENSITIVE_PARTS = {".ssh", ".aws", ".gnupg", ".git", "Library", "System", "Applications", "private", "etc", "usr", "bin", "sbin", "var", "tmp", "cores"}
 FILE_MAX_WRITE = 50 * 1024  # 单文件写入上限 50KB
 
+# ── 批次A 代码能力强化：确定性质量门（沙箱验证）基础设施 ────────────────
+# 行为由 meta_settings 中的开关控制，默认全部关闭 → 不改变既有执行/判定契约：
+#   code_verify_enabled  "1" 开启确定性质量门（编译+可选测试）           默认 "0"
+#   code_verify_run_tests "1" 编译通过后额外跑 pytest（存在时）          默认 "0"
+#   code_verify_fix_rounds 自纠正最大轮数（0~5）                         默认 "2"
+# 设计原则：无 .py 文件可验时一律 ok=True（不阻断非代码任务）；pytest 缺失/无测试则跳过（不视为失败）。
+def _code_verify_enabled() -> bool:
+    return get_setting("code_verify_enabled", "0") == "1"
+
+def _code_verify_run_tests() -> bool:
+    return get_setting("code_verify_run_tests", "0") == "1"
+
+def _code_verify_fix_rounds() -> int:
+    try:
+        return max(0, min(5, int(get_setting("code_verify_fix_rounds", "2"))))
+    except Exception:
+        return 2
+
+def _sandbox_verify(workdir: str, done_criteria: str = "") -> dict:
+    """确定性质量门（批次A D1/D3/D4 共用）：
+    对工作区内的 .py 文件做 py_compile 语法校验；编译全通过后，若开启则跑 pytest。
+    返回结构化结果 {"ok","files","errors","ran_tests","summary"}。
+    约定：无 .py 文件 → ok=True（无代码可验，不阻断）；pytest 未安装/无测试 → 跳过（不计失败）。"""
+    if not os.path.isdir(workdir):
+        return {"ok": True, "files": [], "errors": [], "ran_tests": False,
+                "summary": "工作区不存在，无可验证文件"}
+    py_files = []
+    for _dir, _dirs, _files in os.walk(workdir):
+        _dirs[:] = [d for d in _dirs if d not in ("__pycache__", ".venv", "venv", "node_modules", ".git")]
+        for _f in _files:
+            if _f.endswith(".py"):
+                py_files.append(os.path.join(_dir, _f))
+    errors = []
+    for _f in py_files:
+        try:
+            _r = subprocess.run([sys.executable, "-m", "py_compile", _f],
+                                capture_output=True, text=True, timeout=30)
+            if _r.returncode != 0:
+                errors.append(f"{os.path.relpath(_f, workdir)}:\n{_r.stderr.strip()[:600]}")
+        except Exception as _e:
+            errors.append(f"{os.path.relpath(_f, workdir)}: 编译异常 {_e}")
+    ran_tests = False
+    if not errors and _code_verify_run_tests():
+        _has_tests = (os.path.isdir(os.path.join(workdir, "tests"))
+                      or any(os.path.basename(f).startswith("test_") or os.path.basename(f) == "conftest.py"
+                             for f in py_files))
+        if _has_tests:
+            try:
+                _r = subprocess.run(
+                    [sys.executable, "-m", "pytest", workdir, "-q", "--no-header", "-p", "no:cacheprovider"],
+                    capture_output=True, text=True, timeout=180)
+                ran_tests = True
+                # pytest 退出码 5 = 无测试收集，视为跳过（不计失败）
+                if _r.returncode not in (0, 5):
+                    errors.append(f"pytest 失败:\n{(_r.stdout or _r.stderr).strip()[-800:]}")
+            except FileNotFoundError:
+                ran_tests = False  # pytest 未安装 → 跳过
+            except Exception as _e:
+                errors.append(f"pytest 异常: {_e}")
+    if errors:
+        _sum = f"未通过确定性质量门（{len(errors)} 处问题）：\n" + "\n---\n".join(errors[:5])
+        return {"ok": False, "files": [os.path.relpath(f, workdir) for f in py_files],
+                "errors": errors, "ran_tests": ran_tests, "summary": _sum[:1500]}
+    _msg = f"确定性质量门通过（{len(py_files)} 个 .py 文件" + (f"，已运行 pytest" if ran_tests else "") + "）"
+    return {"ok": True, "files": [os.path.relpath(f, workdir) for f in py_files],
+            "errors": [], "ran_tests": ran_tests, "summary": _msg}
+
+def run_quality_gate_project(pid: str, mod_id: str = "") -> dict:
+    """对项目/模块工作区跑确定性质量门（供 API 与 verify_task 复用）。"""
+    try:
+        conn = get_db()
+        proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        conn.close()
+        if not proj:
+            return {"ok": False, "errors": ["项目不存在"], "summary": "项目不存在", "files": [], "ran_tests": False}
+        root = _project_storage_root(dict(proj))
+        workdir = os.path.join(root, "modules", mod_id) if mod_id else root
+        return _sandbox_verify(workdir)
+    except Exception as e:
+        return {"ok": False, "errors": [str(e)], "summary": f"质量门异常: {e}", "files": [], "ran_tests": False}
+
+
+# ── 批次B 代码能力强化：D5 语义理解 / D6 代理VCS / D8 写测交叉验证 ────────────────
+# 行为由 meta_settings 开关控制，默认全部关闭 → 不改变既有执行/判定契约：
+#   code_semantic_enabled "1" 注入项目锚点(AGENTS.md式)+符号/依赖轻量索引  默认 "0"
+#   code_vcs_enabled      "1" 每任务独立 git 分支+原子提交(安全子集白名单放行) 默认 "0"
+#   code_xverify_enabled  "1" 代码任务派单时追加 tester 角色写测试交叉验证    默认 "0"
+# 设计原则：默认全关；开启后也只对"代码类任务/工作区"生效，不干扰文档/闲聊类任务。
+def _code_semantic_enabled() -> bool:
+    return get_setting("code_semantic_enabled", "0") == "1"
+
+def _code_vcs_enabled() -> bool:
+    return get_setting("code_vcs_enabled", "0") == "1"
+
+def _code_xverify_enabled() -> bool:
+    return get_setting("code_xverify_enabled", "0") == "1"
+
+# ── D5：项目锚点 + 符号/依赖轻量索引 ──────────────────────────────
+_ANCHOR_NAMES = ("AGENTS.md", "CLAUDE.md", ".cursorrules", "README.md")
+
+def _read_anchor_file(root: str) -> str:
+    """读取项目锚点契约（构建/测试/风格），按优先级回退。"""
+    for fn in _ANCHOR_NAMES:
+        p = os.path.join(root, fn)
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    return f.read(3000)
+            except Exception:
+                pass
+    return ""
+
+def _symbol_index(workdir: str, limit: int = 60) -> str:
+    """对工作区 .py 做轻量符号/依赖索引：def/class 定义 + import。便于角色理解结构，不幻觉 API。"""
+    if not os.path.isdir(workdir):
+        return ""
+    defs, imps = [], []
+    for _dir, _dirs, _files in os.walk(workdir):
+        _dirs[:] = [d for d in _dirs if d not in ("__pycache__", ".venv", "venv", "node_modules", ".git")]
+        for _f in _files:
+            if not _f.endswith(".py"):
+                continue
+            full = os.path.join(_dir, _f)
+            rel = os.path.relpath(full, workdir)
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                    src = f.read(20000)
+            except Exception:
+                continue
+            for ln in src.splitlines():
+                s = ln.strip()
+                if s.startswith("def ") or s.startswith("async def "):
+                    m = re.match(r"(?:async\s+)?def\s+(\w+)", s)
+                    if m:
+                        defs.append(f"{rel}::{m.group(1)}")
+                elif s.startswith("class "):
+                    m = re.match(r"class\s+(\w+)", s)
+                    if m:
+                        defs.append(f"{rel}::{m.group(1)}")
+                elif s.startswith("import ") or s.startswith("from "):
+                    imps.append(s)
+            if len(defs) >= limit:
+                break
+    out = []
+    if defs:
+        out.append("【本工作区符号（def/class，限前 %d）】\n%s" % (limit, "\n".join(defs[:limit])))
+    if imps:
+        out.append("【本工作区依赖（import，限前 30）】\n" + "\n".join(imps[:30]))
+    return "\n\n".join(out)
+
+def _build_codebase_context(root: str, mod_id: str, role: str) -> str:
+    """D5：拼装注入角色执行的代码库上下文（锚点契约 + 符号索引）。"""
+    if not _code_semantic_enabled():
+        return ""
+    parts = []
+    anchor = _read_anchor_file(root)
+    if anchor:
+        parts.append("【项目锚点契约（AGENTS.md/CLAUDE.md 等，构建/测试/风格）】\n" + anchor)
+    workdir = os.path.join(root, "modules", mod_id) if mod_id else root
+    sym = _symbol_index(workdir)
+    if sym:
+        parts.append(sym)
+    elif not anchor:
+        return ""
+    if parts:
+        parts.append("（D5 语义理解：改代码前先参考上述契约与符号，避免漏下游依赖、避免幻觉不存在的 API。）")
+    return "\n\n".join(parts)
+
+# ── D6：代理级版本管理（任务分支 + 原子提交）─────────────────────
+# 安全 git 子集白名单：开启代理VCS 时，这些命令在 all 审批模式下也不弹窗（仍受 DANGER_RE 兜底硬拦危险变体）。
+_GIT_SAFE_RE = re.compile(
+    r"^git\s+(?:"
+    r"status|diff|log|branch|add|commit|init|merge\s+--ff-only|"
+    r"checkout\s+(?:-[q]\s+)?-b(?:\s+\S+)?|"
+    r"checkout\s+(?:-[q]\s+)?(?:main|fenshen/\S+)"
+    r")(\s.*)?$",
+    re.IGNORECASE,
+)
+
+def _vcs_safe_git(root: str, *args) -> dict:
+    """在项目存储根执行一条 git 命令（仅内部安全子集使用），返回 {ok, out, code}。"""
+    try:
+        proc = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, timeout=30)
+        out = ((proc.stdout or "") + (proc.stderr or "")).strip() or "(无输出)"
+        return {"ok": proc.returncode == 0, "out": out[:800], "code": proc.returncode}
+    except Exception as e:
+        return {"ok": False, "out": str(e)[:400], "code": -1}
+
+def _vcs_init(root: str) -> bool:
+    """初始化项目工作区为 git 仓库（若尚未初始化），默认分支 main。"""
+    if not os.path.isdir(root):
+        return False
+    if os.path.isdir(os.path.join(root, ".git")):
+        return True
+    if not _vcs_safe_git(root, "init", "-q")["ok"]:
+        return False
+    _vcs_safe_git(root, "checkout", "-q", "-b", "main")
+    gi = os.path.join(root, ".gitignore")
+    try:
+        if not os.path.exists(gi):
+            with open(gi, "w", encoding="utf-8") as f:
+                f.write("# 分身代理VCS 自动生成\n.fenshen_cache/\n__pycache__/\n*.pyc\n.DS_Store\n")
+    except Exception:
+        pass
+    return True
+
+def _vcs_task_branch(root: str, task_id: str) -> str:
+    """为任务创建/切到独立分支，返回分支名；失败返回空串。"""
+    if not _vcs_init(root):
+        return ""
+    bname = f"fenshen/{task_id}"
+    _vcs_safe_git(root, "checkout", "-q", "-B", bname)
+    return bname
+
+def _vcs_commit(root: str, task_id: str, msg: str) -> dict:
+    """原子提交当前工作区改动（仅在该任务分支上）。无改动返回 skipped。"""
+    if not _vcs_init(root):
+        return {"ok": False, "out": "未初始化 git", "skipped": False}
+    _vcs_safe_git(root, "add", "-A")
+    st = _vcs_safe_git(root, "status", "--porcelain")
+    if not st["out"].strip():
+        return {"ok": True, "skipped": True, "out": "无改动"}
+    r = _vcs_safe_git(root, "commit", "-q", "-m", msg[:200])
+    return {"ok": r["ok"], "out": r["out"], "skipped": False}
+
+def _vcs_merge(root: str, task_id: str) -> dict:
+    """PR 式评审后再合：把任务分支 fast-forward 合并回 main。"""
+    if not _vcs_init(root):
+        return {"ok": False, "out": "未初始化 git"}
+    bname = f"fenshen/{task_id}"
+    _vcs_safe_git(root, "checkout", "-q", "-B", "main")  # -B：main 为 unborn 分支(首次)时也能创建并切回
+    r = _vcs_safe_git(root, "merge", "--ff-only", bname)
+    return {"ok": r["ok"], "out": r["out"]}
+
+# ── D8：代码任务识别 + 写/测配对 ─────────────────────────────────
+_CODE_ROLES = {"backend", "frontend", "fullstack", "dev", "engineer"}
+_CODE_KW = ("实现", "写代码", "代码", "函数", "类定义", "模块", "修复", "bug", "api", "接口", "脚本",
+            "pytest", "def ", "组件", "后端", "前端", "写测试", "单元测试")
+
+def _is_code_task(act: dict) -> bool:
+    """判断该 action 是否为代码类任务（用于 D8 配对 tester）。"""
+    role = (act.get("role") or "").lower()
+    if role in _CODE_ROLES:
+        return True
+    txt = f"{act.get('task_name','')} {act.get('detail','')} {act.get('done_criteria','')}".lower()
+    return any(k in txt for k in _CODE_KW)
+
+
+# ── 批次C 代码能力强化：D7 流式/模型/质量提示 · D9 疗效归因接入代码 · D10 宪法代码护栏 ────────
+# 行为由 meta_settings 开关控制，默认全部关闭 → 不改变既有执行/判定契约：
+#   code_stream_enabled      "1" 开放 /api/meta/code_stream 流式代码生成(SSE)             默认 "0"
+#   code_model_enabled       "1" 代码角色优先走代码专用强模型(CODE_MODEL_RECS)            默认 "0"
+#   code_quality_prompt      "1" 代码角色系统提示追加强约束(禁编造API/类型注解/diff有界/加测试) 默认 "0"
+#   code_attribution_enabled "1" 验证"修好/失败"写入经验库并打5维权重，下个同类任务召回       默认 "0"
+#   code_static_scan_enabled "1" 写代码文件前静态扫描门(禁硬编码密钥/破坏性系统调用)        默认 "0"
+# 设计原则：默认全关；开启后也只对"代码类任务/代码文件"生效，不影响文档/闲聊类任务与核心契约。
+
+def _code_stream_enabled() -> bool:
+    return get_setting("code_stream_enabled", "0") == "1"
+
+def _code_model_enabled() -> bool:
+    return get_setting("code_model_enabled", "0") == "1"
+
+def _code_quality_prompt_enabled() -> bool:
+    return get_setting("code_quality_prompt", "0") == "1"
+
+def _code_attribution_enabled() -> bool:
+    return get_setting("code_attribution_enabled", "0") == "1"
+
+def _code_static_scan_enabled() -> bool:
+    return get_setting("code_static_scan_enabled", "0") == "1"
+
+# ── P0 快赢：看板每格 token 成本透出（默认关；开启后矩阵每格聚合该格任务累计 token）──
+def _cost_visibility_enabled() -> bool:
+    return get_setting("cost_visibility_enabled", "0") == "1"
+
+
+# ── D7：代码专用模型偏好 ─────────────────────────────
+# 开启后，代码角色走更擅长编码/长上下文的模型（仍走 _available_providers 的 FALLBACK_ORDER 兜底）。
+CODE_MODEL_RECS = {
+    "backend":   {"provider": "deepseek", "model": "deepseek-v4-flash"},
+    "frontend":  {"provider": "openai",   "model": "gpt-4o"},
+    "fullstack": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+    "dev":       {"provider": "deepseek", "model": "deepseek-v4-flash"},
+    "engineer":  {"provider": "deepseek", "model": "deepseek-v4-flash"},
+}
+
+def _code_model_for_role(role: str) -> dict | None:
+    """D7：返回该角色的代码专用模型(若启用且为代码角色)，否则 None。"""
+    if not _code_model_enabled():
+        return None
+    return CODE_MODEL_RECS.get((role or "").lower())
+
+def _key_for_provider(provider: str, role: str = "backend"):
+    """返回 (base, key, model) 用于指定 provider；从配置取 key，模型用该 provider 默认。无 key 则回退 secret。"""
+    for p, b, k, m in _available_providers(role):
+        if p == provider:
+            return b, k, m
+    if provider == "deepseek":
+        return PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-v4-flash"
+    return PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"], "", ""
+
+
+# ── D7：代码质量硬约束系统提示 ───────────────────────
+_CODE_QUALITY_CONSTRAINTS = (
+    "【代码质量硬约束（宪法级，必须执行）】\n"
+    "1. 禁止编造不存在的 API / 函数 / 库：改动前先参考上方「项目锚点契约」与「本工作区符号」，"
+    "调用必须落在已知符号与依赖内；不确定时先搜索再调用。\n"
+    "2. 强制类型注解：函数签名必须带类型标注（Python 用 typing，TS 用类型声明），降低误用。\n"
+    "3. diff-bounded（最小改动）：只改实现目标所需的最小 diff，不重构无关代码、不整体覆写既有文件。\n"
+    "4. 配套测试：实现功能同时给出可运行的单元测试（pytest / 前端测试），新行为有测试覆盖，新路径有断言。\n"
+    "5. 失败显式：错误必须被捕获并给出可定位信息，禁止静默吞掉异常（bare except / pass）。"
+)
+
+def _build_code_quality_prompt(role: str) -> str:
+    """D7：代码角色追加的质量系统提示块；非代码角色或开关关闭则返回空。"""
+    if not _code_quality_prompt_enabled():
+        return ""
+    if (role or "").lower() not in _CODE_ROLES:
+        return ""
+    return "\n\n" + _CODE_QUALITY_CONSTRAINTS
+
+
+# ── D7：流式代码生成（SSE）──────────────────────────
+def _call_single_provider_stream(provider, base, key, model, history, system_prompt):
+    """D7：逐 token 流式调用单个模型，生成器 yield 文本片段。失败抛异常。
+    仅用于 /api/meta/code_stream（开关门控），不接入核心同步 chat 管线，避免改变既有执行契约。"""
+    msgs = _merge_system(history, system_prompt)
+    if provider == "ollama":
+        resp = requests.post(base + "/api/chat", json={"model": model, "messages": msgs, "stream": True},
+                             timeout=120, stream=True)
+        resp.raise_for_status()
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            try:
+                j = json.loads(line)
+            except Exception:
+                continue
+            c = (j.get("message") or {}).get("content") or ""
+            if c:
+                yield c
+    elif provider == "claude":
+        sys = system_prompt or next((m["content"] for m in history if m["role"] == "system"), "")
+        body = {"model": model, "system": sys,
+                "messages": [m for m in history if m["role"] != "system"],
+                "max_tokens": 2000, "temperature": 0.7, "stream": True}
+        resp = requests.post(base + "/v1/messages",
+                             headers={"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                             json=body, timeout=120, stream=True)
+        resp.raise_for_status()
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if data == "[DONE]":
+                break
+            try:
+                j = json.loads(data)
+            except Exception:
+                continue
+            if j.get("type") == "content_block_delta":
+                c = (j.get("delta") or {}).get("text") or ""
+                if c:
+                    yield c
+    else:  # openai / deepseek 兼容 OpenAI 格式
+        payload = {"model": model, "messages": msgs, "temperature": 0.7, "max_tokens": 2000, "stream": True}
+        resp = requests.post(base + PROVIDER_PRESETS[provider]["chat"],
+                            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                            json=payload, timeout=120, stream=True)
+        resp.raise_for_status()
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if data == "[DONE]":
+                break
+            try:
+                j = json.loads(data)
+            except Exception:
+                continue
+            c = (j.get("choices", [{}])[0].get("delta", {}) or {}).get("content") or ""
+            if c:
+                yield c
+
+
+# ── D9：疗效归因接入代码 ─────────────────────────────
+# ── 安全自进化引擎（α 批次 E1/E2/E3）：经验泛化 + 召回闭环 + 质量门 ──
+def _evolution_record_enabled() -> bool:
+    return get_setting("evolution_record_enabled", "0") == "1"
+def _evolution_recall_enabled() -> bool:
+    return get_setting("evolution_recall_enabled", "0") == "1"
+def _evolution_quality_gate_enabled() -> bool:
+    return get_setting("evolution_quality_gate_enabled", "0") == "1"
+def _evolution_heldout_enabled() -> bool:
+    return get_setting("evolution_heldout_enabled", "0") == "1"
+def _evolution_lineage_enabled() -> bool:
+    return get_setting("evolution_lineage_enabled", "0") == "1"
+def _evolution_guardrail_enabled() -> bool:
+    return get_setting("evolution_guardrail_enabled", "0") == "1"
+def _memory_archive_enabled() -> bool:
+    return get_setting("memory_archive_enabled", "0") == "1"
+def _memory_panel_enabled() -> bool:
+    return get_setting("memory_panel_enabled", "0") == "1"
+
+# E4：held-out 灰度晋升/淘汰阈值（受 evolution_heldout_enabled 控制；关→保持 D9 既有宽松 freq>=10/neg>=2）。
+_HELDOUT_PROMOTE_USES = 3   # 成功复用达此次数 → 晋升 persistent=1
+_HELDOUT_DEMOTE_NEG = 2      # 连续负反馈达此次数 → 淘汰 eliminated=1
+def _heldout_promote_uses() -> int:
+    return _HELDOUT_PROMOTE_USES if _evolution_heldout_enabled() else 10
+def _heldout_demote_neg() -> int:
+    return _HELDOUT_DEMOTE_NEG if _evolution_heldout_enabled() else 2
+
+# E6：无损会话归档 —— 节点树 + 压缩阈值（~60% 思路：预算内留足余量，临近即压，规避断崖）。
+_ARCHIVE_NODE_BUDGET = 24        # 非归档节点累计达此数 → 触发压缩
+_ARCHIVE_KEEP_RECENT = 6         # 压缩时保留最近 N 条不归档（keepRecent）
+_ARCHIVE_TOKEN_PER_CHAR = 0.5    # 粗略 token 估算（中文约 2 字符/token）
+
+def _est_tokens(text: str) -> int:
+    return max(1, int((len(text or "") * _ARCHIVE_TOKEN_PER_CHAR)))
+
+def _record_session_node(project_id, role, content, kind="message", session_id="", parent_id=0):
+    """E6：把一条会话节点无损落库（扁平归档，parent_id 预留树扩展）。
+    受 memory_archive_enabled 门控；关→no-op（零侵入）。返回节点 id。"""
+    if not _memory_archive_enabled():
+        return 0
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO session_nodes (project_id,session_id,parent_id,role,kind,content,token_est,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (project_id, session_id, parent_id, role, kind, content or "",
+             _est_tokens(content), datetime.now().isoformat()))
+        nid = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return nid
+
+def _summarize_nodes_text(nodes):
+    """E6：压缩摘要（无损——原节点保留）。抽取式兜底（不依赖外部 LLM，保证确定性 + 可离线测试）。"""
+    try:
+        if nodes:
+            lines = []
+            for n in nodes:
+                c = (n.get("content") or "").strip().replace("\n", " ")
+                if c:
+                    lines.append("· " + c[:80])
+            return "【会话摘要】共归档 %d 条：\n" % len(nodes) + "\n".join(lines[:_ARCHIVE_KEEP_RECENT * 2])
+    except Exception:
+        pass
+    return "【会话摘要】"
+
+def _maybe_compact_session(project_id, session_id=""):
+    """E6：当非归档节点数达预算(~60%思路) → 把最旧一批压成摘要节点，原节点标记 archived=1（不删，无损）。
+    受 memory_archive_enabled 门控；关→no-op。返回摘要节点 id（未触发返回 0）。"""
+    if not _memory_archive_enabled():
+        return 0
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id,role,content FROM session_nodes "
+            "WHERE project_id=? AND session_id=? AND is_summary=0 AND archived=0 ORDER BY id ASC",
+            (project_id, session_id)).fetchall()
+        if len(rows) < _ARCHIVE_NODE_BUDGET:
+            return 0
+        to_archive = rows[:-_ARCHIVE_KEEP_RECENT]
+        if not to_archive:
+            return 0
+        summary = _summarize_nodes_text([dict(r) for r in to_archive])
+        cur = conn.execute(
+            "INSERT INTO session_nodes (project_id,session_id,parent_id,role,kind,content,token_est,is_summary,summary_of,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (project_id, session_id, 0, "system", "summary", summary,
+             _est_tokens(summary), 1,
+             ",".join(str(r["id"]) for r in to_archive), datetime.now().isoformat()))
+        sid = cur.lastrowid
+        ids = [r["id"] for r in to_archive]
+        q = "UPDATE session_nodes SET archived=1 WHERE id IN (%s)" % ",".join("?" * len(ids))
+        conn.execute(q, ids)
+        conn.commit()
+    finally:
+        conn.close()
+    return sid
+
+def _role_relevance(role: str) -> float:
+    """E1：按角色相关度算 relevance（非 is_code 二元）。代码角色最高，知识/内容/设计次之。"""
+    r = (role or "").lower()
+    if r in _CODE_ROLES:
+        return 0.7
+    if r in ("copywriter", "designer", "researcher", "pm", "architect", "data", "analyst"):
+        return 0.6
+    return 0.5
+
+def _record_experience(task: dict, success: bool, detail: str = "",
+                       has_standard: bool = False, standard_result: str = ""):
+    """E1 经验泛化 + E3 质量门：把任务验收结果写入经验库（代码/非代码通用）。
+    门控——代码任务沿用 D9 的 code_attribution_enabled；非代码任务需 evolution_record_enabled。
+    E3（evolution_quality_gate_enabled 开启时）：
+      有显式标准且通过 → 高权重(w0.7/trust0.8)；无标准仅靠启发式 done → 低信任草稿(w0.3/trust0.3, persistent=0)。
+    两开关皆关 → 直接返回（不改既有行为）。"""
+    role = (task.get("owner_role") or "").lower()
+    is_code = role in _CODE_ROLES
+    if is_code:
+        if not _code_attribution_enabled():
+            return
+    else:
+        if not _evolution_record_enabled():
+            return
+    try:
+        name = task.get("name") or "任务"
+        scenario = (f"代码任务实现/修复: {role} {name}" if is_code
+                    else f"{role} 任务: {name}")
+        if success:
+            if _evolution_quality_gate_enabled() and has_standard and standard_result in ("done", "pass", "达标"):
+                w, trust = 0.7, 0.8
+                outcome = "✅ 成功：有明确完成标准且验收通过。" + (f" 验证方式：{detail}" if detail else "")
+                lesson = f"有效模式：{detail or '先跑测试定位错误→最小修改→再跑测试验证'}"
+            elif _evolution_quality_gate_enabled():
+                # 无标准仅靠启发式 done → 低信任草稿（防错误复利，不主动召回）
+                w, trust = 0.3, 0.3
+                outcome = "🟡 启发式通过（无显式完成标准，弱 grounding 草稿）：" + (detail or "")
+                lesson = f"待验证模式：{detail[:200] or '产出长度正常但缺标准，建议后续补完成标准'}"
+            else:
+                # E3 关闭 → 保持 D9 原计分
+                w, trust = 0.7, 0.8
+                outcome = "✅ 成功：确定性质量门+验收通过。" + (f" 验证方式：{detail}" if detail else "")
+                lesson = f"有效模式：{detail or '先跑测试定位错误→最小修改→再跑测试验证'}"
+            category = "success"
+        else:
+            w, trust = 0.3, 0.3
+            outcome = (f"❌ 失败：{detail[:400]}" if detail else "❌ 失败：未通过验收/质量门")
+            lesson = f"踩坑教训：{detail[:200] or '未通过质量门'}"
+            category = "failure"
+        rel = _role_relevance(role)
+        snippet = (lesson or outcome)[:200]
+        source_task_id = task.get("id") or task.get("task_id") or ""
+        acceptance_result = (standard_result or ("pass" if success else "fail"))[:40]
+        version_fingerprint = f"{SEMVER}:{COMMIT}"
+        unsafe = 0
+        if _evolution_guardrail_enabled() and _experience_contains_blocked(lesson + " " + snippet + " " + outcome):
+            unsafe = 1  # E8：含违禁模式→标记，不晋升不主动召回（留草稿供人工审）
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO experiences "
+            "(scenario, goal, outcome, lesson, category, project_id, ts, frequency, relevance, recency, "
+            "explicit_feedback, trust_score, weight, last_used, neg_streak, persistent, eliminated, source, "
+            "source_task_id, acceptance_result, snippet, version_fingerprint, unsafe) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (scenario, name, outcome, lesson, category, task.get("project_id") or "",
+             datetime.now().isoformat(), 0, rel, 1.0,
+             0.0, trust, w, datetime.now().isoformat(), 0, 0, 0,
+             ("code_task" if is_code else "task"),
+             source_task_id, acceptance_result, snippet, version_fingerprint, unsafe))
+        conn.commit(); conn.close()
+        try:
+            _maintain_attribution()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# ── D10：元神宪法代码护栏（静态扫描门）─────────────────
+# 拦截：硬编码密钥/凭证、针对主目录或根的破坏性系统调用（宪法价值锚：不泄露、不破坏用户资产）。
+# 告警（不拦截）：外联未知域名、subprocess/os.system/eval/exec 调用。
+_CODE_STATIC_BLOCK = [
+    re.compile(r"(?:api[_-]?key|secret|password|passwd|token|access[_-]?key|private[_-]?key|client[_-]?secret)\s*[:=]\s*['\"][A-Za-z0-9_\-]{8,}['\"]", re.IGNORECASE),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"(?:shutil\.rmtree|os\.remove|os\.unlink|os\.rmdir)\s*\(\s*['\"]?~"),
+    re.compile(r"rm\s+-rf\s+(?:/|~|['\"]?/|['\"]?~)"),
+    re.compile(r"os\.system\s*\(\s*['\"]rm\s+-rf"),
+]
+
+def _experience_contains_blocked(text: str) -> bool:
+    """E8：经验 lesson/snippet/outcome 是否含宪法护栏违禁模式（硬编码密钥/危险删除）。
+    直接套 _CODE_STATIC_BLOCK（不依赖文件后缀，因经验文本无 path 概念）。命中→该经验不得晋升、不主动召回。"""
+    if not text:
+        return False
+    return any(rx.search(text) for rx in _CODE_STATIC_BLOCK)
+_CODE_STATIC_WARN = [
+    re.compile(r"https?://[^\s'\"\)]+", re.IGNORECASE),
+    re.compile(r"(?:subprocess|os\.system|eval|exec)\s*\("),
+]
+_CODE_EXTS = (".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".sh", ".vue", ".php", ".rb")
+
+def _code_static_scan(path: str, content: str) -> dict:
+    """D10：宪法代码护栏——写代码文件前静态扫描。返回 {blocked, warnings, reasons}。开关关闭或非代码文件直接放行。"""
+    if not _code_static_scan_enabled():
+        return {"blocked": False, "warnings": [], "reasons": []}
+    if not (path or "").lower().endswith(_CODE_EXTS):
+        return {"blocked": False, "warnings": [], "reasons": []}
+    reasons, warnings = [], []
+    for rx in _CODE_STATIC_BLOCK:
+        m = rx.search(content or "")
+        if m:
+            reasons.append(f"命中宪法护栏模式（{m.group(0)[:60]}）")
+    for rx in _CODE_STATIC_WARN:
+        if rx.search(content or ""):
+            warnings.append("代码含外联/危险调用，请确保目标可信且符合用户利益")
+    return {"blocked": bool(reasons), "warnings": warnings, "reasons": reasons}
+
 
 def _safe_file_path(path: str):
     """校验并规范化路径：必须在用户主目录下且不触碰敏感目录。返回绝对路径或 None。"""
@@ -4094,6 +4729,12 @@ def _write_file_tool(path: str, content: str):
                     f"请把产出写入工作区目录（这是分身的安全边界）。")
     if len(content) > FILE_MAX_WRITE:
         return f"⛔ 内容超过 {FILE_MAX_WRITE // 1024}KB 上限"
+    # 批次C D10：元神宪法代码护栏——代码文件静态扫描门（开关关闭则跳过，非代码文件跳过）
+    _scan = _code_static_scan(path, content)
+    if _scan["blocked"]:
+        return ("⛔ 宪法代码护栏拦截：\n" + "\n".join(_scan["reasons"])
+                + "\n（生成代码不得硬编码密钥、不得对主目录/根执行破坏性删除。"
+                + "请改用环境变量/配置注入凭证；破坏性操作需用户显式确认。）")
     try:
         os.makedirs(os.path.dirname(real), exist_ok=True)
         with open(real, "w", encoding="utf-8") as f:
@@ -5336,7 +5977,8 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         "输出格式（必须为合法 JSON）：\n"
         '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
         f'"actions": [{{"role": "{role_enum}", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令", '
-        '"done_criteria": "该任务完成的、可验证的判定标准（例如：接口返回 200 且通过测试）"}]}\n'
+        '"done_criteria": "该任务完成的、可验证的判定标准（例如：接口返回 200 且通过测试）", '
+        '"plan": "可选：你对该任务的执行计划（先做什么、改哪些文件、如何验证），供角色参考"}}]\n'
         f"注意：actions 最多 {max_actions} 个；done_criteria 务必具体、可验证，用于后续自动判定角色产出是否达标。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。\n"
         "【自主原则（v4.2）】你是团队的自主调度者：能自己查状态、能自行安排先后顺序、能自行决策，"
         "不要向用户提问确认（除非缺少关键信息无法继续）。用户要的是你把看板任务推进到 100%。"
@@ -5369,6 +6011,26 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             # 每个 action 补默认空完成标准（批次 B / P1-1）
             for _a in actions:
                 _a.setdefault("done_criteria", "")
+            # 批次B D8：写/测交叉验证——为代码类动作追加 tester 配对（同一 spec 写测试并跑）
+            if _code_xverify_enabled():
+                _pairs = []
+                for _a in actions:
+                    if _is_code_task(_a):
+                        _orig = (_a.get("task_name") or "任务")[:16]
+                        _pairs.append({
+                            "role": "tester",
+                            "task_name": f"测:{_orig}",
+                            "detail": (f"基于同一需求为「{_a.get('task_name','')}」的实现编写自动化测试并运行验证："
+                                       f"{_a.get('detail','')}。测试须覆盖 done_criteria，运行测试确认实现达标；"
+                                       f"测试不通过则说明实现有缺陷，请在结果中点明。"),
+                            "done_criteria": f"为该任务编写并通过测试（覆盖：{_a.get('done_criteria','实现通过测试')}）",
+                            "plan": _a.get("plan", ""),
+                        })
+                if _pairs:
+                    actions.extend(_pairs)
+                    _trajectory_event(run_id, pid, "plan", "元神",
+                        f"🔬 写/测交叉验证：为 {len(_pairs)} 个代码任务追加 tester 配对",
+                        {"pairs": [p.get("task_name") for p in _pairs]})
     except Exception:
         pass  # 非 JSON，当作纯文本回复
     # v5.9：回放事件——元神调度计划
@@ -5406,8 +6068,8 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
                           f"▶️ 派单：{task_name}（{role_names.get(role, role)}）", {"detail": detail[:300]})
 
         conn = get_db()
-        mod = mods[0] if mods else None
-        mod_id = mod["id"] if mod else ""
+        # v6.4 P0 修复：对话任务必须落进真实 module×stage 格（见 _resolve_dispatch_module）
+        mod_id = _resolve_dispatch_module(conn, pid, act, mods)
         topic_id = ""
         if reuse_task_id:
             # P1-2 修复：autopilot 推进预存 todo 看板卡时复用既有卡，而非每张 action 新建一张，
@@ -5444,6 +6106,9 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             conn.commit()
             conn.close()
 
+        # v6.4 P0 快赢：把当前任务 id 注入 contextvar，后续角色执行期 LLM 调用按任务归因 token
+        _TOOL_TASK.set(task_id)
+
         # v4.0：开工即流转到「进行中」，看板实时可见
         _task_status(task_id, "doing", pid, f"▶️ 「{task_name}」已派给{role_names.get(role, role)}，进入进行中")
 
@@ -5462,11 +6127,30 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         _TOOL_MODULE.set(mod_id or "")
         _TOOL_ACTOR.set(role_names.get(role, role))
         _TOOL_ROOT.set(root)
+        # 批次B D6：代理级版本管理——为任务创建/切到独立分支（开启时），提交在收尾处原子落盘
+        vcs_branch = ""
+        if _code_vcs_enabled():
+            try:
+                vcs_branch = await asyncio.to_thread(_vcs_task_branch, root, task_id)
+            except Exception:
+                vcs_branch = ""
         role_sys_ctx = (role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
                         f"\n【工作区】所有写文件必须写入此目录（越界会被拒绝）：{workdir}"
                         f"\n多步文件操作建议用 run_batch 一次完成（省 token）。")
         if done_criteria:
             role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
+        # 批次A D2：角色级执行纪律（软门禁）——写代码/文件前先给出执行计划
+        role_sys_ctx += ("\n【执行纪律】若任务涉及写代码或生成文件，请先简短说明执行计划"
+                         "（改动哪些文件、为什么、如何验证），再动手产出；禁止无说明地直接覆写既有文件。")
+        # 批次B D5：注入代码库语义上下文（锚点契约 + 符号索引），降低跨文件改动回归风险
+        if _code_semantic_enabled():
+            _cb_ctx = _build_codebase_context(root, mod_id, role)
+            if _cb_ctx:
+                role_sys_ctx += "\n\n" + _cb_ctx
+        # 批次C D7：代码质量硬约束系统提示（仅代码角色 + 开关开启时追加），强约束降幻觉/提首过质量
+        _qp = _build_code_quality_prompt(role)
+        if _qp:
+            role_sys_ctx += _qp
         # v5.8 P2：项目选定 UI 设计规范 → 注入角色执行上下文（前端/产品尤其要遵守）
         ds_id = proj.get("design_standard") or ""
         if ds_id:
@@ -5536,12 +6220,33 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             {"role": "system", "content": role_sys_ctx},
             {"role": "user", "content": f"任务：{task_name}\n具体要求：{detail}\n请给出你的执行方案/代码/分析。需要验证时可调用 exec_command / browser_action 工具获取真实结果。"},
         ]
-        try:
-            role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx,
-                                             phase=f"role-exec:{role}", scope_modules=_role_scope,
-                                             project_id=pid)
-        except Exception as e:
-            role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
+        # 批次A D1+D4：确定性质量门 + 自纠正闭环。
+        # 仅当开启代码校验时才进入「执行→验证→回填修复」循环；否则单次执行，保持原行为。
+        verify_enabled = _code_verify_enabled()
+        max_fix = _code_verify_fix_rounds() if verify_enabled else 0
+        role_reply = ""
+        verify = {"ok": True, "errors": [], "summary": "未启用代码质量门", "files": [], "ran_tests": False}
+        for _fix in range(max_fix + 1):
+            try:
+                role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx,
+                                                 phase=f"role-exec:{role}", scope_modules=_role_scope,
+                                                 project_id=pid)
+            except Exception as e:
+                role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
+            if not verify_enabled:
+                break
+            # 确定性质量门（IO 密集，用线程执行避免阻塞事件循环）
+            verify = await asyncio.to_thread(_sandbox_verify, workdir, done_criteria)
+            if verify["ok"] or _fix >= max_fix:
+                break
+            # 未通过 → 把结构化报错回填，驱动角色修复（D4 自纠正闭环）
+            role_hist.append({"role": "assistant", "content": role_reply[:1500]})
+            role_hist.append({"role": "user", "content":
+                "⚠️ 你的产出未通过确定性质量门（编译/测试失败），请修复后重新提交完整产出：\n"
+                + verify["summary"]})
+            _trajectory_event(run_id, pid, "role_fix", role_names.get(role, role),
+                              f"🔧 质量门未通过，进入第 {_fix + 1} 轮自纠正：{verify['summary'][:200]}",
+                              {"task_id": task_id, "round": _fix, "fix_round": _fix + 1})
 
         # 落库角色回复
         conn = get_db()
@@ -5552,14 +6257,35 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         conn.commit()
         conn.close()
 
-        # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
-        final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
+        # 批次A D3：确定性质量门优先于 LLM 判定——代码任务质量门失败直接判 review（附报错）
+        if verify_enabled and not verify["ok"]:
+            final = "review"
+            judge_reason = "确定性质量门未通过：" + verify["summary"][:200]
+        else:
+            # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
+            final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
         note = {
             "done": f"✅ 「{task_name}」已完成（{role_names.get(role, role)}）",
             "review": f"🔍 「{task_name}」未达标转复核（{judge_reason}）",
             "todo": f"⚠️ 「{task_name}」执行未产出，退回待办",
         }[final]
         _task_status(task_id, final, pid, note)
+        # 批次B D6：原子提交（仅成功 done 的任务分支；review 保留分支供人工评审/合主干）
+        if _code_vcs_enabled() and vcs_branch:
+            try:
+                if final == "done":
+                    _vcs = await asyncio.to_thread(_vcs_commit, root, task_id,
+                        f"分身·{role_names.get(role, role)} 完成任务「{task_name}」")
+                    if not _vcs.get("skipped"):
+                        _trajectory_event(run_id, pid, "vcs", "元神",
+                            f"🔖 已提交任务分支 {vcs_branch}：" + _vcs.get("out", "")[:120],
+                            {"task_id": task_id, "branch": vcs_branch})
+                else:
+                    _trajectory_event(run_id, pid, "vcs", "元神",
+                        f"⏸ 任务未达标，保留分支 {vcs_branch} 待人工评审后再合主干",
+                        {"task_id": task_id, "branch": vcs_branch})
+            except Exception:
+                pass
         # v5.9：回放事件——角色执行结果
         _trajectory_event(run_id, pid, "role_done", role_names.get(role, role),
                           f"{note}（{judge_reason[:200]}）", {"task_id": task_id, "status": final, "round": round_no})
@@ -6149,6 +6875,22 @@ def project_matrix(pid: str, track: str = "web"):
                 cells[m["id"]][s] = c
                 cells_by_m[m["id"]].append(c)
 
+    # v6.4 P0 快赢：看板每格 token 成本透出（开关门控；开启时按格聚合该格任务累计 token）
+    if _cost_visibility_enabled():
+        try:
+            _cc = get_db()
+            _rows = _cc.execute(
+                "SELECT task_id, COALESCE(SUM(input_tokens+output_tokens),0) FROM model_usage "
+                "WHERE task_id<>'' AND project_id=? GROUP BY task_id", (pid,)).fetchall()
+            _cc.close()
+            _tok_map = {r[0]: r[1] for r in _rows}
+            for _m in cells:
+                for _s in cells[_m]:
+                    _c = cells[_m][_s]
+                    _c["cost_tokens"] = sum(_tok_map.get(_t, 0) for _t in _c.get("task_ids", []))
+        except Exception:
+            pass
+
     # 聚合：列(模块)进度 / 行(阶段)进度 / 项目进度（blank 不计入分母）
     column_pct, row_pct = {}, {}
     for m in tmods:
@@ -6546,6 +7288,73 @@ def _narrowcast_notify(pid: str, text: str, targets: list):
         pass
 
 
+@app.post("/api/meta/code_stream")
+async def code_stream(req: Request):
+    """批次C D7：流式代码生成(SSE)。开关 code_stream_enabled 未开启时返回 403。
+    body: {pid, module_id, role, message} → 选代码专用模型(若启用) / 角色配置，按 SSE 流式输出。"""
+    if not _code_stream_enabled():
+        return JSONResponse(status_code=403, content={"ok": False, "error": "code_stream_enabled 未开启"})
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    pid = (data.get("pid") or data.get("project_id") or "").strip()
+    role = (data.get("role") or "backend").strip()
+    message = (data.get("message") or "").strip()
+    if not message:
+        return JSONResponse(status_code=422, content={"ok": False, "error": "缺少 message"})
+    # 选模型：代码专用模型(若启用且匹配) → 角色配置/降级链兜底
+    cm = _code_model_for_role(role)
+    cands = None
+    if cm:
+        _b, _k, _ = _key_for_provider(cm["provider"], role)
+        if _k:
+            cands = [(cm["provider"], _b or PROVIDER_PRESETS[cm["provider"]]["base"], _k, cm["model"])]
+    if not cands:
+        cands = _available_providers(role)
+    if not cands:
+        return JSONResponse(status_code=503, content={"ok": False, "error": "无可用代码模型"})
+    provider, base, key, model = cands[0]
+    # 系统提示：角色基础 + 代码质量约束 + 代码库语义(若开启)
+    _rolesystems, _ = _roles_from_db()
+    sys_prompt = _rolesystems.get(role, "")
+    sys_prompt += _build_code_quality_prompt(role)
+    if _code_semantic_enabled():
+        try:
+            conn = get_db(); proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone(); conn.close()
+            if proj:
+                root = _project_storage_root(dict(proj))
+                cb = _build_codebase_context(root, data.get("module_id") or "", role)
+                if cb:
+                    sys_prompt += "\n\n" + cb
+        except Exception:
+            pass
+    history = [{"role": "user", "content": message}]
+
+    def _gen():
+        try:
+            for chunk in _call_single_provider_stream(provider, base, key, model, history, sys_prompt):
+                yield f"data: {json.dumps({'delta': chunk}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)[:300]}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+@app.post("/api/meta/code_scan")
+async def code_scan(req: Request):
+    """批次C D10：代码静态扫描预览（宪法护栏）。返回 {blocked, warnings, reasons}；
+    拦截判定仅在 code_static_scan_enabled 开启时生效（与 _write_file_tool 同一道门）。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    path = (data.get("path") or "").strip()
+    content = data.get("content") or ""
+    return {"ok": True, **_code_static_scan(path, content)}
+
+
 @app.get("/api/narrowcast/targets")
 def narrowcast_targets(project_id: str = "", module_id: str = ""):
     """P1-C：返回某模块变更将窄播通知的成员集合（精准定位，不广播全群）。"""
@@ -6559,6 +7368,30 @@ def narrowcast_targets(project_id: str = "", module_id: str = ""):
 def _cell_stage_of_task(task: dict) -> str:
     """看板格的纵轴键 = 任务的 stage（生命周期阶段）；缺省回落 status。"""
     return (task.get("stage") or task.get("status") or "").strip()
+
+
+def _resolve_dispatch_module(conn, pid: str, act: dict, mods: list) -> str:
+    """v6.4 P0 修复：对话派单解析目标模块，确保任务落进真实 module×stage 格而非「未分环节」。
+    ① action 显式指定且属于本项目 → 用其；② 否则取首个模块（既有行为）；
+    ③ 项目尚无模块 → 自动建「默认模块」兜底（board grounding 不断裂）。返回模块 id。"""
+    _act_mod = (act.get("module_id") or "").strip()
+    if _act_mod and conn.execute("SELECT 1 FROM modules WHERE id=? AND project_id=?", (_act_mod, pid)).fetchone():
+        return _act_mod
+    if mods:
+        return mods[0]["id"]
+    try:
+        _dm = conn.execute("SELECT id FROM modules WHERE project_id=? AND name=? LIMIT 1", (pid, "默认模块")).fetchone()
+        if _dm:
+            return _dm["id"]
+        _mid = f"{pid}-m{int(time.time()*1000)}"
+        _now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT INTO modules (id,project_id,name,desc,depends_on,owner_role,status,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (_mid, pid, "默认模块", "对话自动建立的默认模块", "[]", "后端", "idea", 0, _now, _now))
+        conn.commit()
+        return _mid
+    except Exception:
+        return ""
 
 
 def _derive_task_stage_track(conn, module_id: str, project_id: str) -> tuple:
@@ -6646,6 +7479,20 @@ async def verify_task(task_id: str, req: Request):
     if not output:
         return {"ok": False, "error": "请提供待验收的产出内容（output）"}
     status, reason = await _judge_role_output(output, acceptance, project_standards, task["owner_role"])
+    # 批次A D3：确定性质量门（可选，默认关闭）——代码类任务先过编译/测试关再判定
+    if _code_verify_enabled() and status != "todo":
+        try:
+            _qg = await asyncio.to_thread(run_quality_gate_project, pid, task["module_id"] or "")
+            if not _qg["ok"]:
+                status, reason = "review", "确定性质量门未通过：" + _qg["summary"][:200]
+        except Exception:
+            pass
+    # E1+E3：经验泛化 + 质量门（代码任务经 code_attribution_enabled 门；非代码经 evolution_record_enabled 门）
+    try:
+        _record_experience(dict(task), status == "done", reason,
+                           has_standard=bool(acceptance), standard_result=status)
+    except Exception:
+        pass
     # P1-C：精准定位窄播——只把验收结果 @ 给受该模块影响的成员，而非全群广播
     targets = _narrowcast_targets(pid, task["module_id"] or "")
     mention = (" @" + " @".join(targets)) if targets else ""
@@ -6666,6 +7513,98 @@ async def verify_task(task_id: str, req: Request):
     _task_status(task_id, "review", pid, f"🔍 验收未通过：{task['name']}（{reason}）")
     _narrowcast_notify(pid, f"🔍 验收未通过：{task['name']}（{reason}）{mention}", targets)
     return {"ok": True, "pass": False, "status": "review", "reason": reason, "narrowcast": targets}
+
+
+# ── 批次A D3：确定性质量门 API ───────────────────────────────────────────────
+@app.post("/api/meta/quality_gate")
+async def quality_gate(req: Request):
+    """对项目/模块工作区跑确定性质量门（编译 + 可选 pytest）。
+    默认开关关闭时不改变既有行为；开启后可由前端/自动化在交付前调用，返回结构化结果。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    pid = (data.get("pid") or data.get("project_id") or "").strip()
+    mid = (data.get("module_id") or "").strip()
+    if not pid:
+        return {"ok": False, "error": "缺少 pid（项目 id）"}
+    result = await asyncio.to_thread(run_quality_gate_project, pid, mid)
+    return {"ok": True, "passed": result["ok"], "pid": pid, "module_id": mid, **result}
+
+
+@app.post("/api/meta/codebase")
+async def codebase_context(req: Request):
+    """批次B D5：返回项目锚点契约 + 工作区符号索引（供前端展示/调试，或代码任务自检）。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    pid = (data.get("pid") or data.get("project_id") or "").strip()
+    mid = (data.get("module_id") or "").strip()
+    if not pid:
+        return {"ok": False, "error": "缺少 pid（项目 id）"}
+    try:
+        conn = get_db()
+        proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        conn.close()
+        if not proj:
+            return {"ok": False, "error": "项目不存在"}
+        root = _project_storage_root(dict(proj))
+        anchor = _read_anchor_file(root)
+        workdir = os.path.join(root, "modules", mid) if mid else root
+        symbols = _symbol_index(workdir)
+        return {"ok": True, "pid": pid, "module_id": mid,
+                "anchor": anchor, "anchor_present": bool(anchor),
+                "symbols": symbols, "symbols_present": bool(symbols)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+
+
+@app.post("/api/meta/vcs")
+async def vcs_api(req: Request):
+    """批次B D6：代理级版本管理操作。
+    body.action: status | commit | merge
+      - status  {pid}                      → 当前分支/工作区状态
+      - commit  {pid, task_id, message}    → 原子提交当前工作区（该任务分支）
+      - merge   {pid, task_id}             → 评审后 fast-forward 合回 main
+    危险 git 子集（push --force/reset --hard 等）不受此接口提供，仍走人工确认闸门。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    action = (data.get("action") or "").strip().lower()
+    pid = (data.get("pid") or "").strip()
+    if not pid:
+        return {"ok": False, "error": "缺少 pid（项目 id）"}
+    try:
+        conn = get_db()
+        proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        conn.close()
+        if not proj:
+            return {"ok": False, "error": "项目不存在"}
+        root = _project_storage_root(dict(proj))
+        if action == "status":
+            if not _vcs_init(root):
+                return {"ok": True, "initialized": False, "branch": "", "dirty": False}
+            br = _vcs_safe_git(root, "symbolic-ref", "--short", "HEAD").get("out", "").strip()
+            dirty = bool(_vcs_safe_git(root, "status", "--porcelain").get("out", "").strip())
+            return {"ok": True, "initialized": True, "branch": br, "dirty": dirty}
+        if action == "commit":
+            tid = (data.get("task_id") or "").strip()
+            if not tid:
+                return {"ok": False, "error": "缺少 task_id"}
+            _vcs_task_branch(root, tid)
+            res = await asyncio.to_thread(_vcs_commit, root, tid, (data.get("message") or "分身提交")[:200])
+            return {"ok": True, **res}
+        if action == "merge":
+            tid = (data.get("task_id") or "").strip()
+            if not tid:
+                return {"ok": False, "error": "缺少 task_id"}
+            res = await asyncio.to_thread(_vcs_merge, root, tid)
+            return {"ok": True, **res}
+        return {"ok": False, "error": "未知 action（status/commit/merge）"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
 
 
 # ── 版本管理 API：按看板格 (module×stage) 版本化 ──────────────────────────────
@@ -7222,7 +8161,7 @@ def _record_experience_use(eid, feedback=None):
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT frequency,last_used,trust_score,explicit_feedback,neg_streak,persistent,eliminated "
+            "SELECT frequency,last_used,trust_score,explicit_feedback,neg_streak,persistent,eliminated,lesson,snippet,outcome "
             "FROM experiences WHERE id=?", (eid,)).fetchone()
         if not row:
             return
@@ -7241,10 +8180,15 @@ def _record_experience_use(eid, feedback=None):
             trust = round(max(0.0, trust - 0.1), 3)
             ef = round(max(-1.0, ef - 0.2), 3)
             neg += 1
-        # 累积→持久 / 连续负反馈→淘汰（学会遗忘该忘记的事，立即生效）
-        if (ef >= 3.0) or (freq >= 10):
-            persistent = 1
-        eliminated = 1 if neg >= 2 else (d.get("eliminated") or 0)
+        # E4：held-out 晋升（受 evolution_heldout_enabled 控制；关→保持 D9 既有 freq>=10 宽松）。
+        # E8：晋升前护栏扫描——含违禁模式不晋升（unsafe 已由写入时标记，双重保险）。
+        _lesson_text = (d.get("lesson") or "") + " " + (d.get("snippet") or "") + " " + (d.get("outcome") or "")
+        _blocked = _evolution_guardrail_enabled() and _experience_contains_blocked(_lesson_text)
+        if (ef >= 3.0) or (freq >= _heldout_promote_uses()):
+            if not _blocked:
+                persistent = 1
+        # E4：连续负反馈→淘汰（阈值随 held-out 开关一致）
+        eliminated = 1 if neg >= _heldout_demote_neg() else (d.get("eliminated") or 0)
         conn.execute(
             "UPDATE experiences SET frequency=?,last_used=?,trust_score=?,explicit_feedback=?,neg_streak=?,persistent=?,eliminated=? WHERE id=?",
             (freq, last, trust, ef, neg, persistent, eliminated, eid))
@@ -7273,12 +8217,12 @@ def _maintain_attribution():
             age_days = (now - dt).total_seconds() / 86400.0
             neg = d["neg_streak"] or 0
             ef = d["explicit_feedback"] or 0.0
-            # 淘汰：连续 2 次负反馈 或 30 天未引（学会遗忘该忘记的事）
-            if (neg >= 2) or (age_days > 30):
+            # E4：淘汰（阈值随 held-out 开关一致）：连续负反馈达阈值 或 30 天未引（学会遗忘该忘记的事）
+            if (neg >= _heldout_demote_neg()) or (age_days > 30):
                 conn.execute("UPDATE experiences SET eliminated=1 WHERE id=?", (d["id"],))
                 continue
-            # 累积→持久：显式正反馈累计≥3 或 被复用≥10 次（升持久）
-            if (ef >= 3.0) or ((d["frequency"] or 0) >= 10):
+            # E4：累积→持久（阈值随 held-out 开关一致）：显式正反馈累计≥3 或 被复用达阈值次（升持久）
+            if (ef >= 3.0) or ((d["frequency"] or 0) >= _heldout_promote_uses()):
                 conn.execute("UPDATE experiences SET persistent=1 WHERE id=?", (d["id"],))
             _refresh_experience_weights(conn, d["id"])
         # 聚合到 skill_attribution（按 category 维度）
@@ -7303,7 +8247,7 @@ def _maintain_attribution():
         conn.close()
 
 
-def _recall_experiences(scenario: str, limit: int = 5):
+def _recall_experiences(scenario: str, limit: int = 5, project_id: str = None, module_id: str = None, stage: str = None):
     """特征驱动召回：按综合 weight 降序（非淘汰项）；场景关键词重叠额外加权 relevance。
     超过 1 小时未全量维护则顺带跑一次 _maintain_attribution，保证 weight 不过期。"""
     global _LAST_ATTR_MAINTAIN
@@ -7314,8 +8258,12 @@ def _recall_experiences(scenario: str, limit: int = 5):
             pass
     conn = get_db()
     try:
+        _rec_where = "WHERE eliminated=0"
+        if _evolution_guardrail_enabled():
+            # E8：护栏开启→含违禁模式的经验（unsafe=1）不主动召回，仅留作草稿供人工审
+            _rec_where += " AND unsafe=0"
         rows = conn.execute(
-            "SELECT * FROM experiences WHERE eliminated=0 ORDER BY weight DESC LIMIT ?",
+            f"SELECT * FROM experiences {_rec_where} ORDER BY weight DESC LIMIT ?",
             (limit * 3,)).fetchall()
         scored = []
         kw = set(re.findall(r"[\w\u4e00-\u9fff]{2,}", scenario or ""))
@@ -7326,6 +8274,9 @@ def _recall_experiences(scenario: str, limit: int = 5):
                 sce = set(re.findall(r"[\w\u4e00-\u9fff]{2,}", (d.get("scenario", "") + d.get("goal", ""))))
                 ov = len(kw & sce) / max(1, len(kw))
                 rel = max(rel, min(1.0, rel + 0.4 * ov))
+            # E2：同项目经验加权（evolution_recall_enabled 开启时），让 (模块,阶段) 格召回更贴合
+            if _evolution_recall_enabled() and project_id and d.get("project_id") == project_id:
+                rel = min(1.0, rel + 0.15)
             score = (d.get("weight") or 0.5) * 0.7 + rel * 0.3
             d["_score"] = round(score, 3)
             d["_relevance_boost"] = round(rel, 3)
@@ -7341,6 +8292,151 @@ def experience_recall(q: str = "", limit: int = 5):
     """特征驱动召回经验（疗效归因闭环：召回→标记使用→权重演化）。"""
     items = _recall_experiences(q, limit)
     return {"ok": True, "query": q, "count": len(items), "items": items}
+
+
+@app.get("/api/meta/evolution/cell")
+def evolution_cell(module_id: str = "", stage: str = "", project_id: str = ""):
+    """E2：看板即技能索引（只读展示）——返回该 (模块,阶段,项目) 格已沉淀经验数 + top3。
+    开关关闭返回 403（不暴露内部经验热力）。"""
+    if not _evolution_recall_enabled():
+        return JSONResponse(status_code=403, content={"ok": False, "error": "evolution_recall 未开启"})
+    try:
+        items = _recall_experiences(f"{module_id} {stage}", limit=3,
+                                    project_id=project_id or None)
+        conn = get_db()
+        try:
+            if project_id:
+                c = conn.execute("SELECT COUNT(*) FROM experiences WHERE project_id=? AND eliminated=0",
+                                 (project_id,)).fetchone()
+            else:
+                c = conn.execute("SELECT COUNT(*) FROM experiences WHERE eliminated=0").fetchone()
+            cnt = c[0] if c else 0
+        finally:
+            conn.close()
+        return {"ok": True, "module_id": module_id, "stage": stage, "project_id": project_id,
+                "count": cnt, "top3": items}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/api/meta/evolution/promote")
+def evolution_promote(eid: int = 0, act: str = ""):
+    """E4：held-out 晋升观察/手动触发（受 evolution_heldout_enabled 门控；关→403）。
+    act=run 模拟一次成功应用（等效 experience_signal kind=positive），推进 freq/ef 直到晋升。"""
+    if not _evolution_heldout_enabled():
+        return JSONResponse(status_code=403, content={"ok": False, "error": "evolution_heldout 未开启"})
+    try:
+        if act == "run" and eid:
+            _record_experience_use(eid, "positive")
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT id,category,scenario,frequency,neg_streak,persistent,eliminated,weight,trust_score,unsafe "
+                "FROM experiences WHERE id=?", (eid,)).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return {"ok": False, "error": "经验不存在"}
+        return {"ok": True, "eid": eid, "state": dict(row),
+                "promote_uses": _heldout_promote_uses(), "demote_neg": _heldout_demote_neg(),
+                "note": "freq 达 promote_uses 且 neg_streak<demote_neg 且非 unsafe → persistent=1"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/api/meta/evolution/lineage")
+def evolution_lineage(eid: int = 0, scenario: str = ""):
+    """E5：lineage 可追溯（受 evolution_lineage_enabled 门控；关→403）。
+    返回经验的来源任务/验收结果/摘要/版本指纹，支撑回滚与可信度审计。"""
+    if not _evolution_lineage_enabled():
+        return JSONResponse(status_code=403, content={"ok": False, "error": "evolution_lineage 未开启"})
+    try:
+        conn = get_db()
+        try:
+            if eid:
+                row = conn.execute(
+                    "SELECT id,category,scenario,source_task_id,acceptance_result,snippet,version_fingerprint,ts,persistent,eliminated,unsafe "
+                    "FROM experiences WHERE id=?", (eid,)).fetchone()
+            elif scenario:
+                row = conn.execute(
+                    "SELECT id,category,scenario,source_task_id,acceptance_result,snippet,version_fingerprint,ts,persistent,eliminated,unsafe "
+                    "FROM experiences WHERE scenario LIKE ? ORDER BY ts DESC LIMIT 1", ("%" + scenario + "%",)).fetchone()
+            else:
+                return {"ok": False, "error": "需 eid 或 scenario"}
+        finally:
+            conn.close()
+        if not row:
+            return {"ok": False, "error": "未找到经验"}
+        return {"ok": True, "lineage": dict(row)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/api/meta/memory/archive")
+def memory_archive(project_id: str = "", session_id: str = ""):
+    """E6：无损会话归档视图（受 memory_archive_enabled 门控；关→403）。
+    返回节点树：全历史保留 + 摘要节点 + 统计（总节点/已归档/摘要/估算 token）。"""
+    if not _memory_archive_enabled():
+        return JSONResponse(status_code=403, content={"ok": False, "error": "memory_archive 未开启"})
+    pid = project_id or META_PID
+    try:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT id,parent_id,role,kind,content,token_est,is_summary,summary_of,archived,created_at "
+                "FROM session_nodes WHERE project_id=? AND session_id=? ORDER BY id ASC",
+                (pid, session_id)).fetchall()
+        finally:
+            conn.close()
+        nodes = [dict(r) for r in rows]
+        for n in nodes:
+            if n["summary_of"]:
+                n["summary_refs"] = [int(x) for x in n["summary_of"].split(",") if x]
+            n["content_preview"] = (n["content"] or "")[:120]
+        return {"ok": True, "project_id": pid, "session_id": session_id,
+                "total": len(nodes),
+                "archived": sum(1 for n in nodes if n["archived"]),
+                "summaries": sum(1 for n in nodes if n["is_summary"]),
+                "token_est": sum(n["token_est"] for n in nodes),
+                "nodes": nodes,
+                "note": "原节点 archived=1 仍保留全历史；summary_of 指向被摘要的原节点 id（无损）"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/api/meta/memory/panel")
+def memory_panel(project_id: str = ""):
+    """E7：元神记忆面板聚合（受 memory_panel_enabled 门控；关→403）。
+    透出：经验库总量 / 分类分布 / 最近沉淀(含来源验收标注) / persistent vs 草稿 vs 护栏拦截。"""
+    if not _memory_panel_enabled():
+        return JSONResponse(status_code=403, content={"ok": False, "error": "memory_panel 未开启"})
+    try:
+        conn = get_db()
+        try:
+            base = "FROM experiences WHERE 1=1"
+            params = []
+            if project_id:
+                base += " AND project_id=?"
+                params.append(project_id)
+            total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
+            by_cat = {}
+            for r in conn.execute(f"SELECT category,COUNT(*) c {base} GROUP BY category", params).fetchall():
+                by_cat[r["category"]] = r["c"]
+            persistent = conn.execute(f"SELECT COUNT(*) {base} AND persistent=1", params).fetchone()[0]
+            drafts = conn.execute(f"SELECT COUNT(*) {base} AND persistent=0 AND eliminated=0", params).fetchone()[0]
+            unsafe = conn.execute(f"SELECT COUNT(*) {base} AND unsafe=1", params).fetchone()[0]
+            eliminated = conn.execute(f"SELECT COUNT(*) {base} AND eliminated=1", params).fetchone()[0]
+            recent = [dict(r) for r in conn.execute(
+                f"SELECT id,category,scenario,acceptance_result,version_fingerprint,trust_score,persistent,unsafe,ts "
+                f"{base} ORDER BY ts DESC LIMIT 12", params).fetchall()]
+        finally:
+            conn.close()
+        return {"ok": True, "project_id": project_id,
+                "total": total, "by_category": by_cat,
+                "persistent": persistent, "drafts": drafts, "unsafe": unsafe, "eliminated": eliminated,
+                "recent": recent}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
 
 
 @app.post("/api/experiences/{eid}/signal")
@@ -7908,6 +9004,20 @@ async def meta_settings_set(req: Request):
         if not 1 <= tv <= 300:
             return {"ok": False, "error": "approval_timeout 需在 1~300 秒之间（≤3 秒按直接拒绝处理，不弹窗）"}
         set_setting("approval_timeout", str(tv))
+    # 批次B/C：代码能力强化开关（meta_settings 持久化，默认全关，用户可经设置页开启）。
+    # 仅允许已知 code_* 键，避免任意键写入；值归一化为 "0"/"1"。
+    _CODE_SETTING_KEYS = {
+        "code_semantic_enabled", "code_vcs_enabled", "code_xverify_enabled",
+        "code_stream_enabled", "code_model_enabled", "code_quality_prompt",
+        "code_attribution_enabled", "code_static_scan_enabled",
+        "evolution_record_enabled", "evolution_recall_enabled", "evolution_quality_gate_enabled",
+        "evolution_heldout_enabled", "evolution_lineage_enabled", "evolution_guardrail_enabled",
+        "cost_visibility_enabled",
+        "memory_archive_enabled", "memory_panel_enabled",
+    }
+    for _k, _v in data.items():
+        if _k in _CODE_SETTING_KEYS:
+            set_setting(_k, "1" if _v in (True, "1", 1) else "0")
     return {"ok": True, "settings": meta_settings_get()}
 
 
@@ -9489,6 +10599,8 @@ async def meta_chat(req: Request):
     )
     conn.commit()
     conn.close()
+    # E6：无损归档（门控：memory_archive_enabled 关→no-op）
+    _record_session_node(META_PID, "user", user_text, "message")
     # 构造上下文（openai 格式）
     conn = get_db()
     rows = conn.execute(
@@ -9511,6 +10623,8 @@ async def meta_chat(req: Request):
     )
     conn.commit()
     conn.close()
+    # E6：无损归档（门控：memory_archive_enabled 关→no-op）
+    _record_session_node(META_PID, "assistant", reply, "message")
     # 自动后处理：触发记忆提炼 + 上下文压缩 + 技能提炼 + 复盘
     asyncio.create_task(_auto_after_chat())
     asyncio.create_task(_auto_distill_user(user_text))
@@ -9551,6 +10665,12 @@ async def _auto_after_chat():
                 conn.close()
                 _auto_grind_project(pid, keep=150)
                 conn = get_db()
+        # E6：无损归档压缩（独立于「磨」删除，保留全历史；门控：memory_archive_enabled 关→no-op）
+        if _memory_archive_enabled():
+            try:
+                _maybe_compact_session(META_PID, "")
+            except Exception:
+                pass
         conn.commit()
         conn.close()
     except Exception as e:
