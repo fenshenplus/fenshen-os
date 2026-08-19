@@ -2186,6 +2186,26 @@ async def set_project_autonomy(pid: str, req: Request):
     return {"ok": True, "paused": bool(paused)}
 
 
+@app.post("/api/projects/{pid}/tier")
+async def set_project_tier(pid: str, req: Request):
+    """v6.5 项目级执行档位：auto/0/1/2 写入 projects.product_meta.tier（覆盖全局 chat_tier_default）。"""
+    data = await req.json()
+    tier = str(data.get("tier", "auto"))
+    if tier not in ("0", "1", "2", "auto"):
+        return {"ok": False, "error": "tier 必须为 auto/0/1/2"}
+    conn = get_db()
+    row = conn.execute("SELECT product_meta FROM projects WHERE id=?", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "项目不存在"}
+    pm = json.loads(row["product_meta"] or "{}") if row["product_meta"] else {}
+    pm["tier"] = tier
+    conn.execute("UPDATE projects SET product_meta=? WHERE id=?", (json.dumps(pm, ensure_ascii=False), pid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "tier": tier, "note": "0=即时直答 / 1=单角色速办 / 2=团队协作 / auto=自动判定"}
+
+
 # ── v5.1 应用市场：一键上架 / 下架 / 列表 / 访问统计 ──────────────
 # 上架目标枚举（本期实现 market；wechat/appstore/android 预留第三方对接）
 PUBLISH_TARGETS = ["market", "wechat-miniprogram", "appstore", "android"]
@@ -5951,9 +5971,83 @@ def _scoped_project_context(mods: list, tasks: list, focus: set) -> tuple:
     return mod_desc, task_desc
 
 
+# ── v6.5 token 档位体系（T0 即时直答 / T1 单角色速办 / T2 团队协作 / T3 长程自治）──────
+# 启发式分档规则：纯问答/咨询/汇报（有疑问词无执行动词）→ T0；有明确执行动词且指令简短 → T1；其余交元神调度判定
+TIER0_HINT_RE = re.compile(r"(？|\?|吗|呢|怎么样|如何|是什么|介绍一下|说说|汇报|总结|分析|解释|看看|查看|进度|状态|了解)")
+TIER1_ACT_RE = re.compile(r"(写|做|改|创建|生成|实现|添加|删除|修复|调整|新建|输出|打印|画|设计|翻译|计算|启动|停止|保存|提交|搭建)")
+
+
+def _project_tier(pid: str) -> str:
+    """项目级档位覆盖：projects.product_meta.tier（auto/0/1/2）；无则回退全局 chat_tier_default。"""
+    try:
+        conn = get_db()
+        r = conn.execute("SELECT product_meta FROM projects WHERE id=?", (pid,)).fetchone()
+        conn.close()
+        if r and r["product_meta"]:
+            pm = json.loads(r["product_meta"] or "{}")
+            t = pm.get("tier")
+            if t in ("0", "1", "2", "auto"):
+                return t
+    except Exception:
+        pass
+    return get_setting("chat_tier_default", "auto")
+
+
+def _tier_heuristic(pid: str, text: str):
+    """启发式分档：返回 0/1/2 或 None（拿不准→交给元神调度输出 tier 字段）。
+    优先级：项目级 product_meta.tier > 全局 chat_tier_default(auto) > 启发式规则。"""
+    if get_setting("chat_tier_enabled", "1") != "1":
+        return None
+    t = _project_tier(pid)
+    if t in ("0", "1", "2"):
+        return int(t)
+    s = text.strip()
+    # T0：纯问答/咨询/汇报（有疑问词，无执行动词）
+    if TIER0_HINT_RE.search(s) and not TIER1_ACT_RE.search(s):
+        return 0
+    # T1：有明确执行动词且指令简短（≤60 字）→ 单角色速办
+    if TIER1_ACT_RE.search(s) and len(s) <= 60:
+        return 1
+    return None
+
+
+def _judge_light(reply: str, done_criteria: str = "", standards: str = "") -> tuple:
+    """T1 轻量验收（不调 LLM，省 token）：无标准→长度启发式；有标准→长度+失败标记兜底。
+    返回 (status, reason)。done/review/todo 与 _judge_role_output 一致。"""
+    text = (reply or "").strip()
+    if not text:
+        return "todo", "角色无产出（空回复）"
+    if any(m in text[:120] for m in FAIL_MARKERS):
+        return "todo", "产出含失败标记，判定未产出"
+    if not (done_criteria or "").strip() and not (standards or "").strip():
+        if len(text) < 40:
+            return "review", "无完成标准且产出较短，转人工复核"
+        return "done", "无完成标准，产出长度正常"
+    if len(text) < 80:
+        return "review", "T1 轻量验收：产出较短，转人工复核"
+    return "done", "T1 轻量验收通过（产出长度正常）"
+
+
+def _token_phase_stats() -> dict:
+    """驾驶舱 token 三段显性化：按 调度/执行/其他 聚合 model_usage token 与调用数。"""
+    try:
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT CASE WHEN phase='meta-dispatch' THEN '调度' "
+            "WHEN phase LIKE 'role-exec:%' THEN '执行' ELSE '其他' END p,"
+            " COUNT(*) n, COALESCE(SUM(input_tokens),0)+COALESCE(SUM(output_tokens),0) t "
+            "FROM model_usage WHERE input_tokens>0 OR output_tokens>0 GROUP BY p"
+        ).fetchall()
+        conn.close()
+        return {r["p"]: {"calls": r["n"], "tokens": r["t"]} for r in rows}
+    except Exception:
+        return {}
+
+
 async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = None) -> dict:
     """v4.2 自主闭环：项目群聊执行链（API 与团队自主推进循环共用）。
-    流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。"""
+    流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。
+    v6.5：token 档位体系——T0 即时直答（启发式判定，元神单次回答）/ T1 单角色速办 / T2 完整团队链路。"""
     # v5.9：Trajectory run_id（本次派单/对话的唯一回放标识）
     run_id = f"{pid}-{int(time.time()*1000)}"
     _TRAJ_RUN.set((run_id, pid))
@@ -6022,7 +6116,8 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         "需要查真实状态/执行验证，交给被派单的角色在其执行阶段用工具完成。"
         "（v4.2 修复：元神若在调度阶段调工具，会陷入工具循环导致迟迟不输出计划。）\n\n"
         "输出格式（必须为合法 JSON）：\n"
-        '{"reply": "给用户的简短回复（中文，说明你安排了什么）", '
+        '{"tier": 0或1或2（0=即时问答元神直答不派单；1=单一明确小任务只派单一个角色快速完成；2=复杂任务完整团队协作，含质量门与验收）, '
+        '"reply": "给用户的简短回复（中文，说明你安排了什么）", '
         f'"actions": [{{"role": "{role_enum}", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令", '
         '"done_criteria": "该任务完成的、可验证的判定标准（例如：接口返回 200 且通过测试）", '
         '"plan": "可选：你对该任务的执行计划（先做什么、改哪些文件、如何验证），供角色参考"}}]\n'
@@ -6043,6 +6138,35 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         role = "assistant" if r["kind"] in ("agent", "meta") else "user"
         hist.append({"role": role, "content": r["text"]})
     hist.append({"role": "user", "content": user_text})
+
+    # ── v6.5 T0 即时直答：启发式判定为问答/轻咨询 → 元神单次直答（不建卡/不派单/不验收）──
+    _tier = _tier_heuristic(pid, user_text)
+    if _tier == 0 and get_setting("tier0_quick_answer", "1") == "1":
+        quick_sys = (
+            f"你是「元神」——{OWNER_NAME}的数字分身与团队总管。当前项目「{proj['name']}」，目标：{proj['goal'] or '（未填写）'}。\n"
+            "这是即时问答/轻咨询。请直接、简洁、准确地回答；不要创建任务、不要派单、不要调用工具、不要提验收。"
+        )
+        quick_hist = [{"role": "system", "content": quick_sys}, {"role": "user", "content": user_text}]
+        quick_reply = await _chat_with_tools("__meta__", quick_hist, quick_sys, tools=[],
+                                             phase="meta-dispatch", scope_modules=_blast_scope, project_id=pid)
+        _trajectory_event(run_id, pid, "plan", "元神", f"T0 即时直答：{quick_reply[:200]}", {"tier": 0})
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, "分身 · 元神", "meta", quick_reply, "progress", datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+        try:
+            conn = get_db()
+            conn.execute("UPDATE trajectory_runs SET status='done' WHERE run_id=?", (run_id,))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return {"reply": quick_reply, "actions": [], "ok": True, "rounds": 0, "all_done": True, "tier": 0,
+                "blast_radius": sorted(_blast) if _blast else [], "blast_scope": _blast_scope, "run_id": run_id}
+
     dispatch_reply = await _chat_with_tools("__meta__", hist, dispatch_sys, tools=[],
                                           phase="meta-dispatch", scope_modules=_blast_scope,
                                           project_id=pid)  # v4.2: 调度阶段禁用工具
@@ -6050,16 +6174,31 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     # 解析 JSON（容错：LLM 可能返回非 JSON）
     meta_reply = dispatch_reply
     actions = []
+    tier = _tier if _tier in (0, 1, 2) else None  # 启发式已定则直接用；否则看元神输出 tier 字段
+    _t1_mode = False  # v6.5：T1 单角色速办标记（try 内可能改写）
     try:
         if "{" in dispatch_reply and "}" in dispatch_reply:
             j = json.loads(dispatch_reply[dispatch_reply.find("{"):dispatch_reply.rfind("}") + 1])
             meta_reply = j.get("reply", dispatch_reply)
             actions = j.get("actions", [])
+            # v6.5：元神输出 tier 字段（启发式未定时使用）；非法则按 actions 数量兜底
+            if tier is None:
+                _jt = j.get("tier")
+                if _jt in (0, 1, 2):
+                    tier = int(_jt)
+                else:
+                    tier = 2 if actions else 0
             # 每个 action 补默认空完成标准（批次 B / P1-1）
             for _a in actions:
                 _a.setdefault("done_criteria", "")
+            # v6.5 T1 单角色速办：只取第一个 action，跳过 D8 交叉验证（tier1_skip_xverify）
+            _t1_mode = (tier == 1) and get_setting("tier1_solo_exec", "1") == "1"
+            if _t1_mode and actions:
+                actions = actions[:1]
+                _trajectory_event(run_id, pid, "plan", "元神",
+                                  "T1 单角色速办：仅派单最匹配角色，跳过交叉验证与 LLM 验收", {"tier": 1})
             # 批次B D8：写/测交叉验证——为代码类动作追加 tester 配对（同一 spec 写测试并跑）
-            if _code_xverify_enabled():
+            if _code_xverify_enabled() and not _t1_mode:
                 _pairs = []
                 for _a in actions:
                     if _is_code_task(_a):
@@ -6097,9 +6236,28 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     # ── Step 2: 角色执行（批次 B / P2-3：autonomy 有界循环）──
     # 执行 → 对照完成标准判定 → 未达标由元神重新规划补充动作 → 最多 MAX_ROUNDS 轮
     MAX_ROUNDS = max(1, min(5, int(get_setting("autonomy_max_rounds", "3"))))
+    if _t1_mode:
+        MAX_ROUNDS = 1  # v6.5：T1 单角色速办不做补做轮（省 token）
     role_results = []
     round_no = 1
     pending_actions = actions[:max_actions]
+
+    # ── v6.5 P2 共享上下文池：项目级共享段只构建一次（固定前缀，同项目多角色/多轮命中模型前缀缓存）──
+    shared_ctx = ""
+    if get_setting("shared_context_pool", "1") == "1" and not _t1_mode:
+        shared_ctx = (
+            f"项目：{proj['name']}，目标：{proj['goal'] or ''}。"
+            f"项目完成标准：{proj['standards'] or '（未填写）'}。\n"
+            "【执行纪律】若任务涉及写代码或生成文件，请先简短说明执行计划"
+            "（改动哪些文件、为什么、如何验证），再动手产出；禁止无说明地直接覆写既有文件。"
+        )
+        if proj.get("design_standard"):
+            try:
+                _ds0 = _load_design_spec(proj["design_standard"])
+                if _ds0:
+                    shared_ctx += "\n\n" + _design_spec_prompt(_ds0)
+            except Exception:
+                pass
 
     async def _run_one(act, reuse_task_id: str = None):
         """执行单个 action：建卡 → doing → 角色执行 → 落库 → 对照标准判定。并发安全（各自独立连接）。
@@ -6181,14 +6339,19 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
                 vcs_branch = await asyncio.to_thread(_vcs_task_branch, root, task_id)
             except Exception:
                 vcs_branch = ""
-        role_sys_ctx = (role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
-                        f"\n【工作区】所有写文件必须写入此目录（越界会被拒绝）：{workdir}"
-                        f"\n多步文件操作建议用 run_batch 一次完成（省 token）。")
+        # v6.5 P2 共享上下文池：shared_ctx（项目信息+纪律+设计规范）作为固定前缀，角色段接后面
+        if shared_ctx:
+            role_sys_ctx = shared_ctx + "\n\n" + role_systems[role]
+        else:
+            role_sys_ctx = role_systems[role] + f"\n项目：{proj['name']}，目标：{proj['goal'] or ''}"
+        role_sys_ctx += (f"\n【工作区】所有写文件必须写入此目录（越界会被拒绝）：{workdir}"
+                         f"\n多步文件操作建议用 run_batch 一次完成（省 token）。")
         if done_criteria:
             role_sys_ctx += f"\n任务完成标准（必须对照交付，不达标会被打回重做）：{done_criteria}"
-        # 批次A D2：角色级执行纪律（软门禁）——写代码/文件前先给出执行计划
-        role_sys_ctx += ("\n【执行纪律】若任务涉及写代码或生成文件，请先简短说明执行计划"
-                         "（改动哪些文件、为什么、如何验证），再动手产出；禁止无说明地直接覆写既有文件。")
+        # 批次A D2：角色级执行纪律（软门禁）——写代码/文件前先给出执行计划（共享池开启时已含于 shared_ctx）
+        if not shared_ctx:
+            role_sys_ctx += ("\n【执行纪律】若任务涉及写代码或生成文件，请先简短说明执行计划"
+                             "（改动哪些文件、为什么、如何验证），再动手产出；禁止无说明地直接覆写既有文件。")
         # 批次B D5：注入代码库语义上下文（锚点契约 + 符号索引），降低跨文件改动回归风险
         if _code_semantic_enabled():
             _cb_ctx = _build_codebase_context(root, mod_id, role)
@@ -6198,12 +6361,13 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         _qp = _build_code_quality_prompt(role)
         if _qp:
             role_sys_ctx += _qp
-        # v5.8 P2：项目选定 UI 设计规范 → 注入角色执行上下文（前端/产品尤其要遵守）
-        ds_id = proj.get("design_standard") or ""
-        if ds_id:
-            _ds = _load_design_spec(ds_id)
-            if _ds:
-                role_sys_ctx += "\n\n" + _design_spec_prompt(_ds)
+        # v5.8 P2：项目选定 UI 设计规范 → 注入角色执行上下文（前端/产品尤其要遵守，共享池开启时已含于 shared_ctx）
+        if not shared_ctx:
+            ds_id = proj.get("design_standard") or ""
+            if ds_id:
+                _ds = _load_design_spec(ds_id)
+                if _ds:
+                    role_sys_ctx += "\n\n" + _design_spec_prompt(_ds)
         # P1-A：注入该角色所负责模块的聚焦切片（爆炸半径），让角色只见自己的模块上下文（而非全项目）
         _role_scope = 0
         try:
@@ -6309,8 +6473,12 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             final = "review"
             judge_reason = "确定性质量门未通过：" + verify["summary"][:200]
         else:
-            # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
-            final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
+            # v6.5 T1 单角色速办：跳过 LLM 验收（tier1_skip_llm_judge）→ 轻量启发式判定
+            if _t1_mode and get_setting("tier1_skip_llm_judge", "1") == "1":
+                final, judge_reason = _judge_light(role_reply, done_criteria, proj["standards"] or "")
+            else:
+                # 批次 B / P1-3：对照完成标准（任务级 → 项目级）LLM 判定
+                final, judge_reason = await _judge_role_output(role_reply, done_criteria, proj["standards"] or "", role)
         note = {
             "done": f"✅ 「{task_name}」已完成（{role_names.get(role, role)}）",
             "review": f"🔍 「{task_name}」未达标转复核（{judge_reason}）",
@@ -8981,6 +9149,14 @@ def meta_settings_get():
         "constitutional_guard_enabled": get_setting("constitutional_guard_enabled", "1") == "1",  # v6.5 宪法级利益护栏（默认开：高于 approval_mode 配置，不可降级）
         "proactivity_enabled": get_setting("proactivity_enabled", "1") == "1",  # v6.5 主动性引擎+团队设计保障（默认开：持续态势扫描/自主补队/停滞预警）
         "final_acceptance_enabled": get_setting("final_acceptance_enabled", "1") == "1",  # v6.5 最终项目验收门禁（默认开：全卡done须经元神终验才置done）
+        # v6.5 token 档位体系（默认全开，可随时关回旧行为）
+        "chat_tier_enabled": get_setting("chat_tier_enabled", "1") == "1",
+        "chat_tier_default": get_setting("chat_tier_default", "auto"),
+        "tier0_quick_answer": get_setting("tier0_quick_answer", "1") == "1",
+        "tier1_solo_exec": get_setting("tier1_solo_exec", "1") == "1",
+        "tier1_skip_llm_judge": get_setting("tier1_skip_llm_judge", "1") == "1",
+        "tier1_skip_xverify": get_setting("tier1_skip_xverify", "1") == "1",
+        "shared_context_pool": get_setting("shared_context_pool", "1") == "1",
         # v5.2 监控自动兜底：服务端口监控配置 [{name,port,restart_cmd}]
         "services": json.loads(get_setting("services", "[]")),
     }
@@ -9069,6 +9245,10 @@ async def meta_settings_set(req: Request):
         "proactivity_enabled",
         "final_acceptance_enabled",
         "memory_archive_enabled", "memory_panel_enabled",
+        # v6.5 token 档位体系：T0 即时直答 / T1 单角色速办 / T2 团队协作 / T3 长程自治
+        "chat_tier_enabled", "chat_tier_default", "tier0_quick_answer",
+        "tier1_solo_exec", "tier1_skip_llm_judge", "tier1_skip_xverify",
+        "shared_context_pool",
     }
     for _k, _v in data.items():
         if _k in _CODE_SETTING_KEYS:
@@ -10084,6 +10264,15 @@ def _autopilot_state_dict() -> dict:
         "rest_window_active": AUTONOMY_STATE.get("rest_window_active", False),
         "rest_schedule": AUTONOMY_STATE.get("rest_schedule", {}),
         "autonomy_enabled": get_setting("autonomy_enabled", "1") == "1",
+        # v6.5 token 档位体系配置 + token 三段显性化（调度/执行/其他）
+        "chat_tier_enabled": get_setting("chat_tier_enabled", "1") == "1",
+        "chat_tier_default": get_setting("chat_tier_default", "auto"),
+        "tier0_quick_answer": get_setting("tier0_quick_answer", "1") == "1",
+        "tier1_solo_exec": get_setting("tier1_solo_exec", "1") == "1",
+        "tier1_skip_llm_judge": get_setting("tier1_skip_llm_judge", "1") == "1",
+        "tier1_skip_xverify": get_setting("tier1_skip_xverify", "1") == "1",
+        "shared_context_pool": get_setting("shared_context_pool", "1") == "1",
+        "token_by_phase": _token_phase_stats(),
         # M3 可观测：当前在跑项目的「关键路径模块」有序列表（元神正在优先打通的链）
         "focus_paths": {
             pid: [m for m, _ in sorted(_project_critical_map(pid).items(), key=lambda kv: kv[1])]

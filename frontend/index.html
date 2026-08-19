@@ -598,6 +598,13 @@
                 <!-- v4.2 项目级自主推进开关 -->
                 <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
                   <button class="btn sm" id="boardAutoBtn" onclick="toggleBoardAutonomy()" style="font-size:10px;padding:2px 10px"></button>
+                  <!-- v6.5 token 档位：auto/0/1/2（自动/即时直答/单角色速办/团队协作） -->
+                  <select id="boardTierSel" onchange="setProjectTier(this.value)" style="font-size:10px;padding:2px 6px;border:.5px solid var(--gray-200);border-radius:6px;background:#fff;color:var(--gray-600)" title="执行档位：auto=自动判定 / 0=即时直答（最省token） / 1=单角色速办 / 2=团队协作（质量优先）">
+                    <option value="auto">⚙ 档位·自动</option>
+                    <option value="0">⚡ 档位·即时直答</option>
+                    <option value="1">🚀 档位·单角色速办</option>
+                    <option value="2">👥 档位·团队协作</option>
+                  </select>
                   <!-- v5.0 移动端深化：一键继续推进 -->
                   <button class="btn sm" onclick="continueBoard()" style="font-size:10px;padding:2px 10px;background:#6d5bd0;color:#fff;border:none">🚀 继续推进</button>
                   <!-- v5.2 部署一键化 -->
@@ -2937,6 +2944,13 @@ async function loadBoard(){
       ab.style.background=paused?'#34c98e':'var(--gray-100)';
       ab.style.color=paused?'#fff':'var(--gray-500)';
       ab.style.border='none';
+      // v6.5 token 档位下拉：同步项目 product_meta.tier
+      const tSel=document.getElementById('boardTierSel');
+      if(tSel){
+        let pm={}; try{ pm=JSON.parse(j.product_meta||'{}'); }catch(e){}
+        const t=pm.tier||'auto';
+        if(['auto','0','1','2'].includes(t)) tSel.value=t;
+      }
     } else wrap.style.display='none';
   }catch(e){ console.error(e); curMods=[]; curTasks=[]; curTopics=[]; }
   if((window._boardView||'matrix')==='status'){ renderBoard(); }
@@ -2949,6 +2963,16 @@ async function toggleBoardAutonomy(){
     const j=await apiJson('/api/autopilot/set',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify(pausing?{paused:[curRoom]}:{resume:[curRoom]})});
     if(j.ok){ window._autoPaused=pausing; toast(pausing?'⏸ 已暂停该项目（元神不再自动派单）':'▶ 已恢复该项目'); await loadBoard(); }
+    else toast('❌ '+(j.error||'失败'));
+  }catch(e){ toast('请求失败：'+e); }
+}
+/* v6.5 项目级 token 档位：auto/0/1/2（自动/即时直答/单角色速办/团队协作） */
+async function setProjectTier(t){
+  if(!curRoom){ toast('先选择项目'); return; }
+  try{
+    const j=await apiJson('/api/projects/'+curRoom+'/tier',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tier:t})});
+    if(j.ok) toast('✅ 已设置档位：'+({auto:'自动判定',0:'即时直答（最省token）',1:'单角色速办',2:'团队协作（质量优先）'}[t]||t));
     else toast('❌ '+(j.error||'失败'));
   }catch(e){ toast('请求失败：'+e); }
 }
@@ -4469,6 +4493,10 @@ async function renderCockpit(){
     let memberCount=0;
     if(ckFocus){ try{ const ms=await apiJson('/api/projects/'+ckFocus+'/members'); memberCount=(ms.members||[]).length; }catch(e){} }
     const kpis=[['在岗成员',memberCount],['关键路径',fpCount],['休息窗',s.rest_window_active?'激活':'关'],['模式',s.mode||'-'],['今日派单',s.today_dispatched||0]];
+    // v6.5 token 三段显性化（调度/执行/其他）
+    const tbp=ap.token_by_phase||{};
+    const fmtTk=v=>{ v=v||0; return v>=10000?(v/10000).toFixed(1)+'w':v; };
+    kpis.push(['调度 token',fmtTk(tbp.调度?.tokens)],['执行 token',fmtTk(tbp.执行?.tokens)],['其他 token',fmtTk(tbp.其他?.tokens)],['档位', ap.chat_tier_enabled?('T'+({0:'0直答',1:'1速办',2:'2协作'}[ap.chat_tier_default]||'auto')):'关']);
     const kEl=document.getElementById('ckKpis');
     if(kEl) kEl.innerHTML=kpis.map(k=>`<div style="background:#fff;border:.5px solid var(--gray-200);border-radius:10px;padding:6px 12px;min-width:84px"><div style="font-size:10px;color:var(--gray-400)">${k[0]}</div><div style="font-size:15px;font-weight:600;color:var(--gray-800)">${k[1]}</div></div>`).join('');
   }catch(e){}
