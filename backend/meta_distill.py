@@ -24,6 +24,12 @@ DIM_LABEL = {
     "interest": "【利益关切】", "decision": "【决策倾向】", "emotion": "【情感信号】",
     "value": "【价值观锚点】", "comm": "【沟通风格】",
 }
+# 人格维度（蒸馏仅允许注入这些）。任何 tool/capability/permission 维度一律拒绝——
+# 这是「蒸馏不增能力」契约的纵深防御：即使未来扩展 META_DIMS，能力维度也永不可经蒸馏注入。
+CAPABILITY_DIMS = {
+    "tool", "capability", "permission", "skill", "command", "api_key",
+    "system_prompt", "prompt", "role", "function", "tool_def", "instruction",
+}
 
 # ── v6.4 蒸馏二期：素材类型 & 授权模型 ─────────────────────────────
 # 图1 蒸馏素材类型：自我介绍/简历、个人经历、聊天记录、工作文档、创作内容、别人对你的评价
@@ -216,6 +222,10 @@ def _store_facts(facts, source: str, qid=None, subject_id: str = "self",
         dim = f.get("dim")
         field = f.get("field")
         value = f.get("value")
+        if dim in CAPABILITY_DIMS:
+            # 宪法层 persona-only 契约：拒绝任何能力/工具维度注入，防止通过蒸馏偷加能力
+            print(f"[distill] 拒绝非人格维度注入（疑似能力注入）: {dim}/{field}")
+            continue
         if dim not in META_DIMS or not field or value in (None, ""):
             continue
         conf = max(0.3, min(0.97, float(f.get("confidence", 0.5))))
