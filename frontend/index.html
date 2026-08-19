@@ -388,17 +388,18 @@
     <button class="btn" onclick="showAbout()">原型说明</button>
   </div>
 
-  <!-- 账号登录/注册遮罩（v5.7：手机号+密码，本地持久登录，为商业化/大模型 API 账户打基础） -->
+  <!-- 账号登录/注册遮罩（v6.4：邮箱/手机号双通道，本地持久登录，为国际化与云端能力打基础） -->
   <div id="authMask" class="auth-mask" style="display:none">
     <div class="auth-card">
       <div class="auth-title">分身账号</div>
-      <div class="auth-sub">登录后可使用大模型 API 与云端能力（账号本地保存，登录状态长期保持）</div>
+      <div class="auth-sub">邮箱（国际）或手机号（国内）注册登录；登录后可使用大模型 API 与云端能力（账号本地保存，登录状态长期保持）</div>
       <div class="auth-tabs">
         <span class="auth-tab active" id="tabLogin" onclick="authSwitch('login')">登录</span>
         <span class="auth-tab" id="tabReg" onclick="authSwitch('register')">注册</span>
       </div>
-      <input id="authPhone" class="auth-input" placeholder="手机号" inputmode="numeric" maxlength="11">
-      <input id="authPwd" class="auth-input" type="password" placeholder="密码（至少 6 位）">
+      <input id="authPhone" class="auth-input" placeholder="邮箱或手机号" inputmode="email" oninput="authDetectMode()">
+      <input id="authCode" class="auth-input" style="display:none" placeholder="短信验证码" inputmode="numeric" maxlength="6">
+      <input id="authPwd" class="auth-input" type="password" placeholder="密码（邮箱≥8位 · 手机号≥6位）">
       <div class="auth-err" id="authErr"></div>
       <button class="btn meta auth-btn" id="authSubmit" onclick="authSubmit()">登录</button>
       <div class="auth-skip" onclick="hideAuthModal()">暂不登录（本地模式）</div>
@@ -1431,19 +1432,36 @@ function authSwitch(m){ _authMode=m;
   document.getElementById('authSubmit').textContent = m==='login'?'登录':'注册';
   document.getElementById('authErr').textContent=''; }
 async function authSubmit(){
-  const phone=document.getElementById('authPhone').value.trim();
+  const acc=document.getElementById('authPhone').value.trim();
   const pwd=document.getElementById('authPwd').value;
+  const code=document.getElementById('authCode').value.trim();
   const err=document.getElementById('authErr');
-  if(!/^1[3-9]\d{9}$/.test(phone)){ err.textContent='请输入正确的 11 位手机号'; return; }
-  if(pwd.length<6){ err.textContent='密码至少 6 位'; return; }
+  const isEmail=/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(acc);
+  const isPhone=/^1[3-9]\d{9}$/.test(acc);
+  if(!isEmail && !isPhone){ err.textContent='请输入正确的邮箱或 11 位手机号'; return; }
+  if(isEmail && pwd.length<8){ err.textContent='邮箱注册密码至少 8 位'; return; }
+  if(isPhone && pwd.length<6){ err.textContent='手机号密码至少 6 位'; return; }
+  if(isPhone && _authMode==='register' && !code){ err.textContent='手机号注册需要短信验证码'; return; }
   const url = _authMode==='login' ? '/api/auth/login' : '/api/auth/register';
+  const body = isEmail ? {email:acc,password:pwd} : {phone:acc,password:pwd};
+  if(isPhone && _authMode==='register') body.code=code;
   try{
-    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,password:pwd})});
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const j=await r.json();
     if(!j.ok){ err.textContent=j.error||'操作失败'; return; }
     SESSION=j.token; localStorage.setItem('fs_session',SESSION);
     hideAuthModal(); renderUserBar(j.user); toast(_authMode==='login'?'✅ 已登录':'✅ 注册成功，已登录');
   }catch(e){ err.textContent='网络错误：'+errText(e); }
+}
+/* v6.4：根据输入自动切换 邮箱/手机号 模式（邮箱免验证码，手机号注册显示验证码框） */
+function authDetectMode(){
+  const acc=document.getElementById('authPhone').value.trim();
+  const codeEl=document.getElementById('authCode');
+  const pwdEl=document.getElementById('authPwd');
+  const isEmail=/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(acc);
+  if(isEmail){ codeEl.style.display='none'; codeEl.value=''; pwdEl.placeholder='密码（至少 8 位）'; }
+  else if(/^1[3-9]\d{9}$/.test(acc)){ codeEl.style.display=_authMode==='register'?'block':'none'; pwdEl.placeholder='密码（至少 6 位）'; }
+  else { codeEl.style.display='none'; pwdEl.placeholder='密码'; }
 }
 async function doLogout(){
   try{ await fetch('/api/auth/logout',{method:'POST',headers:sessHeaders()}); }catch(e){}

@@ -256,6 +256,7 @@ async def _unhandled_handler(request: Request, exc):
 
 # ── 账号体系（v5.7：手机号+密码，本地 SQLite，为商业化/大模型 API 账户打基础）──
 _CN_MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")  # v6.4 国际化：邮箱注册/登录
 _SESSION_DAYS = 365  # 长效会话：满足"登录后一直保持登录"
 
 
@@ -304,35 +305,56 @@ async def auth_register(req: Request):
         data = await req.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    # v6.4 国际化：邮箱注册（免验证码，国际通道）或手机号注册（短信验证码，国内通道）
+    email = (data.get("email") or "").strip().lower()
     phone = (data.get("phone") or "").strip()
     password = data.get("password") or ""
     code = (data.get("code") or "").strip()
-    if not _CN_MOBILE_RE.match(phone):
-        return JSONResponse({"ok": False, "error": "手机号格式不正确（应为 11 位中国大陆手机号）"}, status_code=400)
-    if len(password) < 6:
-        return JSONResponse({"ok": False, "error": "密码至少 6 位"}, status_code=400)
+    is_email = bool(email)
+    if is_email:
+        if not _EMAIL_RE.match(email):
+            return JSONResponse({"ok": False, "error": "邮箱格式不正确"}, status_code=400)
+        if len(password) < 8:
+            return JSONResponse({"ok": False, "error": "密码至少 8 位"}, status_code=400)
+    else:
+        if not _CN_MOBILE_RE.match(phone):
+            return JSONResponse({"ok": False, "error": "手机号格式不正确（应为 11 位中国大陆手机号）"}, status_code=400)
+        if len(password) < 6:
+            return JSONResponse({"ok": False, "error": "密码至少 6 位"}, status_code=400)
     conn = get_db()
-    # 验证码校验（防止任意手机号乱注册 / 撞库）
-    srow = conn.execute("SELECT code,expires_at,attempts FROM sms_codes WHERE phone=?", (phone,)).fetchone()
-    if not srow or srow["code"] != code or datetime.now().isoformat() > srow["expires_at"]:
-        conn.close()
-        return JSONResponse({"ok": False, "error": "验证码无效或已过期，请先获取短信验证码"}, status_code=400)
-    if (srow["attempts"] or 0) >= 5:
-        conn.close()
-        return JSONResponse({"ok": False, "error": "验证码尝试次数过多，请重新获取"}, status_code=429)
-    if conn.execute("SELECT 1 FROM users WHERE phone=?", (phone,)).fetchone():
-        conn.close()
-        return JSONResponse({"ok": False, "error": "该手机号已注册，请直接登录"}, status_code=409)
-    conn.execute("UPDATE sms_codes SET attempts=attempts+1 WHERE phone=?", (phone,))
+    # 手机号注册需短信验证码（防撞库）；邮箱注册为本地单用户场景免验证码
+    if not is_email:
+        srow = conn.execute("SELECT code,expires_at,attempts FROM sms_codes WHERE phone=?", (phone,)).fetchone()
+        if not srow or srow["code"] != code or datetime.now().isoformat() > srow["expires_at"]:
+            conn.close()
+            return JSONResponse({"ok": False, "error": "验证码无效或已过期，请先获取短信验证码"}, status_code=400)
+        if (srow["attempts"] or 0) >= 5:
+            conn.close()
+            return JSONResponse({"ok": False, "error": "验证码尝试次数过多，请重新获取"}, status_code=429)
+        if conn.execute("SELECT 1 FROM users WHERE phone=?", (phone,)).fetchone():
+            conn.close()
+            return JSONResponse({"ok": False, "error": "该手机号已注册，请直接登录"}, status_code=409)
+    else:
+        if conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+            conn.close()
+            return JSONResponse({"ok": False, "error": "该邮箱已注册，请直接登录"}, status_code=409)
+    if not is_email:
+        conn.execute("UPDATE sms_codes SET attempts=attempts+1 WHERE phone=?", (phone,))
     uid = "u" + secrets.token_hex(8)
     salt = _gen_salt()
     phash = _hash_password(password, salt)
     now = datetime.now().isoformat()
-    conn.execute(
-        "INSERT INTO users (id,phone,password_hash,salt,created_at,last_login) VALUES (?,?,?,?,?,?)",
-        (uid, phone, phash, salt, now, now),
-    )
-    conn.execute("DELETE FROM sms_codes WHERE phone=?", (phone,))  # 验证码一次性消费
+    if is_email:
+        conn.execute(
+            "INSERT INTO users (id,email,phone,password_hash,salt,created_at,last_login) VALUES (?,?,?,?,?,?,?)",
+            (uid, email, "", phash, salt, now, now),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO users (id,phone,password_hash,salt,created_at,last_login) VALUES (?,?,?,?,?,?)",
+            (uid, phone, phash, salt, now, now),
+        )
+        conn.execute("DELETE FROM sms_codes WHERE phone=?", (phone,))  # 验证码一次性消费
     # 生成恢复密钥（脱离手机号的所有权证明，明文随注册返回一次）
     _rc = secrets.token_hex(16).upper()
     _rc_key = "-".join(_rc[i:i + 4] for i in range(0, 32, 4))
@@ -340,7 +362,9 @@ async def auth_register(req: Request):
     conn.commit()
     conn.close()
     token = _create_session(uid)
-    return JSONResponse({"ok": True, "token": token, "user": {"id": uid, "phone": phone, "nickname": ""}, "recovery_key": _rc_key})
+    return JSONResponse({"ok": True, "token": token,
+                         "user": {"id": uid, "phone": phone if not is_email else "", "email": email if is_email else "", "nickname": ""},
+                         "recovery_key": _rc_key})
 
 
 @app.post("/api/auth/login")
@@ -349,18 +373,27 @@ async def auth_login(req: Request):
         data = await req.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    # v6.4：支持邮箱或手机号登录（双轨）
+    email = (data.get("email") or "").strip().lower()
     phone = (data.get("phone") or "").strip()
     password = data.get("password") or ""
+    is_email = bool(email)
     conn = get_db()
-    row = conn.execute("SELECT id,password_hash,salt FROM users WHERE phone=?", (phone,)).fetchone()
+    if is_email:
+        row = conn.execute("SELECT id,password_hash,salt FROM users WHERE email=?", (email,)).fetchone()
+        err = "邮箱或密码错误"
+    else:
+        row = conn.execute("SELECT id,password_hash,salt FROM users WHERE phone=?", (phone,)).fetchone()
+        err = "手机号或密码错误"
     conn.close()
     if not row or _hash_password(password, row["salt"]) != row["password_hash"]:
-        return JSONResponse({"ok": False, "error": "手机号或密码错误"}, status_code=401)
+        return JSONResponse({"ok": False, "error": err}, status_code=401)
     uid = row["id"]
     now = datetime.now().isoformat()
     db_write("UPDATE users SET last_login=? WHERE id=?", (now, uid))
     token = _create_session(uid)
-    return JSONResponse({"ok": True, "token": token, "user": {"id": uid, "phone": phone, "nickname": ""}})
+    return JSONResponse({"ok": True, "token": token,
+                         "user": {"id": uid, "phone": phone if not is_email else "", "email": email if is_email else "", "nickname": ""}})
 
 
 @app.post("/api/auth/logout")
@@ -377,11 +410,11 @@ async def auth_me(request: Request):
     if not uid:
         return JSONResponse({"ok": False, "error": "未登录"}, status_code=401)
     conn = get_db()
-    row = conn.execute("SELECT id,phone,nickname FROM users WHERE id=?", (uid,)).fetchone()
+    row = conn.execute("SELECT id,phone,email,nickname FROM users WHERE id=?", (uid,)).fetchone()
     conn.close()
     if not row:
         return JSONResponse({"ok": False, "error": "账号不存在"}, status_code=401)
-    return JSONResponse({"ok": True, "user": {"id": row["id"], "phone": row["phone"], "nickname": row["nickname"] or ""}})
+    return JSONResponse({"ok": True, "user": {"id": row["id"], "phone": row["phone"], "email": row["email"] or "", "nickname": row["nickname"] or ""}})
 
 
 @app.get("/api/auth/status")
@@ -989,6 +1022,12 @@ def init_db():
         cur.execute("ALTER TABLE projects ADD COLUMN visit_count INTEGER DEFAULT 0")
     if "deploy_conf" not in cols:
         cur.execute("ALTER TABLE projects ADD COLUMN deploy_conf TEXT DEFAULT ''")
+    # ── v6.4 国际化：users 支持邮箱注册/登录（email 列，phone 保留双轨）──
+    ucols = {r[1] for r in cur.execute("PRAGMA table_info(users)").fetchall()}
+    if "email" not in ucols:
+        cur.execute("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''")
+    if "email" in ucols or True:
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email <> ''""")
     # ── v5.3 运营中心：公开产品反馈表（市场反馈 → 一键转看板）──
     cur.execute(
         """CREATE TABLE IF NOT EXISTS market_feedback (
