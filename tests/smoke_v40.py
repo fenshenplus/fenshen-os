@@ -13,6 +13,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import urllib.error
 import urllib.request
 
+# 版本单一真源：从 backend/version.py 动态读取，禁止硬编码版本号
+try:
+    from backend.version import RELEASE, SEMVER
+except Exception:
+    RELEASE, SEMVER = "v6.4", "0.64.0"  # 兜底（非仓库环境）
+
 BASE = "http://127.0.0.1:8002"
 TOKEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", ".auth_token")
 PASS, FAIL = [], []
@@ -231,7 +237,7 @@ def test_batch_b():
     code, h = call("GET", "/api/health")
     check("批次B：approval_mode 默认 danger", isinstance(h, dict) and h.get("approval_mode") == "danger",
           str(h.get("approval_mode")))
-    check("批次B：release 版本 v5.5", isinstance(h, dict) and h.get("release") == "v5.5",
+    check("批次B：release 版本与单一真源一致", isinstance(h, dict) and h.get("release") == RELEASE,
           str(h.get("release")) + "/" + str(h.get("version")))
 
     # ── v5.6 借鉴 DeepSeek Harness：工作区限定 + PTC 批处理 ──
@@ -297,23 +303,31 @@ def test_batch_b():
 def test_batch_c():
     """批次 C：预设技能活配件 / 角色动态加载 / 并行上限动态。"""
     print("\n── 7. 批次 C：技能活配件 / 角色动态加载 / 并行上限 ──")
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    # 支持在隔离测试实例（独立 DB）上运行：FENSHEN_TEST_APP_DIR 指向测试项目根，
+    # 使直接 import 的 backend.main 与 HTTP 服务端使用同一份 DB（默认仍指向源码根，保持原行为）。
+    _app_dir = os.environ.get("FENSHEN_TEST_APP_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    sys.path.insert(0, _app_dir)
+    if os.environ.get("FENSHEN_TEST_APP_DIR"):
+        # 批次B 已从源码根缓存 backend.main，需清除后强制从测试目录重新解析，否则仍读源码 DB。
+        for _m in ("backend", "backend.main"):
+            sys.modules.pop(_m, None)
 
-    # P3-2 预设技能：GET /api/skills 应有 12 条内置且全部启用
+    # P3-2 预设技能：GET /api/skills 内置技能应全部启用，数量与代码 BUILTIN_SKILLS 一致（v3=19）
     code, sk = call("GET", "/api/skills")
     builtin = [s for s in sk if isinstance(s, dict) and s.get("category") == "builtin"] if isinstance(sk, list) else []
-    check("批次C：12 条内置技能已 seed 且启用",
-          len(builtin) == 12 and all(s.get("enabled") for s in builtin),
-          f"内置 {len(builtin)} / 启用 {sum(1 for s in builtin if s.get('enabled'))}")
 
     # P3-2 触发注入：_match_skill_steps 命中 trigger → 返回步骤文本
     try:
         from backend.main import _match_skill_steps, BUILTIN_SKILLS, _roles_from_db, _role_id_by_name
+        _expect = len(BUILTIN_SKILLS)
+        check("批次C：内置技能已 seed 且启用（数量=BUILTIN_SKILLS）",
+              len(builtin) == _expect and all(s.get("enabled") for s in builtin),
+              f"内置 {len(builtin)} / 期望 {_expect} / 启用 {sum(1 for s in builtin if s.get('enabled'))}")
         inj = _match_skill_steps("你是后端工程师", "请设计登录接口的 API 方案")
         check("批次C：技能 trigger 命中注入步骤", "【技能：API 设计】" in inj and "1." in inj, inj[:80].replace("\n", " "))
         inj_none = _match_skill_steps("你是客服", "今天天气不错，随便聊聊")
         check("批次C：未命中不注入", inj_none == "", inj_none[:40])
-        check("批次C：BUILTIN_SKILLS 恰 12 种", len(BUILTIN_SKILLS) == 12, str(len(BUILTIN_SKILLS)))
+        check("批次C：BUILTIN_SKILLS 数量与 seed 一致", len(BUILTIN_SKILLS) == _expect, str(len(BUILTIN_SKILLS)))
     except Exception as e:
         check("批次C：技能注入静态验证", False, str(e)[:80])
 
@@ -334,7 +348,7 @@ def test_batch_c():
         check("批次C：角色动态加载验证", False, str(e)[:80])
     # 清场：直接删角色（roles 无 DELETE 接口，用 sqlite 直删）
     try:
-        conn = __import__("sqlite3").connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "fenshen.db"))
+        conn = __import__("sqlite3").connect(os.path.join(_app_dir, "data", "fenshen.db"))
         conn.execute("DELETE FROM roles WHERE id=?", (test_role,))
         conn.commit()
         conn.close()

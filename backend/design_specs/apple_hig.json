@@ -1,0 +1,29 @@
+{
+  "id": "apple_hig",
+  "name": "Apple HIG（人机界面指南）",
+  "desc": "克制、清晰、有层级；重内容轻装饰",
+  "principles": ["Clarity 清晰", "Deference 遵从", "Depth 层级", "一致性", "美学完整性"],
+  "color": {
+    "primary": "#007AFF",
+    "background": "#FFFFFF",
+    "text": "#1C1C1E",
+    "success": "#34C759",
+    "warning": "#FF9500",
+    "danger": "#FF3B30"
+  },
+  "typography": {
+    "font_family": "-apple-system, 'SF Pro Text', 'PingFang SC', sans-serif",
+    "scale": "大标题 28 / 标题 22 / 副标题 17 / 正文 17 / 辅助 13 / 说明 11（pt）",
+    "weight": "Regular 正文 / Semibold 标题 / Medium 强调"
+  },
+  "components": [
+    "圆角：控件 10-12px，卡片 12-16px，大容器 20px",
+    "安全距离：内容距屏幕边 ≥16pt，避免贴边",
+    "列表行高 ≥44pt 以满足触控区",
+    "毛玻璃/模糊仅用于悬浮层（弹窗、工具栏），不滥用",
+    "按钮：主操作用实心填充（主色），次要用描边或纯文字",
+    "图标用 SF Symbols 风格：实心表选中、线表未选中，描边 1.5-2pt"
+  ],
+  "spacing": "8pt 栅格（4 / 8 / 12 / 16 / 24 / 32）；最小触控目标 44×44pt",
+  "reference": "https://developer.apple.com/design/human-interface-guidelines/"
+}

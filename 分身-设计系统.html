@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分身 · 设计系统 (Design System) · v6.4</title>
+<style>
+  /* ============================================================
+     分身设计令牌（Design Tokens）— 三层体系
+     ⚠️ 本页 :root 是「文档快照」，真源在 frontend/index.html 的 :root。
+        改令牌以 frontend 为准，改完同步此处（golden rule）。
+     ============================================================ */
+  :root {
+    /* ── Layer1 原语（Primitive）── */
+    --blue-500:#007aff; --blue-600:#0066d6; --blue-50:#e8f0fe;
+    --gray-50:#fbfbfa; --gray-100:#f5f5f7; --gray-200:#e5e5ea; --gray-300:#d6d6db;
+    --gray-400:#8e8e93; --gray-500:#6e6e73; --gray-600:#4a4a4f; --gray-900:#1c1c1e;
+    --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --gray-status:#9ca3af;
+    --meta:#534ab7; --meta-50:#eef0fe; --meta-700:#534ab7; --meta-900:#26215c;
+    --purple:#6d5bd0; --purple-weak:#eef0fb; --purple-strong:#4b3fa8;
+    --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-8:32px;
+    --fs-xs:11px; --fs-sm:12px; --fs-base:13px; --fs-md:14px; --fs-lg:16px; --fs-xl:18px;
+    --r-sm:8px; --r-md:12px; --r-lg:14px; --r-pill:18px;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.06);
+    --shadow-md:0 4px 16px rgba(0,0,0,.10);
+    --shadow-lg:0 8px 28px rgba(0,0,0,.14);
+
+    /* ── Layer2 语义（Semantic）── */
+    --bg:#ffffff;
+    --bg-2:#f5f5f7;
+    --bg-3:#fbfbfa;
+    --line:#e5e5ea;
+    --line-2:#d6d6db;
+    --fg:#1c1c1e;
+    --fg-2:#8e8e93;
+    --fg-3:#6e6e73;
+    --accent:#007aff;
+    --accent-weak:#e8f0fe;
+    --accent-strong:#0066d6;
+    --on-accent:#ffffff;
+    --success:#22c55e; --success-weak:#eafaf0; --success-strong:#166534;
+    --warning:#f59e0b; --warning-weak:#fff7e6; --warning-strong:#d48806;
+    --danger:#ef4444;  --danger-weak:#fff1f0;  --danger-strong:#991b1b;
+    --info:#007aff;    --info-weak:#e6f4ff;    --info-strong:#0066d6;
+    --meta-weak:var(--meta-50); --meta-strong:var(--meta-900);
+
+    /* ── Layer3 组件（Component）── */
+    --surface-card:var(--bg);
+    --surface-input:var(--bg-2);
+    --surface-hover:var(--bg-2);
+    --button-bg:var(--bg);
+    --button-text:var(--fg);
+    --button-primary-bg:var(--accent);
+    --button-primary-text:#ffffff;
+    --button-meta-bg:var(--meta);
+    --button-meta-text:#ffffff;
+    --nav-active-bg:var(--accent-weak);
+    --nav-active-text:var(--accent-strong);
+    --badge-bg:var(--bg-2);
+    --badge-text:var(--fg-2);
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+    font-size:13px; color:var(--fg); background:var(--bg-2); line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:1080px; margin:0 auto; background:var(--bg); min-height:100vh; padding:var(--sp-8) var(--sp-6) 80px; }
+
+  /* 顶栏 */
+  .topbar { display:flex; align-items:baseline; gap:12px; border-bottom:1px solid var(--line); padding-bottom:16px; margin-bottom:28px; }
+  .topbar h1 { font-size:24px; font-weight:600; letter-spacing:.2px; }
+  .topbar .rel { font-size:12px; color:var(--fg-2); }
+  .topbar .tagv { margin-left:auto; font-size:11px; color:var(--accent-strong); background:var(--accent-weak); padding:3px 10px; border-radius:var(--r-pill); }
+
+  /* 章节 */
+  section { margin:34px 0; }
+  .sec-h { font-size:13px; font-weight:700; color:var(--fg-2); text-transform:uppercase; letter-spacing:1.2px; margin-bottom:14px; display:flex; align-items:center; gap:8px; }
+  .sec-h::before { content:""; width:3px; height:14px; background:var(--accent); border-radius:2px; }
+  h2 { font-size:18px; font-weight:600; margin:0 0 6px; }
+  p.lead { color:var(--fg-3); margin-bottom:16px; }
+
+  /* 卡片 */
+  .panel { background:var(--bg); border:1px solid var(--line); border-radius:var(--r-md); padding:18px 20px; box-shadow:var(--shadow-sm); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+
+  /* 色板 */
+  .swatch { height:64px; border-radius:var(--r-sm); border:1px solid var(--line); display:flex; align-items:flex-end; padding:7px 8px; position:relative; }
+  .swatch .nm { font-size:10px; color:var(--fg); background:var(--bg); padding:1px 5px; border-radius:6px; border:1px solid var(--line); }
+  .swatch .vl { position:absolute; top:7px; left:8px; font-size:9px; color:var(--fg-2); font-variant-numeric:tabular-nums; }
+  .swatch.dark .nm, .swatch.dark .vl { color:var(--on-accent); background:rgba(0,0,0,.25); border-color:transparent; }
+
+  /* 语义映射表 */
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--fg-2); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  td code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; background:var(--bg-2); padding:1px 5px; border-radius:5px; color:var(--fg); }
+  .chip { display:inline-block; width:14px; height:14px; border-radius:4px; border:1px solid var(--line); vertical-align:middle; margin-right:6px; }
+
+  /* 组件预览 */
+  .preview { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:16px; background:var(--bg-3); border-radius:var(--r-md); margin-bottom:10px; }
+  .code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; background:var(--gray-900); color:#e8e8ea; padding:12px 14px; border-radius:var(--r-md); overflow-x:auto; white-space:pre; line-height:1.6; }
+
+  /* 按钮（复用真源令牌） */
+  .btn { border:0.5px solid var(--gray-200); background:var(--button-bg); border-radius:var(--r-sm); padding:6px 14px; font-size:12px; cursor:default; color:var(--button-text); }
+  .btn.primary { background:var(--button-primary-bg); color:var(--button-primary-text); border:none; }
+  .btn.meta { background:var(--button-meta-bg); color:var(--button-meta-text); border:none; }
+  .btn.ghost { border-color:var(--danger); color:var(--danger); }
+  .btn.sm { padding:4px 10px; font-size:11px; }
+
+  /* 输入 */
+  .input { flex:1; min-width:160px; padding:8px 14px; border-radius:var(--r-pill); border:0.5px solid var(--gray-200); background:var(--surface-input); font-size:13px; color:var(--fg); }
+
+  /* 徽章 */
+  .badge { display:inline-block; padding:2px 9px; border-radius:10px; font-size:11px; background:var(--badge-bg); color:var(--badge-text); }
+  .badge.s { background:var(--success-weak); color:var(--success-strong); }
+  .badge.w { background:var(--warning-weak); color:var(--warning-strong); }
+  .badge.d { background:var(--danger-weak); color:var(--danger-strong); }
+  .badge.m { background:var(--meta-weak); color:var(--meta-strong); }
+
+  /* 卡片 / 导航态 */
+  .mini-card { background:var(--surface-card); border:0.5px solid var(--gray-200); border-radius:var(--r-md); padding:12px 14px; width:200px; }
+  .mini-card .t { font-weight:600; font-size:13px; margin-bottom:4px; }
+  .mini-card .d { font-size:11px; color:var(--fg-2); }
+  .nav-demo { display:flex; flex-direction:column; gap:4px; width:160px; }
+  .navitem { padding:8px 12px; border-radius:var(--r-sm); font-size:13px; color:var(--fg); }
+  .navitem.active { background:var(--nav-active-bg); color:var(--nav-active-text); font-weight:500; }
+
+  /* 状态面（status surface） */
+  .status-surface { display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--bg-2); border-radius:var(--r-md); width:100%; }
+  .status-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+  .status-dot.run { background:var(--success); }
+  .status-dot.wait { background:var(--warning); }
+  .status-dot.err { background:var(--danger); }
+  .status-surface .tx { font-size:12px; }
+  .status-surface .tx b { font-weight:600; }
+  .status-surface .tx span { color:var(--fg-2); }
+
+  /* 尺度标尺 */
+  .ruler { display:flex; align-items:flex-end; gap:14px; padding:10px 0; }
+  .ruler .col { text-align:center; font-size:10px; color:var(--fg-2); }
+  .ruler .box { background:var(--accent-weak); border:1px solid var(--accent); border-radius:4px; margin-bottom:6px; }
+  .ruler .txt { background:var(--gray-900); color:#fff; border-radius:5px; padding:2px 0; margin-bottom:6px; }
+
+  /* 检查清单 */
+  .checklist { list-style:none; }
+  .checklist li { display:flex; gap:10px; align-items:flex-start; padding:9px 12px; border:1px solid var(--line); border-radius:var(--r-sm); margin-bottom:8px; font-size:13px; }
+  .checklist .mk { flex-shrink:0; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; margin-top:1px; }
+  .checklist .no { background:var(--danger-weak); color:var(--danger-strong); }
+  .checklist .yes { background:var(--success-weak); color:var(--success-strong); }
+  .checklist .warn { background:var(--warning-weak); color:var(--warning-strong); }
+  .checklist b { font-weight:600; }
+
+  /* 模式卡 */
+  .pattern { border:1px solid var(--line); border-radius:var(--r-md); padding:14px 16px; }
+  .pattern .pt { font-weight:600; font-size:13px; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+  .pattern .pt .n { width:20px; height:20px; border-radius:6px; background:var(--meta-weak); color:var(--meta-strong); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
+  .pattern p { font-size:12px; color:var(--fg-3); }
+
+  /* 规则条 */
+  .rule { background:var(--meta-weak); border-left:3px solid var(--meta); border-radius:0 var(--r-sm) var(--r-sm) 0; padding:12px 16px; font-size:12.5px; color:var(--meta-strong); }
+  .rule code { font-family:ui-monospace,Menlo,monospace; background:rgba(255,255,255,.6); padding:1px 5px; border-radius:5px; }
+
+  footer { margin-top:48px; padding-top:18px; border-top:1px solid var(--line); font-size:11px; color:var(--fg-2); display:flex; justify-content:space-between; }
+  @media (max-width:720px){ .grid2,.grid3{grid-template-columns:1fr;} .wrap{padding:24px 16px 60px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>分身 · 设计系统</h1>
+    <span class="rel">Design System · 三层令牌体系</span>
+    <span class="tagv">RELEASE v6.4 · 0.64.0</span>
+  </div>
+
+  <!-- ============ 1. 设计哲学 ============ -->
+  <section>
+    <div class="sec-h">01 · 设计哲学与硬约束</div>
+    <h2>极简灰白 · 克制 · 信息优先</h2>
+    <p class="lead">参考 Notion / Linear / Apple 风格。所有界面遵循以下不可妥协的底线，避免「AI 生成感」。</p>
+    <div class="grid2">
+      <div class="panel">
+        <b>视觉底线</b>
+        <ul style="margin-top:8px; padding-left:18px; color:var(--fg-3); font-size:12.5px;">
+          <li>背景以白 <code>#ffffff</code> 为主，层次靠 <code>--bg-2/-3</code> 与细线 <code>--line</code> 区分，不靠阴影堆叠。</li>
+          <li><b>禁止纯黑</b>：文字主色 <code>--fg:#1c1c1e</code>，绝不写 <code>#000</code>。</li>
+          <li>色板 ≤ 3 核心（蓝 / 灰 / 紫·元神）+ 1 强调（蓝）；状态色仅 成/警/危/信息。</li>
+          <li>禁用大渐变、禁用过度动画、禁用玻璃拟态（glassmorphism）滥用。</li>
+          <li>留白充足（间距尺度 <code>--sp-*</code>），一屏只突出一个主操作。</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <b>文案底线</b>
+        <ul style="margin-top:8px; padding-left:18px; color:var(--fg-3); font-size:12.5px;">
+          <li>直述、克制，不堆砌标语与 emoji。</li>
+          <li>按钮用动词（开始 / 生成 / 导出），不用「点击这里」。</li>
+          <li>危险操作用 confirm 二次确认；轻提示用 toast。</li>
+          <li>状态用「面（surface）」持续展示，不靠刷屏日志。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2. 三层令牌 ============ -->
+  <section>
+    <div class="sec-h">02 · 三层令牌体系（Token Layers）</div>
+    <h2>Layer1 原语 → Layer2 语义 → Layer3 组件</h2>
+    <p class="lead">组件只引用 Layer3（或 Layer2）。改主题只需改 Layer2 映射，原语不动。严禁在组件里写死 hex。</p>
+
+    <h3 style="font-size:13px;margin:18px 0 10px;color:var(--fg-2);">Layer1 · 原语（Primitive Palette）</h3>
+    <div class="grid3" id="layer1"></div>
+
+    <h3 style="font-size:13px;margin:22px 0 10px;color:var(--fg-2);">Layer2 · 语义映射（Semantic）</h3>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Token</th><th>值</th><th>用途</th></tr></thead>
+        <tbody id="layer2"></tbody>
+      </table>
+    </div>
+
+    <h3 style="font-size:13px;margin:22px 0 10px;color:var(--fg-2);">Layer3 · 组件令牌（Component）</h3>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Token</th><th>映射到</th><th>用途</th></tr></thead>
+        <tbody id="layer3"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 3. 尺度 ============ -->
+  <section>
+    <div class="sec-h">03 · 间距与字号尺度</div>
+    <div class="grid2">
+      <div class="panel">
+        <b>间距 Spacing</b>
+        <div class="ruler" id="ruler-sp"></div>
+        <div style="font-size:11px;color:var(--fg-2);font-family:ui-monospace,Menlo,monospace;" id="ruler-sp-txt"></div>
+      </div>
+      <div class="panel">
+        <b>字号 Font Size</b>
+        <div id="ruler-fs" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. 组件库 ============ -->
+  <section>
+    <div class="sec-h">04 · 组件库（实时预览）</div>
+
+    <h3 style="font-size:13px;margin:0 0 10px;color:var(--fg-2);">按钮 Button</h3>
+    <div class="preview">
+      <span class="btn">默认</span>
+      <span class="btn primary">主操作</span>
+      <span class="btn meta">元神</span>
+      <span class="btn ghost">危险</span>
+      <span class="btn sm">小号</span>
+    </div>
+    <div class="code">&lt;button class="btn"&gt;默认&lt;/button&gt;
+&lt;button class="btn primary"&gt;主操作&lt;/button&gt;   /* --button-primary-bg */
+&lt;button class="btn meta"&gt;元神&lt;/button&gt;          /* --button-meta-bg */
+&lt;button class="btn ghost"&gt;危险&lt;/button&gt;</div>
+
+    <h3 style="font-size:13px;margin:22px 0 10px;color:var(--fg-2);">输入 Input</h3>
+    <div class="preview">
+      <input class="input" value="请输入指令…（圆角胶囊）" />
+      <span class="btn primary">发送</span>
+    </div>
+    <div class="code">.input { border-radius:var(--r-pill); background:var(--surface-input); border:0.5px solid var(--gray-200); }</div>
+
+    <h3 style="font-size:13px;margin:22px 0 10px;color:var(--fg-2);">徽章 Badge</h3>
+    <div class="preview">
+      <span class="badge">默认</span>
+      <span class="badge s">完成</span>
+      <span class="badge w">等待</span>
+      <span class="badge d">阻塞</span>
+      <span class="badge m">元神</span>
+    </div>
+    <div class="code">.badge { background:var(--badge-bg); color:var(--badge-text); }
+.badge.s/.w/.d/.m → --success / --warning / --danger / --meta 弱底强字</div>
+
+    <h3 style="font-size:13px;margin:22px 0 10px;color:var(--fg-2);">卡片 Card & 导航态 Nav</h3>
+    <div class="preview">
+      <div class="mini-card"><div class="t">角色卡</div><div class="d">元神调度下的执行单元</div></div>
+      <div class="nav-demo">
+        <div class="navitem">看板</div>
+        <div class="navitem active">群聊</div>
+        <div class="navitem">资源库</div>
+      </div>
+    </div>
+    <div class="code">.card { background:var(--surface-card); border:0.5px solid var(--gray-200); border-radius:var(--r-md); }
+.navitem.active { background:var(--nav-active-bg); color:var(--nav-active-text); }</div>
+
+    <h3 style="font-size:13px;margin:22px 0 10px;color:var(--fg-2);">状态面 Status Surface（Agentic UI 核心）</h3>
+    <div class="preview" style="flex-direction:column;align-items:stretch;">
+      <div class="status-surface"><span class="status-dot run"></span><div class="tx"><b>蒸馏任务进行中</b> <span>· 进度 62% · 预计 40s</span></div></div>
+      <div class="status-surface"><span class="status-dot wait"></span><div class="tx"><b>等待人工确认</b> <span>· 高风险操作需 checkpoint</span></div></div>
+      <div class="status-surface"><span class="status-dot err"></span><div class="tx"><b>执行失败已熔断</b> <span>· 连续 5 次失败，转入休息窗口</span></div></div>
+    </div>
+    <div class="code">/* 持续态用「面」，不用刷屏日志；点=运行/等待/错误三态 */
+.status-surface { background:var(--bg-2); border-radius:var(--r-md); }
+.status-dot.run{background:var(--success)} .wait{background:var(--warning)} .err{background:var(--danger)}</div>
+  </section>
+
+  <!-- ============ 5. 反 AI 废话清单 ============ -->
+  <section>
+    <div class="sec-h">05 · 反「AI 废话」检查清单（Shipping Gate）</div>
+    <p class="lead">每次出 UI / 原型前逐条过。任一命中即打回。</p>
+    <ul class="checklist">
+      <li><span class="mk no">✕</span><div><b>禁纯黑</b>：任何 <code>#000</code> / <code>black</code> 文字或背景 → 改用 <code>--fg:#1c1c1e</code> / <code>--gray-900</code>。</div></li>
+      <li><span class="mk no">✕</span><div><b>禁大紫渐变 + 玻璃拟态套餐</b>：主色只用蓝/灰/紫(元神)，不用 <code>linear-gradient(135deg,#a78bfa,#ec4899)</code> 这类网红渐变。</div></li>
+      <li><span class="mk no">✕</span><div><b>禁色板爆炸</b>：核心色 ≤3 + 1 强调；状态色限定 成/警/危/信息 四组。</div></li>
+      <li><span class="mk no">✕</span><div><b>禁硬编码 hex 散落</b>：组件里出现 <code>#fff</code>/<code>#f5f5f7</code> 等即违规，必须引用令牌。</div></li>
+      <li><span class="mk warn">!</span><div><b>禁过度动画</b>：除 toast / 状态点呼吸外，避免入场飞入、视差、无限旋转。</div></li>
+      <li><span class="mk warn">!</span><div><b>禁信息过载</b>：一屏一个主操作；次要信息收进折叠 / 次级背景。</div></li>
+      <li><span class="mk yes">✓</span><div><b>令牌引用率</b>：前端 <code>var(--*)</code> 引用 &gt; 0 处未定义；改色只动 <code>:root</code>。</div></li>
+      <li><span class="mk yes">✓</span><div><b>字面直述</b>：文案说人话，动词开头，无「赋能 / 一站式 / 颠覆」类空话。</div></li>
+    </ul>
+  </section>
+
+  <!-- ============ 6. Agentic UI 模式 ============ -->
+  <section>
+    <div class="sec-h">06 · Agentic UI 2026 模式要点</div>
+    <p class="lead">分身是「群聊形态的 AI 团队总管」，界面要服务于「元神调度 + 人监管」，而非聊天机器人。</p>
+    <div class="grid2">
+      <div class="pattern"><div class="pt"><span class="n">1</span>持久状态面</div><p>把「正在做什么 / 进度 / 下一步」常驻在状态面，取代滚动聊天记录。用户一瞥即知全局。</p></div>
+      <div class="pattern"><div class="pt"><span class="n">2</span>检查点确认</div><p>高利害操作（删除项目、外发、付费）必须 checkpoint 二次确认，不能「自动执行」。</p></div>
+      <div class="pattern"><div class="pt"><span class="n">3</span>实时思考视图（浓缩）</div><p>元神推理过程以浓缩摘要呈现（非逐 token 流），可展开看细节，避免信息噪声。</p></div>
+      <div class="pattern"><div class="pt"><span class="n">4</span>中断与重定向</div><p>用户随时可打断、改指令、纠正；调度器实时接管，不锁死流程。</p></div>
+      <div class="pattern"><div class="pt"><span class="n">5</span>运行后摘要 + 出处</div><p>任务结束给结构化摘要（做了什么 / 产出 / 引用来源），而非一大段流水账。</p></div>
+      <div class="pattern"><div class="pt"><span class="n">6</span>三栏 / 两栏半布局</div><p>「对话」与「工作区（看板/文件/状态）」分离；群聊=左栏项目，中栏对话，右栏执行直播。</p></div>
+    </div>
+  </section>
+
+  <!-- ============ 7. 同步规则 ============ -->
+  <section>
+    <div class="sec-h">07 · 令牌单一真源规则（Golden Rule）</div>
+    <div class="rule">
+      <b>真源</b>：<code>frontend/index.html</code> 的 <code>:root</code> 是唯一权威令牌定义。<br>
+      本页 <code>:root</code> 只是「文档快照」，供原型 / 离线参考。改令牌流程：<br>
+      ① 改 <code>frontend/index.html</code> 的 <code>:root</code> → ② 跑 <code>scripts/bump_version.py</code> 升级版本（含 smoke 门禁）→ ③ 同步本页 <code>:root</code>。<br>
+      严禁在别处（组件 / 内联 style / 新页面）重新定义或硬编码色值、字号、间距。
+    </div>
+    <p style="font-size:11px;color:var(--fg-2);margin-top:10px;">
+      版本真源：<code>backend/version.py</code> → <code>/api/version</code> 暴露 <code>SEMVER / RELEASE / SCHEMA_VERSION / BUILD_DATE / COMMIT</code>。
+      CHANGELOG 见仓库根 <code>CHANGELOG.md</code>。
+    </p>
+  </section>
+
+  <footer>
+    <span>分身设计系统 · v6.4 (0.64.0)</span>
+    <span>令牌真源：frontend/index.html · 版本真源：backend/version.py</span>
+  </footer>
+
+</div>
+
+<script>
+  // 渲染 Layer1 原语
+  const L1 = [
+    ['--blue-500','#007aff',false],['--blue-600','#0066d6',false],['--blue-50','#e8f0fe',false],
+    ['--gray-50','#fbfbfa',false],['--gray-100','#f5f5f7',false],['--gray-200','#e5e5ea',false],
+    ['--gray-300','#d6d6db',false],['--gray-400','#8e8e93',false],['--gray-500','#6e6e73',false],
+    ['--gray-600','#4a4a4f',false],['--gray-900','#1c1c1e',true],
+    ['--green','#22c55e',false],['--red','#ef4444',false],['--amber','#f59e0b',false],['--gray-status','#9ca3af',false],
+    ['--meta','#534ab7',false],['--meta-50','#eef0fe',false],['--meta-700','#534ab7',false],['--meta-900','#26215c',true],
+    ['--purple','#6d5bd0',false],['--purple-weak','#eef0fb',false],['--purple-strong','#4b3fa8',false]
+  ];
+  const l1 = document.getElementById('layer1');
+  L1.forEach(([n,v,dark])=>{
+    const d=document.createElement('div');
+    d.className='swatch'+(dark?' dark':'');
+    d.style.background=v;
+    d.innerHTML=`<span class="vl">${v}</span><span class="nm">${n}</span>`;
+    l1.appendChild(d);
+  });
+
+  // 渲染 Layer2 语义
+  const L2 = [
+    ['--bg','#ffffff','主背景（页面/卡片）'],
+    ['--bg-2','#f5f5f7','次级背景（输入/浅底块）'],
+    ['--bg-3','#fbfbfa','三级背景（侧栏/顶栏）'],
+    ['--line','#e5e5ea','边框线'],
+    ['--line-2','#d6d6db','强边框线'],
+    ['--fg','#1c1c1e','主文字（禁纯黑）'],
+    ['--fg-2','#8e8e93','次文字'],
+    ['--fg-3','#6e6e73','弱文字'],
+    ['--accent','#007aff','强调色（蓝）'],
+    ['--accent-weak','#e8f0fe','强调弱底'],
+    ['--accent-strong','#0066d6','强调强'],
+    ['--on-accent','#ffffff','彩色背景上的文字'],
+    ['--success','#22c55e','成功（弱底/强字配对）'],
+    ['--warning','#f59e0b','警告'],
+    ['--danger','#ef4444','危险'],
+    ['--info','#007aff','信息'],
+    ['--meta-weak','#eef0fe','元神弱底'],
+    ['--meta-strong','#26215c','元神强字']
+  ];
+  const l2 = document.getElementById('layer2');
+  L2.forEach(([n,v,u])=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td><code>${n}</code></td><td><span class="chip" style="background:${v}"></span><code>${v}</code></td><td style="color:var(--fg-3)">${u}</td>`;
+    l2.appendChild(tr);
+  });
+
+  // 渲染 Layer3 组件
+  const L3 = [
+    ['--surface-card','--bg','卡片表面'],
+    ['--surface-input','--bg-2','输入框底'],
+    ['--surface-hover','--bg-2','悬停底'],
+    ['--button-bg','--bg','按钮底'],
+    ['--button-text','--fg','按钮字'],
+    ['--button-primary-bg','--accent','主按钮底'],
+    ['--button-primary-text','#ffffff','主按钮字'],
+    ['--button-meta-bg','--meta','元神按钮底'],
+    ['--button-meta-text','#ffffff','元神按钮字'],
+    ['--nav-active-bg','--accent-weak','导航激活底'],
+    ['--nav-active-text','--accent-strong','导航激活字'],
+    ['--badge-bg','--bg-2','徽章底'],
+    ['--badge-text','--fg-2','徽章字']
+  ];
+  const l3 = document.getElementById('layer3');
+  L3.forEach(([n,m,u])=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td><code>${n}</code></td><td><code>${m}</code></td><td style="color:var(--fg-3)">${u}</td>`;
+    l3.appendChild(tr);
+  });
+
+  // 间距尺度
+  const SP = [['--sp-1','4px'],['--sp-2','8px'],['--sp-3','12px'],['--sp-4','16px'],['--sp-5','20px'],['--sp-6','24px'],['--sp-8','32px']];
+  const rulerSp=document.getElementById('ruler-sp'); const rulerSpTxt=document.getElementById('ruler-sp-txt');
+  SP.forEach(([n,v])=>{
+    const sz=parseInt(v);
+    const col=document.createElement('div'); col.className='col';
+    col.innerHTML=`<div class="box" style="width:${sz}px;height:${sz}px"></div>${sz}`;
+    rulerSp.appendChild(col);
+    rulerSpTxt.textContent += n.replace('--','')+' ';
+  });
+  rulerSpTxt.textContent = SP.map(x=>x[0].replace('--','')+'='+x[1]).join('  ');
+
+  // 字号尺度
+  const FS = [['--fs-xs','11px',1],['--fs-sm','12px',1],['--fs-base','13px',1],['--fs-md','14px',1],['--fs-lg','16px',1],['--fs-xl','18px',1]];
+  const rulerFs=document.getElementById('ruler-fs');
+  FS.forEach(([n,v])=>{
+    const row=document.createElement('div');
+    row.style.display='flex'; row.style.alignItems='baseline'; row.style.gap='10px';
+    row.innerHTML=`<span style="font-size:${v};color:var(--fg)">分身 Agent 团队</span><code style="font-size:11px;color:var(--fg-2)">${n} = ${v}</code>`;
+    rulerFs.appendChild(row);
+  });
+</script>
+</body>
+</html>

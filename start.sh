@@ -23,6 +23,14 @@ if curl -s -m 1 http://127.0.0.1:8002/api/health >/dev/null 2>&1; then
   exit 0
 fi
 
+# 依赖自检：受管 venv 已含依赖；系统 python3 缺失时自动安装（首次约 1 分钟，需联网）
+if [ "$PY" != "$MANAGED_PY" ]; then
+  if ! "$PY" -c "import fastapi, uvicorn, requests" >/dev/null 2>&1; then
+    echo "首次运行，正在安装依赖…（约 1 分钟，需联网）"
+    "$PY" -m pip install -r backend/requirements.txt
+  fi
+fi
+
 # 安全默认值：只绑本机回环地址。
 # v3.9 之前这里写死 --host 0.0.0.0，等于在同一 WiFi 下开了个后门——
 # 别人扫到 8002 端口就能调用能执行 shell 的接口，审查中已实测可接管整台电脑。

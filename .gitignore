@@ -14,9 +14,28 @@ venv/
 .temp/
 .DS_Store
 
-# 发行包中间产物（site/ 下的 zip 由 dist-stage 打包，保留 site 的 index.html 但排除 zip）
-dist-stage/.venv/
+# 发行包中间产物（旧构建，不入库）
+dist-stage/
+
+# 部署脚本含明文服务器密码，禁止入库
+deploy-s4.exp
 
 # 官网安装包（大文件，不在仓库维护）
 site/*.zip
 site/*.dmg
+
+# PyInstaller 构建产物（不入库）
+dist/
+build/
+*.spec
+分身.app/
+
+# 签名凭据与密钥（绝不入库！）
+*.pfx
+*.p12
+*.pfx.*
+.env
+.env.*
+secrets/
+*.key.*
+

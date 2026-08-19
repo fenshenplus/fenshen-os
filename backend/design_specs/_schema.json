@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "description": "UI 设计规范文件格式说明。每个规范一个 JSON 文件（文件名即 id；以下划线 _ 开头的文件为元文件，不会出现在下拉列表）。所有字段均可选，按需填写。",
+  "fields": {
+    "id": "规范唯一标识，需与文件名一致（如 apple_hig），仅允许字母数字下划线连字符",
+    "name": "展示名，前端下拉主显示",
+    "desc": "一句话说明，前端下拉副标题",
+    "principles": ["核心设计原则，如 清晰 / 一致 / 层级"],
+    "color": {
+      "primary": "主色（HEX，如 #007AFF）",
+      "background": "背景色",
+      "text": "正文色",
+      "success": "成功色",
+      "warning": "警告色",
+      "danger": "危险/错误色"
+    },
+    "typography": {
+      "font_family": "字体族",
+      "scale": "字号阶梯说明",
+      "weight": "字重规范"
+    },
+    "components": ["组件级规范，如 圆角 8-12px / 卡片阴影 / 按钮高度 44px"],
+    "spacing": "间距栅格说明，如 8pt 栅格",
+    "reference": "官方参考文档 URL"
+  },
+  "note": "用户可在 ~/.fenshen/design_specs/ 下自由新增或编辑规范（*.json），前端下拉会自动发现，无需改代码。"
+}

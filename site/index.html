@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="icon" type="image/png" href="./favicon.png" />
-<title>分身 v5.5 — 你的数字分身 · 本地优先的 AI 团队总管（Windows / macOS）</title>
+<title>分身 v6.4 — 你的数字分身 · 本地优先的 AI 团队总管（Windows / macOS）</title>
 <style>
   :root{
     --blue:#007aff; --blue-600:#0066d6; --blue-50:#e8f0fe;
@@ -21,7 +21,7 @@
     color:var(--gray-900); background:var(--gray-100); font-size:14px; line-height:1.6; font-weight:400;
   }
   a{color:inherit;text-decoration:none}
-  .wrap{max-width:1020px;margin:0 auto;padding:0 20px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
   nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:saturate(180%) blur(8px);border-bottom:.5px solid var(--gray-200)}
   .nav-inner{display:flex;align-items:center;justify-content:space-between;height:54px}
   .brand{display:flex;align-items:center;gap:9px;font-weight:500}
@@ -40,7 +40,7 @@
   .hero .logo{width:96px;height:96px;margin:0 auto 22px;object-fit:contain;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
   .hero h1{font-size:36px;font-weight:600;letter-spacing:-.5px;line-height:1.25}
   .hero h1 .accent{color:var(--meta)}
-  .hero .sub{margin:18px auto 0;max-width:640px;color:var(--gray-400);font-size:15px}
+  .hero .sub{margin:18px auto 0;max-width:680px;color:var(--gray-400);font-size:15px}
   .hero .actions{margin-top:30px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
   .pill{display:inline-flex;align-items:center;gap:6px;margin-top:22px;padding:5px 12px;border-radius:18px;background:#fff;border:.5px solid var(--gray-200);font-size:12px;color:var(--gray-400)}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--green)}
@@ -94,8 +94,14 @@
   .banner .b-t{font-size:14px;font-weight:600;color:var(--meta-900)}
   .banner .b-d{font-size:13px;color:var(--gray-400);margin-top:4px}
   .banner .b-d b{color:var(--gray-900)}
+  .shot-row{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:24px}
+  .shot{background:#fff;border:.5px solid var(--gray-200);border-radius:14px;overflow:hidden}
+  .shot img{display:block;width:100%;border-bottom:.5px solid var(--gray-200)}
+  .shot .cap{padding:12px 16px}
+  .shot .cap h4{font-size:14px;font-weight:600;margin-bottom:3px}
+  .shot .cap p{font-size:12px;color:var(--gray-400)}
   @media(max-width:680px){
-    .grid,.steps,.specs,.pillars{grid-template-columns:1fr}
+    .grid,.steps,.specs,.pillars,.shot-row{grid-template-columns:1fr}
     .nav-links a.link{display:none}
     .hero h1{font-size:28px}
     .hero{padding:52px 0 40px}
@@ -113,12 +119,13 @@
     </div>
     <div class="nav-links">
       <a class="link" href="#demo">演示</a>
+      <a class="link" href="#v64">v6.4</a>
+      <a class="link" href="#shots">功能</a>
       <a class="link" href="#capabilities">能力</a>
       <a class="link" href="#security">安全</a>
       <a class="link" href="#timeline">演进</a>
       <a class="link" href="#install">安装</a>
-      <a class="link" href="#tech">技术</a>
-      <a class="btn primary" href="./分身-v5.5-macOS.dmg">下载 macOS（dmg）</a>
+      <a class="btn primary" href="./分身-v6.4-macOS.dmg">下载 macOS（dmg）</a>
     </div>
   </div>
 </nav>
@@ -129,25 +136,111 @@
     <h1>你的<span class="accent">数字分身</span><br/>本地优先的 AI 团队总管</h1>
     <p class="sub">分身跑在你自己的电脑上——它像你一样拥有这台电脑的最高权限：能看所有项目、能派活、能质检，还能亲自上手：执行命令、操作浏览器、读写文件。手机随时远程看板，数据只存本机。</p>
     <div class="actions">
-      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap"><a class="btn primary" href="./分身-v5.5-macOS.dmg">下载 macOS（dmg 安装器）</a><a class="btn primary" href="./分身-v5.5-Windows-exe.zip">下载 Windows 版（免装 Python）</a></div>
-      <a class="btn meta" href="#capabilities">看它现在能做什么</a>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap"><a class="btn primary" href="./分身-v6.4-macOS.dmg">下载 macOS（dmg 安装器）</a><a class="btn primary" href="./分身-v5.5-Windows-exe.zip">下载 Windows 版（v5.5 · v6.4 macOS 优先）</a></div>
+      <a class="btn meta" href="#v64">看 v6.4 新能力</a>
     </div>
-    <div class="pill"><span class="dot"></span> v5.5 已发布 · Windows / macOS 双平台 · 手机随时远程 · 数据存本机 SQLite</div>
+    <div class="pill"><span class="dot"></span> v6.4 已发布 · SEMVER 0.64.14 · 蒸馏升级 + 元神宪法 + 自进化引擎 + token 档位体系</div>
     <div class="banner">
-      <div class="b-ic">🛡️</div>
+      <div class="b-ic">⚡</div>
       <div>
-        <div class="b-t">v5.5 · Windows / macOS 双平台</div>
-        <div class="b-d"><b>Windows 和 Mac 都能用</b>：解压后双击 <code>start.bat</code>（Windows）/ <code>start.sh</code>（macOS）即启动，浏览器自动打开。手机同局域网可随时远程看板（PWA 可装主屏），语音输入、左滑看板。</div>
+        <div class="b-t">v6.4 重磅更新 · 分身越用越懂你，越用越守得住，越用越省</div>
+        <div class="b-d"><b>蒸馏升级</b>：6 类素材 / 授权模型 / 质量分 / 数字克隆体；<b>元神宪法</b>：5 条不可覆盖的利益约束写进最底层；<b>自进化引擎</b>：经验 5 维权重、晋升 / 淘汰 / 护栏闭环；<b>token 档位体系（0.64.14）</b>：即时问答元神 1 次直答（0.7s），简单任务单角色速办，复杂任务才建团队——实测同类任务 token 降 21 倍、耗时降 43 倍。</div>
       </div>
     </div>
   </div>
 </header>
 
+<section id="demo" style="background:#fff;border-top:.5px solid var(--gray-200);border-bottom:.5px solid var(--gray-200)">
+  <div class="wrap">
+    <div class="sec-title">实况演示 · v6.4 真实操作</div>
+    <div class="sec-h">看它怎么干活</div>
+    <div class="sec-d">一段未经剪辑的真实录屏：和元神说话、群聊下达指令、元神拆解调度、角色执行、看板更新、蒸馏人格、模型设置……全部是 v6.4 真实界面在跑。</div>
+    <div style="max-width:960px;margin:0 auto;border:.5px solid var(--gray-200);border-radius:14px;overflow:hidden;background:#0c0c0e">
+      <video controls preload="metadata" poster="./logo.png" style="width:100%;display:block" src="./demo-v6.4.mp4"></video>
+    </div>
+  </div>
+</section>
+
+<section id="v64" style="background:#fff;border-top:.5px solid var(--gray-200);border-bottom:.5px solid var(--gray-200)">
+  <div class="wrap">
+    <div class="sec-title">v6.4 重磅更新</div>
+    <div class="sec-h">越用越懂你，越用越守得住</div>
+    <div class="sec-d">蒸馏+宪法+自进化+看板 四块并进，从「能干活」到「懂你且守得住」。</div>
+    <div class="grid">
+      <div class="card">
+        <div class="ic meta">炼</div>
+        <h3>蒸馏升级 · 数字克隆体</h3>
+        <p>6 类素材（简历/经验/对话/文档/创作/反馈）+ 授权模型（owner/pending/authorized/revoked/denied）+ 质量分 + 多对象。群聊自动蒸馏每 6 条触发。元神能炼制自己的画像，也能炼制你授权的「赛博人类」。</p>
+        <div class="tags"><span class="tag">6 类素材</span><span class="tag">授权模型</span><span class="tag">质量分</span><span class="tag">数字克隆体</span></div>
+      </div>
+      <div class="card">
+        <div class="ic red">宪</div>
+        <h3>元神宪法 · 5 条不可覆盖</h3>
+        <p>绝对站在本机用户利益一边：①唯一委托人=本机用户；②利益冲突优先护用户；③钱/隐私/声誉/账号/不可逆操作默认保守；④用户对元神有完全控制权（中止/撤销授权/删数据/纠正）；⑤蒸馏他人须获被蒸馏人明示授权，否则拒绝。</p>
+        <div class="tags"><span class="tag">底层硬约束</span><span class="tag">不可降级</span><span class="tag">runtime 守卫</span></div>
+      </div>
+      <div class="card">
+        <div class="ic green">自</div>
+        <h3>自进化引擎 · 经验 5 维</h3>
+        <p>任务完成后自动沉淀经验（5 维权重：relevance/recency/frequency/feedback/trust），召回时同项目加权；灰度晋升（freq≥3 → persistent）/ 淘汰（neg≥2 → eliminated）/ 护栏（硬编码密钥 → unsafe 不晋升、不主动召回）。day-1 安全闭环。</p>
+        <div class="tags"><span class="tag">5 维权重</span><span class="tag">晋升/淘汰</span><span class="tag">护栏</span><span class="tag">可审计</span></div>
+      </div>
+      <div class="card">
+        <div class="ic amber">板</div>
+        <h3>看板迭代 · 角色视角 + 引导</h3>
+        <p>模块×阶段矩阵升级：角色视角（按角色过滤）、业务域（自动归类）、影响涟漪（修改扩散可视化）、引导四件套（IN_APP_GUIDE / 帮助中心 / 首用向导 / 分步导览）、执行直播面板、stage 归位、语义搜索。群聊↔看板双向跳转。</p>
+        <div class="tags"><span class="tag">角色视角</span><span class="tag">影响涟漪</span><span class="tag">分步导览</span></div>
+      </div>
+      <div class="card">
+        <div class="ic green">档</div>
+        <h3>token 档位体系 · 简单即时答，复杂才建队</h3>
+        <p>群聊消息按复杂度自动分档：T0 即时问答元神单次直答（实测 1 次调用 / 0.7s）；T1 单角色速办（简单小任务只派一个角色，跳过重复验收）；T2 团队协作（复杂工程走完整质量门+验收+D8 交叉）；T3 长程自治。项目可手动指定档位，同模型共享上下文前缀缓存。</p>
+        <div class="tags"><span class="tag">T0 直答</span><span class="tag">T1 速办</span><span class="tag">T2 协作</span><span class="tag">降 21 倍 token</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="shots">
+  <div class="wrap">
+    <div class="sec-title">真实界面 · v6.4 截屏</div>
+    <div class="sec-h">不是渲染图，是运行中截的</div>
+    <div class="sec-d">以下 6 张全部来自 8002 端口实际跑着的 0.64.14 引擎，含真实项目、真实角色、真实经验、真实模型配置。</div>
+    <div class="shot-row">
+      <div class="shot">
+        <img src="./shots/01-群聊作战室.png" alt="群聊作战室" />
+        <div class="cap"><h4>① 群聊作战室 · 自然语言驱动</h4><p>每项目一个群聊，用户发指令→元神拆解→角色执行→任务自动落看板→验收汇报</p></div>
+      </div>
+      <div class="shot">
+        <img src="./shots/03-项目看板.png" alt="项目看板" />
+        <div class="cap"><h4>② 项目看板 · 模块×阶段矩阵</h4><p>每个任务落进真实格子，关键路径自动高亮，看板↔群聊双向跳转</p></div>
+      </div>
+      <div class="shot">
+        <img src="./shots/05-技能库.png" alt="技能库" />
+        <div class="cap"><h4>③ 技能库 · 13 项核心活配件</h4><p>标准工作流按 SOP 化组织，触发词命中自动注入任务上下文</p></div>
+      </div>
+      <div class="shot">
+        <img src="./shots/06-经验库.png" alt="经验库" />
+        <div class="cap"><h4>④ 经验库 · 5 维权重评分</h4><p>每次任务完成自动沉淀，权重越高越优先被召回，疗效归因持续修正</p></div>
+      </div>
+      <div class="shot">
+        <img src="./shots/07-元神·我的分身.png" alt="元神·我的分身" />
+        <div class="cap"><h4>⑤ 元神·我的分身 · 蒸馏人格</h4><p>把元神炼成真正懂你的人：素材→授权→画像→人格注入，可炼制数字克隆体</p></div>
+      </div>
+      <div class="shot">
+        <img src="./shots/08-模型设置.png" alt="模型设置" />
+        <div class="cap"><h4>⑥ 模型设置 · 角色级多模型</h4><p>元神与每个角色可单独指定模型（DeepSeek/OpenAI/Claude/Ollama），失败自动降级</p></div>
+      </div>
+    </div>
+    <p class="note">更多界面：技能库 / 经验库 / 角色库 / 应用市场 / 长期记忆 / 元神驾驶舱 / 清理中心 / 移动端通讯器（APK）</p>
+  </div>
+</section>
+
 <section id="capabilities">
   <div class="wrap">
     <div class="sec-title">一句话看懂</div>
-    <div class="sec-h">能看 · 能派 · 能动手</div>
-    <div class="sec-d">元神从「会聊天的助手」进化成「能干活的总管」——手机是遥控器，电脑是引擎，开发到发布全生命周期闭环。</div>
+    <div class="sec-h">能看 · 能派 · 能动手 · 越用越懂你</div>
+    <div class="sec-d">元神从「会聊天的助手」进化成「能干活的总管 + 你的数字分身」——多项目全生命周期闭环，且有宪法级利益约束。</div>
     <div class="pillars">
       <div class="pillar">
         <div class="em">👁️</div>
@@ -155,8 +248,8 @@
         <p>所有项目 × 模块 × 任务聚合到一张总看板，三色巡检主动发现阻塞与滞留。</p>
         <ul>
           <li>总看板聚合 <span>· 一屏看所有项目</span></li>
-          <li>自动巡检 <span>· 频率由你定</span></li>
-          <li>文件监控 <span>· 关键目录变动即汇报</span></li>
+          <li>自动巡检 <span>· 三档节奏（autopilot/normal/rest）</span></li>
+          <li>主动补队 <span>· 缺岗自动建标准成员</span></li>
           <li>真模型质检 <span>· 不合格自动退回</span></li>
         </ul>
       </div>
@@ -166,9 +259,9 @@
         <p>群聊发一句指令，元神拆解调度，角色用真 AI 干活，任务自动落看板流转。</p>
         <ul>
           <li>自主执行链 <span>· 指令→调度→执行→汇报</span></li>
-          <li>任务自动流转 <span>· 派单即 doing，完成即 done</span></li>
-          <li>跨项目调度 <span>· 资源按需重派</span></li>
-          <li>阶段门禁 <span>· UI 定稿前禁止写代码</span></li>
+          <li>爆炸半径 <span>· 精准路由不广播</span></li>
+          <li>终验门禁 <span>· A1-A5 全自动验收</span></li>
+          <li>质量门 <span>· 真实跑测试+覆盖率</span></li>
         </ul>
       </div>
       <div class="pillar">
@@ -179,22 +272,10 @@
           <li>执行命令 <span>· 危险命令需真人确认</span></li>
           <li>浏览器五动作 <span>· 打开/截图/填表/点击/抓取</span></li>
           <li>文件三件套 <span>· 读/写/列目录</span></li>
-          <li>文件搜索 <span>· 全盘按名查找</span></li>
+          <li>宪法守卫 <span>· 高于 approval_mode 不可降级</span></li>
         </ul>
       </div>
     </div>
-  </div>
-</section>
-
-<section id="demo" style="background:#fff;border-top:.5px solid var(--gray-200);border-bottom:.5px solid var(--gray-200)">
-  <div class="wrap">
-    <div class="sec-title">实况演示 · 全程真实</div>
-    <div class="sec-h">看它怎么干活</div>
-    <div class="sec-d">一段未经剪辑的真实录屏：和元神说话，它真的去执行命令、开浏览器、调度团队——不是演示脚本，是正在发生的事。</div>
-    <div style="max-width:860px;margin:0 auto;border:.5px solid var(--gray-200);border-radius:14px;overflow:hidden;background:#0c0c0e">
-      <video controls preload="metadata" poster="./logo.png" style="width:100%;display:block" src="./demo.mp4"></video>
-    </div>
-    <div style="text-align:center;margin-top:14px;font-size:12px;color:var(--gray-400)">视频内容：① 元神真执行命令看桌面 · ② 元神真开浏览器抓热搜 · ③ 群聊一句话调度前端角色 · ④ 模块看板 · ⑤ 总看板</div>
   </div>
 </section>
 
@@ -202,47 +283,37 @@
   <div class="wrap">
     <div class="sec-title">能力全景</div>
     <div class="sec-h">从想法到交付，全程闭环</div>
-    <div class="sec-d">不只是聊天群——项目工厂、记忆进化、多模型协作，越用越懂你。</div>
+    <div class="sec-d">不只是聊天群——项目工厂、记忆进化、多模型协作、宪法约束，越用越懂你且越用越守得住。</div>
     <div class="grid">
       <div class="card">
         <div class="ic meta">元</div>
         <h3>元神 · 你的数字分身</h3>
-        <p>1:1 私聊 + 人格 grounding，代表你的利益与风格。可强制中止任意 agent、检查产出、重派任务，异常时兜底。</p>
-        <div class="tags"><span class="tag">人格分身</span><span class="tag">监督兜底</span><span class="tag">总看板</span></div>
+        <p>1:1 私聊 + 人格 grounding + 5 条宪法约束。元神代表你的利益与风格，可强制中止任意 agent、检查产出、重派任务，异常时兜底。</p>
+        <div class="tags"><span class="tag">人格分身</span><span class="tag">5 条宪法</span><span class="tag">监督兜底</span></div>
       </div>
       <div class="card">
         <div class="ic blue">板</div>
         <h3>项目群聊 + 模块看板</h3>
-        <p>每项目一个房间；看板按「模块 × 阶段」管理进度；话题对话组按模块隔离上下文，讨论后一键提炼为任务。</p>
-        <div class="tags"><span class="tag">两层看板</span><span class="tag">三层模型</span><span class="tag">依赖门禁</span></div>
+        <p>每项目一个房间；看板按「模块 × 阶段」管理进度；话题对话组按模块隔离上下文，讨论后一键提炼为任务。角色视角 + 影响涟漪 + 引导四件套。</p>
+        <div class="tags"><span class="tag">两层看板</span><span class="tag">角色视角</span><span class="tag">影响涟漪</span></div>
       </div>
       <div class="card">
         <div class="ic green">记</div>
         <h3>记忆与进化</h3>
-        <p>长期记忆沉淀你的偏好；技能库自动提炼流程性做法；经验库记录成败案例并复盘进化——越用越懂你。</p>
-        <div class="tags"><span class="tag">长期记忆</span><span class="tag">技能提炼</span><span class="tag">进化复盘</span></div>
+        <p>经验 5 维权重（relevance/recency/frequency/feedback/trust）+ 晋升/淘汰/护栏闭环 + 群聊自动蒸馏 + 磨压缩 + 疗效归因——越用越懂你。</p>
+        <div class="tags"><span class="tag">5 维权重</span><span class="tag">晋升/淘汰</span><span class="tag">护栏</span></div>
       </div>
       <div class="card">
-        <div class="ic amber">模</div>
-        <h3>多模型协作</h3>
-        <p>元神与每个角色可单独指定模型（DeepSeek / OpenAI / Claude / 本地 Ollama），用量统计，失败自动降级。</p>
-        <div class="tags"><span class="tag">角色级配置</span><span class="tag">降级链</span><span class="tag">用量统计</span></div>
+        <div class="ic amber">炼</div>
+        <h3>蒸馏 · 6 类素材</h3>
+        <p>resume/experience/chat/document/creation/feedback 全支持；授权模型可审计（owner/pending/authorized/revoked/denied）；质量分自动评估；可炼制自己的画像或被授权的「赛博人类」。</p>
+        <div class="tags"><span class="tag">6 类素材</span><span class="tag">授权模型</span><span class="tag">数字克隆体</span></div>
       </div>
       <div class="card">
         <div class="ic red">锁</div>
-        <h3>手机遥控器</h3>
-        <p>群聊首页、元神置顶、左滑进看板、语音输入——手机就是分身的遥控器，随时看板推进。</p>
-        <h3>应用市场</h3>
-        <p>开发完的产品一键上架，公开反馈直接转成看板需求卡，SEO 文案自动生成。</p>
-        <h3>工程纪律</h3>
-        <p>阶段门禁（UI 确认前禁止写代码）、冻结锁 + 修改单、版本快照可回滚、依赖门禁防乱序开发。</p>
-        <div class="tags"><span class="tag">门禁</span><span class="tag">冻结</span><span class="tag">快照回滚</span></div>
-      </div>
-      <div class="card">
-        <div class="ic red">安</div>
-        <h3>安全护栏（v4.0 重构）</h3>
-        <p>本地令牌鉴权、默认只绑 127.0.0.1、危险命令弹系统级对话框真人确认、清理前自动备份数据库、全量审计日志。</p>
-        <div class="tags"><span class="tag">令牌鉴权</span><span class="tag">本机绑定</span><span class="tag">真人确认</span></div>
+        <h3>安全护栏（v4.0 重构 + v6.4 宪法）</h3>
+        <p>本地令牌鉴权、默认只绑 127.0.0.1、危险命令弹系统级对话框真人确认、清理前自动备份数据库、全量审计日志。v6.4 新增：元神 5 条宪法 + runtime 守卫（高于 approval_mode 不可降级）。</p>
+        <div class="tags"><span class="tag">令牌鉴权</span><span class="tag">本机绑定</span><span class="tag">5 条宪法</span></div>
       </div>
     </div>
   </div>
@@ -252,7 +323,7 @@
   <div class="wrap">
     <div class="sec-title">安全模型</div>
     <div class="sec-h">能干活，也要守得住</div>
-    <div class="sec-d">分身拥有本机执行命令与读写文件的权限，因此安全是默认开启、不可绕过的。</div>
+    <div class="sec-d">分身拥有本机执行命令与读写文件的权限，因此安全是默认开启、不可绕过的。v6.4 起，元神多了一层 5 条宪法约束。</div>
     <div class="grid">
       <div class="card">
         <div class="ic green">🔒</div>
@@ -266,13 +337,13 @@
       </div>
       <div class="card">
         <div class="ic amber">⚠️</div>
-        <h3>危险命令真人确认</h3>
-        <p>AI 要执行危险命令（删文件、格式化、提权等）时弹出系统级对话框，需你点头才执行；客户端自带确认无效，超时按拒绝处理。</p>
+        <h3>危险命令真人确认 + 宪法守卫</h3>
+        <p>AI 要执行危险命令（删文件、格式化、提权、<code>git push --force</code> 等）时弹出系统级对话框，需你点头才执行；客户端自带确认无效，超时按拒绝处理。v6.4 宪法守卫优先级高于 approval_mode，任何配置不可降级。</p>
       </div>
       <div class="card">
-        <div class="ic blue">🗄️</div>
-        <h3>清理有门禁 + 自动备份</h3>
-        <p>破坏性清理（聊天记录 / 记忆 / 全部）强制真人确认，且操作前自动备份数据库，可回滚。</p>
+        <div class="ic blue">📜</div>
+        <h3>元神 5 条宪法</h3>
+        <p>① 唯一委托人=本机用户；② 利益冲突优先护用户；③ 钱/隐私/声誉/账号/不可逆操作默认保守；④ 用户对元神有完全控制权；⑤ 蒸馏他人须获被蒸馏人明示授权，否则拒绝。</p>
       </div>
     </div>
     <p class="note">局域网（手机/其他设备）访问需手动开启 <code>FENSHEN_ALLOW_LAN=1</code> 并携带令牌，仅在可信网络下使用。详见下方「安装」。</p>
@@ -282,17 +353,18 @@
 <section id="timeline">
   <div class="wrap">
     <div class="sec-title">持续演进</div>
-    <div class="sec-h">从「群聊助手」到「数字分身」</div>
-    <div class="sec-d">九个发布基线，每一版都在让分身更接近「你」。</div>
+    <div class="sec-h">从「群聊助手」到「懂你且守得住的数字分身」</div>
+    <div class="sec-d">v1.0 至今的发布基线，每一版都在让分身更接近「你」。</div>
     <div class="timeline">
-      <div class="tl-item"><div class="tl-v">v1.0</div><div class="tl-d">四机制落地：元神 / 项目群聊 / 角色库 / 资源库 <span>· 桌面引擎 + 手机远程看板</span></div></div>
-      <div class="tl-item"><div class="tl-v">v2.0</div><div class="tl-d">记忆与门禁：长期记忆 / 清理中心 / 阶段门禁 / 冻结锁 / 快照回滚 <span>· 技能库 / 经验库 / 进化复盘</span></div></div>
-      <div class="tl-item"><div class="tl-v">v3.0</div><div class="tl-d">群聊最前端 + 两层看板：模块×阶段 / 话题机制 / 上下文按模块隔离 / 任务完成自动沉淀</div></div>
-      <div class="tl-item"><div class="tl-v">v3.5</div><div class="tl-d">元神觉醒：总看板 / 自动巡检 / 跨项目调度 / 真模型质检 <span>· 消灭最后模拟点</span></div></div>
-      <div class="tl-item"><div class="tl-v">v3.6</div><div class="tl-d">工具化：元神/群聊对话直达工具（命令/浏览器）<span>· 多项目模板沉淀</span></div></div>
-      <div class="tl-item"><div class="tl-v">v3.7</div><div class="tl-d">文件执行器（读/写/列目录）<span>· 模板带依赖与元数据 · 手机端 H5 触控打磨</span></div></div>
-      <div class="tl-item"><div class="tl-v">v3.8</div><div class="tl-d">文件搜索 <span>· 元神文件监控 · 模板库扩到 7 套 · 手机也能看板</span></div></div>
-      <div class="tl-item"><div class="tl-v">v4.0</div><div class="tl-d"><b>安全重构 + 诚实化</b>：本地令牌鉴权、127.0.0.1 默认绑定、危险命令系统级确认、清理门禁+自动备份、多模型降级与三种蒸馏真 LLM 化、任务状态自动流转 <span>· 审查后修复基线</span></div></div>
+      <div class="tl-item"><div class="tl-v">v1-v3</div><div class="tl-d">四机制 + 记忆 + 看板 + 工具 + 文件 <span>· 群聊最前端 + 两层看板 + 元神觉醒</span></div></div>
+      <div class="tl-item"><div class="tl-v">v4.0</div><div class="tl-d"><b>安全重构 + 诚实化</b>：本地令牌鉴权、127.0.0.1 默认绑定、危险命令系统级确认、清理门禁+自动备份、多模型降级与三种蒸馏真 LLM 化 <span>· 审查后修复基线</span></div></div>
+      <div class="tl-item"><div class="tl-v">v5.5</div><div class="tl-d">代码能力 D1-D10 全部上线 <span>· 自纠正闭环 / 角色 Plan 门禁 / 确定性质量门 / 沙箱验证 / 语义索引 / 代理 Git / 流式 / 写测交叉 / 疗效归因 / 宪法护栏</span></div></div>
+      <div class="tl-item"><div class="tl-v">v5.8</div><div class="tl-d">元神驾驶舱 P0·真·8 态状态机 <span>· 事件驱动+守卫+事件溯源 + 群聊↔看板双向联动</span></div></div>
+      <div class="tl-item"><div class="tl-v">v6.0</div><div class="tl-d">新 UI 外壳 + 真实前端 <span>· 全产品视觉一致性</span></div></div>
+      <div class="tl-item"><div class="tl-v">v6.1</div><div class="tl-d">矩阵看板 + 元神续航调度器 <span>· autopilot/normal/rest 三模式 + 关键路径 + 休息窗口 + 移动端通讯器</span></div></div>
+      <div class="tl-item"><div class="tl-v">v6.2</div><div class="tl-d">上线合规 + 元神驾驶舱 P0-P3 <span>· 蒸馏充足度/自动建队/经验进化/全链路轨道/自动驾驶汇报/疗效归因</span></div></div>
+      <div class="tl-item"><div class="tl-v">v6.3</div><div class="tl-d">看板迭代 <span>· 角色视角/业务域/影响涟漪/引导导览/分层图例/stage 归位/执行直播面板/语义搜索</span></div></div>
+      <div class="tl-item"><div class="tl-v">v6.4</div><div class="tl-d"><b>蒸馏升级 + 元神宪法 + 自进化引擎</b> <span>· 6 类素材 / 授权模型 / 质量分 / 数字克隆体 + 5 条宪法 + 经验晋升/淘汰/护栏 + 终验门禁 A1-A5</span></div></div>
     </div>
   </div>
 </section>
@@ -306,7 +378,7 @@
       <div class="step">
         <div class="n">1</div>
         <h4>下载安装包</h4>
-        <p>点上方「下载 macOS 版」，得到 <code>分身-v5.4-macOS.zip / 分身-v5.4-Windows.zip</code>（约 95KB，纯净无依赖安装）。macOS：双击 dmg → 拖「分身」到 Applications → 双击运行（免装 Python）。Windows：解压双击「Fenshen.exe」即用（免装 Python）。</p>
+        <p>点上方「下载 macOS 版」，得到 <code>分身-v6.4-macOS.dmg</code>。macOS：双击 dmg → 拖「分身」到 Applications → 双击运行（免装 Python，自带运行环境）。Windows：下载 <code>分身-v5.5-Windows-exe.zip</code> 解压双击「Fenshen.exe」即用（免装 Python）。</p>
       </div>
       <div class="step">
         <div class="n">2</div>
@@ -324,12 +396,12 @@
       <div class="gk-title">⚠️ macOS 打开 .command 提示「无法验证」怎么办？</div>
       <p>这是苹果对网上下载文件的统一安全拦截（Gatekeeper），与本软件无关。二选一即可解除：</p>
       <p><b>方法 A（推荐，永久生效）</b>：打开「终端」，粘贴运行下面这一行（路径按你实际解压位置改）：</p>
-      <pre>xattr -cr ~/Downloads/分身-v5.4</pre>
+      <pre>xattr -cr ~/Downloads/分身-v6.4</pre>
       <p>回车后再双击 <code>安装.command</code> 即可正常打开。</p>
-      <p><b>方法 B（单次信任）</b>：右键 <code>安装.command</code> → 打开 → 在弹窗中点「打开」。之后 <code>启动.command</code> / <code>停止.command</code> 也用同样方式首次打开一次即可。</p>
+      <p><b>方法 B（单次信任）</b>：右键 <code>安装.command</code> → 打开 → 在弹窗中点「打开」。之后 <code>启动分身.command</code> / <code>停止分身.command</code> 也用同样方式首次打开一次即可。</p>
     </div>
     <p class="note" style="margin-top:14px"><b>手机/其他设备远程看板（可选，需手动开启）：</b>分身默认只在你这台电脑可用。若想让手机连同一 WiFi 访问，先打开「终端」执行：</p>
-    <pre style="background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:10px 12px;font-size:13px;overflow-x:auto;margin-top:6px">FENSHEN_ALLOW_LAN=1 open 启动.command</pre>
+    <pre style="background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:10px 12px;font-size:13px;overflow-x:auto;margin-top:6px">FENSHEN_ALLOW_LAN=1 open 启动分身.command</pre>
     <p class="note">开启后访问需携带令牌（令牌在 <code>data/.auth_token</code>），且<b>仅在可信网络下使用</b>——分身能在本机执行命令，不要在公共 WiFi 开启此模式。</p>
     <p class="note" style="margin-top:8px">架构：<b>桌面端是引擎</b>（跑模型、管项目、可调用系统，拥有最高权限）；<b>手机端是通信终端</b>（不跑模型、不持权限）。换电脑只需把整个文件夹拷贝过去。</p>
   </div>
@@ -343,8 +415,10 @@
     <div class="specs">
       <div class="spec"><div class="k">技术栈</div><div class="v">FastAPI + SQLite + 原生 H5</div></div>
       <div class="spec"><div class="k">工具链</div><div class="v">命令 / 浏览器 / 文件读·写·搜 共 6 类，对话直达</div></div>
-      <div class="spec"><div class="k">多模型</div><div class="v">DeepSeek / OpenAI / Claude / Ollama，角色级配置+降级</div></div>
-      <div class="spec"><div class="k">安全（v4.0）</div><div class="v">本地令牌 + 127.0.0.1 默认绑定 + 危险命令真人确认</div></div>
+      <div class="spec"><div class="k">多模型</div><div class="v">DeepSeek / OpenAI / Claude / Ollama，角色级配置+降级链</div></div>
+      <div class="spec"><div class="k">安全（v4.0+v6.4）</div><div class="v">本地令牌 + 127.0.0.1 + 危险命令真人确认 + 5 条元神宪法</div></div>
+      <div class="spec"><div class="k">蒸馏（v6.4）</div><div class="v">6 类素材 / 授权模型 / 质量分 / 多对象（赛博人类）</div></div>
+      <div class="spec"><div class="k">自进化（v6.4）</div><div class="v">经验 5 维权重 / 晋升淘汰护栏 / 疗效归因 / 记忆面板</div></div>
       <div class="spec"><div class="k">数据存储</div><div class="v">本机 SQLite，不落云</div></div>
       <div class="spec"><div class="k">服务端口</div><div class="v">8002（规避 8000 生产占用）</div></div>
     </div>
@@ -353,8 +427,8 @@
 
 <footer>
   <div class="wrap foot-inner">
-    <div class="foot-brand"><img src="./logo.png" alt="" /> 分身 v4.0 · 本地优先的数字分身引擎</div>
-    <div>端口守纪 8002 · © 2026 分身</div>
+    <div class="foot-brand"><img src="./logo.png" alt="" /> 分身 v6.4 · 本地优先的数字分身引擎</div>
+    <div>SEMVER 0.64.14 · 端口守纪 8002 · © 2026 分身</div>
   </div>
 </footer>
 
