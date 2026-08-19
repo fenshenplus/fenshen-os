@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install fastapi "uvicorn[standard]" requests
+
+      - name: Backend compile gate
+        run: python -m py_compile backend/*.py
+
+      - name: Start engine (port 8002)
+        run: |
+          nohup uvicorn backend.main:app --host 127.0.0.1 --port 8002 > /tmp/eng.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8002/api/health >/dev/null 2>&1; then echo "engine up"; break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8002/api/health || (echo "engine failed"; tail -50 /tmp/eng.log; exit 1)
+
+      - name: Regression smoke
+        run: python tests/smoke_v40.py --base http://127.0.0.1:8002
