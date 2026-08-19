@@ -376,6 +376,7 @@
 </head>
 <body>
 
+<script src="./i18n.js"></script>
 <div class="app">
   <div class="topbar">
     <img src="fenshen.png" class="logo" alt="分身">
@@ -391,18 +392,18 @@
   <!-- 账号登录/注册遮罩（v6.4：邮箱/手机号双通道，本地持久登录，为国际化与云端能力打基础） -->
   <div id="authMask" class="auth-mask" style="display:none">
     <div class="auth-card">
-      <div class="auth-title">分身账号</div>
-      <div class="auth-sub">邮箱（国际）或手机号（国内）注册登录；登录后可使用大模型 API 与云端能力（账号本地保存，登录状态长期保持）</div>
+      <div class="auth-title" data-i18n="分身账号">分身账号</div>
+      <div class="auth-sub" data-i18n="邮箱（国际）或手机号（国内）注册登录；登录后可使用大模型 API 与云端能力（账号本地保存，登录状态长期保持）">邮箱（国际）或手机号（国内）注册登录；登录后可使用大模型 API 与云端能力（账号本地保存，登录状态长期保持）</div>
       <div class="auth-tabs">
-        <span class="auth-tab active" id="tabLogin" onclick="authSwitch('login')">登录</span>
-        <span class="auth-tab" id="tabReg" onclick="authSwitch('register')">注册</span>
+        <span class="auth-tab active" id="tabLogin" data-i18n="登录" onclick="authSwitch('login')">登录</span>
+        <span class="auth-tab" id="tabReg" data-i18n="注册" onclick="authSwitch('register')">注册</span>
       </div>
-      <input id="authPhone" class="auth-input" placeholder="邮箱或手机号" inputmode="email" oninput="authDetectMode()">
-      <input id="authCode" class="auth-input" style="display:none" placeholder="短信验证码" inputmode="numeric" maxlength="6">
-      <input id="authPwd" class="auth-input" type="password" placeholder="密码（邮箱≥8位 · 手机号≥6位）">
+      <input id="authPhone" class="auth-input" data-i18n-ph="邮箱或手机号" placeholder="邮箱或手机号" inputmode="email" oninput="authDetectMode()">
+      <input id="authCode" class="auth-input" style="display:none" data-i18n-ph="短信验证码" placeholder="短信验证码" inputmode="numeric" maxlength="6">
+      <input id="authPwd" class="auth-input" type="password" data-i18n-ph="密码（邮箱≥8位 · 手机号≥6位）" placeholder="密码（邮箱≥8位 · 手机号≥6位）">
       <div class="auth-err" id="authErr"></div>
-      <button class="btn meta auth-btn" id="authSubmit" onclick="authSubmit()">登录</button>
-      <div class="auth-skip" onclick="hideAuthModal()">暂不登录（本地模式）</div>
+      <button class="btn meta auth-btn" id="authSubmit" data-i18n="登录" onclick="authSubmit()">登录</button>
+      <div class="auth-skip" data-i18n="暂不登录（本地模式）" onclick="hideAuthModal()">暂不登录（本地模式）</div>
     </div>
   </div>
   <style>
@@ -425,15 +426,15 @@
   <div class="body">
     <!-- v6 外壳：最左深色图标栏（WorkBuddy 极简风） -->
     <div class="rail">
-      <div class="rail-avatar" id="railAvatar" onclick="openDrawer()" title="账户与设置">分</div>
-      <div class="rail-item navitem active" data-sec="chat" title="对话">
+      <div class="rail-avatar" id="railAvatar" onclick="openDrawer()" data-i18n-title="账户与设置" title="账户与设置">分</div>
+      <div class="rail-item navitem active" data-sec="chat" data-i18n-title="对话" title="对话">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.6-.8L3 21l1.9-5.5A8.5 8.5 0 1 1 21 11.5z"/></svg>
       </div>
-      <div class="rail-item navitem" data-sec="cockpit" title="元神驾驶舱">
+      <div class="rail-item navitem" data-sec="cockpit" data-i18n-title="元神驾驶舱" title="元神驾驶舱">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/><path d="M12 2v2M4 12H2M22 12h-2"/></svg>
       </div>
       <div class="rail-sep"></div>
-      <div class="rail-item" onclick="openDrawer()" title="设置">
+      <div class="rail-item" onclick="openDrawer()" data-i18n-title="设置" title="设置">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </div>
     </div>
@@ -442,27 +443,27 @@
     <div class="drawer-mask" id="drawerMask" onclick="closeDrawer()"></div>
     <div class="drawer" id="drawer">
       <div class="drawer-head">
-        <div class="t">分身 · 工作台</div>
+        <div class="t" data-i18n="分身 · 工作台">分身 · 工作台</div>
         <button class="drawer-close" onclick="closeDrawer()">✕</button>
       </div>
-      <div class="drawer-search"><input id="drawerSearch" placeholder="搜索功能…" oninput="filterDrawer(this.value)"></div>
+      <div class="drawer-search"><input id="drawerSearch" data-i18n-ph="搜索功能…" placeholder="搜索功能…" oninput="filterDrawer(this.value)"></div>
       <div class="drawer-nav" id="drawerNav">
-        <div class="navitem meta" data-sec="meta"><span class="dotk"></span>元神 · 我的分身</div>
-        <div class="navitem meta" data-sec="cockpit"><span class="dotk"></span>元神驾驶舱</div>
-        <div class="navitem" data-sec="roles"><span class="dotk"></span>角色库</div>
-        <div class="navitem" data-sec="resources"><span class="dotk"></span>公共资源库</div>
-        <div class="navitem" data-sec="models"><span class="dotk"></span>模型设置</div>
-        <div class="navitem" data-sec="terminal"><span class="dotk"></span>终端</div>
-        <div class="navitem" data-sec="browser"><span class="dotk"></span>浏览器</div>
-        <div class="navitem" data-sec="board"><span class="dotk"></span>项目看板</div>
-        <div class="navitem" data-sec="cleanup"><span class="dotk"></span>清理中心</div>
-        <div class="navitem" data-sec="memory"><span class="dotk"></span>长期记忆</div>
-        <div class="navitem" data-sec="skills"><span class="dotk"></span>技能库</div>
-        <div class="navitem" data-sec="experiences"><span class="dotk"></span>经验库</div>
-        <div class="navitem" data-sec="evolution"><span class="dotk"></span>进化中心</div>
-        <div class="navitem meta" data-sec="autopilot"><span class="dotk"></span>元神续航</div>
-        <div class="navitem" data-sec="about"><span class="dotk"></span>关于分身</div>
-        <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span></div>
+        <div class="navitem meta" data-sec="meta"><span class="dotk"></span><span data-i18n="元神 · 我的分身">元神 · 我的分身</span></div>
+        <div class="navitem meta" data-sec="cockpit"><span class="dotk"></span><span data-i18n="元神驾驶舱">元神驾驶舱</span></div>
+        <div class="navitem" data-sec="roles"><span class="dotk"></span><span data-i18n="角色库">角色库</span></div>
+        <div class="navitem" data-sec="resources"><span class="dotk"></span><span data-i18n="公共资源库">公共资源库</span></div>
+        <div class="navitem" data-sec="models"><span class="dotk"></span><span data-i18n="模型设置">模型设置</span></div>
+        <div class="navitem" data-sec="terminal"><span class="dotk"></span><span data-i18n="终端">终端</span></div>
+        <div class="navitem" data-sec="browser"><span class="dotk"></span><span data-i18n="浏览器">浏览器</span></div>
+        <div class="navitem" data-sec="board"><span class="dotk"></span><span data-i18n="项目看板">项目看板</span></div>
+        <div class="navitem" data-sec="cleanup"><span class="dotk"></span><span data-i18n="清理中心">清理中心</span></div>
+        <div class="navitem" data-sec="memory"><span class="dotk"></span><span data-i18n="长期记忆">长期记忆</span></div>
+        <div class="navitem" data-sec="skills"><span class="dotk"></span><span data-i18n="技能库">技能库</span></div>
+        <div class="navitem" data-sec="experiences"><span class="dotk"></span><span data-i18n="经验库">经验库</span></div>
+        <div class="navitem" data-sec="evolution"><span class="dotk"></span><span data-i18n="进化中心">进化中心</span></div>
+        <div class="navitem meta" data-sec="autopilot"><span class="dotk"></span><span data-i18n="元神续航">元神续航</span></div>
+        <div class="navitem" data-sec="about"><span class="dotk"></span><span data-i18n="关于分身">关于分身</span></div>
+        <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span><span onclick="toggleLang()" style="font-size:10px;color:var(--meta);cursor:pointer;margin-left:8px" title="切换语言 / Switch language">🌐 EN</span></div>
       </div>
     </div>
 
@@ -561,8 +562,8 @@
       <div class="split" id="splitPanel" style="display:none">
         <div class="split-head">
           <div class="split-tabs">
-            <span class="split-tab active" id="tabTraj" onclick="switchSplit('traj')">进程轨迹</span>
-            <span class="split-tab" id="tabBoard" onclick="switchSplit('board')">看板</span>
+            <span class="split-tab active" id="tabTraj" data-i18n="进程轨迹" onclick="switchSplit('traj')">进程轨迹</span>
+            <span class="split-tab" id="tabBoard" data-i18n="看板" onclick="switchSplit('board')">看板</span>
           </div>
           <button class="split-close" onclick="toggleSplit()">✕</button>
         </div>
@@ -601,15 +602,15 @@
                   <button class="btn sm" id="boardAutoBtn" onclick="toggleBoardAutonomy()" style="font-size:10px;padding:2px 10px"></button>
                   <!-- v6.5 token 档位：auto/0/1/2（自动/即时直答/单角色速办/团队协作） -->
                   <select id="boardTierSel" onchange="setProjectTier(this.value)" style="font-size:10px;padding:2px 6px;border:.5px solid var(--gray-200);border-radius:6px;background:#fff;color:var(--gray-600)" title="执行档位：auto=自动判定 / 0=即时直答（最省token） / 1=单角色速办 / 2=团队协作（质量优先）">
-                    <option value="auto">⚙ 档位·自动</option>
-                    <option value="0">⚡ 档位·即时直答</option>
-                    <option value="1">🚀 档位·单角色速办</option>
-                    <option value="2">👥 档位·团队协作</option>
+                    <option value="auto" data-i18n="⚙ 档位·自动">⚙ 档位·自动</option>
+                    <option value="0" data-i18n="⚡ 档位·即时直答">⚡ 档位·即时直答</option>
+                    <option value="1" data-i18n="🚀 档位·单角色速办">🚀 档位·单角色速办</option>
+                    <option value="2" data-i18n="👥 档位·团队协作">👥 档位·团队协作</option>
                   </select>
                   <!-- v5.0 移动端深化：一键继续推进 -->
-                  <button class="btn sm" onclick="continueBoard()" style="font-size:10px;padding:2px 10px;background:#6d5bd0;color:#fff;border:none">🚀 继续推进</button>
+                  <button class="btn sm" onclick="continueBoard()" style="font-size:10px;padding:2px 10px;background:#6d5bd0;color:#fff;border:none" data-i18n="🚀 继续推进">🚀 继续推进</button>
                   <!-- v5.2 部署一键化 -->
-                  <button class="btn sm" onclick="openDeployDlg()" style="font-size:10px;padding:2px 10px">🚀 部署</button>
+                  <button class="btn sm" onclick="openDeployDlg()" style="font-size:10px;padding:2px 10px" data-i18n="🚀 部署">🚀 部署</button>
                 </div>
               </div>
             </div>
@@ -1459,9 +1460,9 @@ function authDetectMode(){
   const codeEl=document.getElementById('authCode');
   const pwdEl=document.getElementById('authPwd');
   const isEmail=/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(acc);
-  if(isEmail){ codeEl.style.display='none'; codeEl.value=''; pwdEl.placeholder='密码（至少 8 位）'; }
-  else if(/^1[3-9]\d{9}$/.test(acc)){ codeEl.style.display=_authMode==='register'?'block':'none'; pwdEl.placeholder='密码（至少 6 位）'; }
-  else { codeEl.style.display='none'; pwdEl.placeholder='密码'; }
+  if(isEmail){ codeEl.style.display='none'; codeEl.value=''; pwdEl.placeholder=__t('密码（至少 8 位）'); }
+  else if(/^1[3-9]\d{9}$/.test(acc)){ codeEl.style.display=_authMode==='register'?'block':'none'; pwdEl.placeholder=__t('密码（至少 6 位）'); }
+  else { codeEl.style.display='none'; pwdEl.placeholder=__t('密码'); }
 }
 async function doLogout(){
   try{ await fetch('/api/auth/logout',{method:'POST',headers:sessHeaders()}); }catch(e){}
@@ -2958,7 +2959,7 @@ async function loadBoard(){
       let paused=!!j.autonomy_paused;
       try{ const aps=await apiJson('/api/autopilot/state'); if((aps.paused_projects||[]).includes(curRoom)) paused=true; }catch(e){}
       window._autoPaused=paused;
-      ab.textContent=paused?'▶ 恢复自主推进':'⏸ 暂停自主推进';
+      ab.textContent=__t(paused?'▶ 恢复自主推进':'⏸ 暂停自主推进');
       ab.style.background=paused?'#34c98e':'var(--gray-100)';
       ab.style.color=paused?'#fff':'var(--gray-500)';
       ab.style.border='none';
@@ -4849,12 +4850,12 @@ async function delMember(mid){
     <div class="ck-body">
       <!-- 左：项目列表 -->
       <div class="ck-left">
-        <div class="ck-h">我的产品</div>
+        <div class="ck-h" data-i18n="我的产品">我的产品</div>
         <div id="ckProjects" style="overflow:auto;flex:1;padding:10px"></div>
       </div>
       <!-- 中：矩阵看板 + 调度脑 -->
       <div class="ck-center">
-        <div class="ck-h" style="display:flex;align-items:center;gap:8px"><span id="ckCenterTitle">项目看板</span><button class="btn sm meta" onclick="openMorningBrief()" style="margin-left:auto">🌅 晨报</button><button class="btn sm meta" onclick="metaReport(ckFocus)">📊 元神汇报</button></div>
+        <div class="ck-h" style="display:flex;align-items:center;gap:8px"><span id="ckCenterTitle" data-i18n="项目看板">项目看板</span><button class="btn sm meta" onclick="openMorningBrief()" style="margin-left:auto" data-i18n="🌅 晨报">🌅 晨报</button><button class="btn sm meta" onclick="metaReport(ckFocus)" data-i18n="📊 元神汇报">📊 元神汇报</button></div>
         <div id="ckReady" style="font-size:11px;padding:0 8px 6px;color:var(--gray-500)"></div>
         <div id="ckReport" style="font-size:11px;padding:0 8px 8px;color:var(--gray-600)"></div>
         <div class="ck-tabs" id="ckTabs"></div>
@@ -4863,7 +4864,7 @@ async function delMember(mid){
       </div>
       <!-- 右：战队面板 -->
       <div class="ck-right">
-        <div class="ck-h">战队 · 团队成员 <button class="btn sm meta" onclick="ckAddMember()" style="float:right;margin-left:6px">+ 成员</button><button class="btn sm" onclick="openDirect('meta','元神')" style="float:right">💬 私聊元神</button></div>
+        <div class="ck-h" data-i18n="战队 · 团队成员">战队 · 团队成员 <button class="btn sm meta" onclick="ckAddMember()" style="float:right;margin-left:6px" data-i18n="+ 成员">+ 成员</button><button class="btn sm" onclick="openDirect('meta','元神')" style="float:right" data-i18n="💬 私聊元神">💬 私聊元神</button></div>
         <div id="ckTeam" style="overflow:auto;flex:1;padding:8px"></div>
       </div>
     </div>
