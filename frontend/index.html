@@ -240,6 +240,17 @@
 
   .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:60px 20px; color:var(--gray-400); text-align:center; flex:1; }
   .empty .ic { width:40px; height:40px; border-radius:50%; background:var(--gray-100); display:flex; align-items:center; justify-content:center; color:var(--gray-status); font-size:18px; margin-bottom:12px; }
+  /* ── v6.5 帮助中心（Help Hub）── */
+  .help-hub{display:flex;gap:18px;padding:18px;align-items:flex-start}
+  .help-side{width:248px;flex-shrink:0;border-right:.5px solid var(--gray-200);padding-right:14px}
+  .help-main{flex:1;min-width:0}
+  .help-idx{display:flex;flex-direction:column;gap:2px;max-height:62vh;overflow:auto}
+  .help-idx-item{padding:7px 9px;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;gap:1px}
+  .help-idx-item:hover{background:var(--gray-50)}
+  .help-idx-item.active{background:var(--accent-weak)}
+  .help-idx-item b{font-size:12px;color:var(--gray-600);font-weight:600}
+  .help-idx-item span{font-size:10px;color:var(--gray-400);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media(max-width:768px){ .help-hub{flex-direction:column} .help-side{width:100%;border-right:none;border-bottom:.5px solid var(--gray-200);padding-right:0;padding-bottom:10px} }
 
   /* 模态 */
   .mask { position:fixed; inset:0; background:rgba(0,0,0,.32); display:none; align-items:center; justify-content:center; z-index:50; }
@@ -639,6 +650,7 @@
               <button class="btn sm meta" onclick="toggleInterview()">了解我</button>
               <button class="btn sm meta" onclick="toggleProfile()">画像</button>
               <button class="btn sm meta" onclick="openDistillOthers()">蒸馏他人</button>
+              <button class="btn sm meta" onclick="openSubjectManager()">管理克隆体</button>
               <button class="btn sm meta" onclick="showMetaInfo()">这是谁</button>
             </div>
           </div>
@@ -841,6 +853,11 @@
             <button class="btn sm" onclick="showAddMemory()">手动添加</button>
             <button class="btn sm ghost" onclick="doCleanup('memory',this)">清空记忆</button>
           </div>
+          <div style="display:flex;gap:8px;margin:4px 0 8px;align-items:center;flex-wrap:wrap">
+            <input id="memSearch" placeholder="搜索记忆…" oninput="filterMemory()" style="flex:1;min-width:160px;padding:5px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px">
+            <span id="memStats" style="font-size:11px;color:var(--gray-400);white-space:nowrap"></span>
+          </div>
+          <div id="memChips" style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap"></div>
           <div id="memList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
           <!-- v5.0 移动端：更多抽屉（收纳非主导航工具页） -->
           <div class="mask" id="mobileMoreMask" style="display:none" onclick="if(event.target===this)closeMobileMore()">
@@ -1229,6 +1246,108 @@ const META_PID = '__meta__';
 const STATUS_LABEL = { green:'运行中', red:'阻塞中', amber:'已暂停' };
 const PHASES = ['requirement','ui','code','test','done'];
 const PHASE_NAMES = { requirement:'需求澄清', ui:'UI/交互定稿', code:'编码实现', test:'测试部署', done:'完成' };
+
+/* ── 产品内引导内容源（v6.5 引导四件套）──
+   16 模块：空状态文案 empty + 帮助中心短文 help。官网 fenshen-docs 图文文档同源派生（暂挂起）。
+   受 meta_settings.in_app_guide_enabled 门控；关 → 所有引导回退原始界面（零侵入）。 */
+const IN_APP_GUIDE = {
+  chat: {
+    name:'项目群聊', tagline:'每个项目 = 一个群聊，元神在此调度团队',
+    empty:{ title:'还没有项目', desc:'在群里用一句话描述目标，元神会自动建项目、拆任务、派角色并跟踪进度。', action:{label:'＋ 成立第一个项目', fn:'openWizard'} },
+    help:{ title:'项目群聊怎么用', body:'分身以「群聊」管理项目：在群里说目标（如「做一个落地页」），元神建项目、拆任务、派单，进度同步到「项目看板」。@元神 随时下达指令；顶部可切换阶段 / 冻结 / 修改单 / 快照。', tips:['点右上「＋」成立第一个项目','分栏里看进程轨迹与看板','群聊消息即项目上下文，刷新不丢'], docUrl:null }
+  },
+  cockpit: {
+    name:'元神驾驶舱', tagline:'元神状态总览：续航 / 战队 / 项目 / 自进化',
+    empty:null,
+    help:{ title:'元神驾驶舱', body:'驾驶舱是元神的「总控面板」：实时展示续航模式（自动驾驶 / 正常 / 休息）、战队成员、在跑项目与自进化进度。元神用 8 态状态机管理精力，按作息休眠、关键路径优先。', tips:['看「实时指标」了解元神在忙什么','自动驾驶模式下元神替代你持续推进','点「元神续航」可切换模式与预算'], docUrl:null }
+  },
+  meta: {
+    name:'元神 · 我的分身', tagline:'培养你的人格分身：访谈 / 上传 / 画像',
+    empty:null,
+    help:{ title:'元神是什么', body:'元神是你的数字克隆体总管，默认就是能干活的技术 PM 工具人——开箱即用。你越通过访谈 / 上传资料 / 闲聊喂养它，它越像你。手机端最容易养成它。', tips:['点「了解我」回答访谈（最省事）','上传简历 / 聊天记录 / 笔记做蒸馏','镜像校验让绑定越做越牢'], docUrl:null }
+  },
+  roles: {
+    name:'角色库', tagline:'团队里的专才：架构 / 后端 / 前端 / 测试',
+    empty:{ title:'还没有角色', desc:'角色是团队里的专才，各有专属技能与门禁。元神派单时自动选人，你也能手动添加。', action:{label:'＋ 添加角色', sec:'roles'} },
+    help:{ title:'角色库', body:'每个角色是一份「职责 + 技能 + 门禁」的配置。元神接到任务后，按职责自动派给最合适的人；危险操作需真人审批（approval_mode）。', tips:['预置角色覆盖研发全链路','手动加角色时写清 mandate 与门禁','门禁决定它能动什么、不能动什么'], docUrl:null }
+  },
+  resources: {
+    name:'公共资源库', tagline:'跨项目共享的资料 / 接口 / 凭证',
+    empty:{ title:'还没有资源', desc:'资源是团队跨项目共享的资料、接口或凭证。授权后角色才能调用。', action:{label:'去资源库授权', sec:'resources'} },
+    help:{ title:'公共资源库', body:'把常用的接口文档、素材、外部服务凭证登记为资源，并做授权开关。授权后，相关角色在任务中可调用，未授权则不可见。', tips:['敏感凭证务必走授权开关','按类别（文档 / 素材 / 服务）归档','授权状态可随时开 / 关'], docUrl:null }
+  },
+  models: {
+    name:'模型设置', tagline:'为元神与每个角色指定 LLM 供应商',
+    empty:null,
+    help:{ title:'模型设置', body:'为元神和每个角色单独指定供应商（DeepSeek / OpenAI / Claude / 通义千问 / 本地 Ollama 等）与密钥，存于本机。不同角色可用不同模型，平衡成本与能力。', tips:['元神默认用 deepseek-v4-flash','为编码角色配更强模型提质量','密钥仅存本机，不上传'], docUrl:null }
+  },
+  terminal: {
+    name:'终端', tagline:'元神以你的最高权限在本机执行命令',
+    empty:null,
+    help:{ title:'终端', body:'元神可在你的电脑上执行命令（/api/exec），用于跑测试、启服务、改文件。危险命令触发审批门，全量审计日志可追溯。', tips:['危险命令需真人确认（approval_mode）','所有执行有审计日志','本地最高权限，请谨慎授权'], docUrl:null }
+  },
+  browser: {
+    name:'浏览器', tagline:'浏览器自动化：打开网页 / 填表 / 抓取',
+    empty:null,
+    help:{ title:'浏览器自动化', body:'元神能驱动浏览器完成打开页面、填表、点击、抓取信息等操作，用于调研、回归、数据收集。操作有记录，可回放。', tips:['适合网页调研与表单操作','操作过程可回放审计','敏感站点注意授权范围'], docUrl:null }
+  },
+  board: {
+    name:'项目看板', tagline:'模块 × 阶段的矩阵，项目的总览图',
+    empty:{ title:'还没有看板数据', desc:'看板把项目拆成「模块（功能聚合）× 阶段（流程时间线）」的矩阵。先选一个项目，或成立新项目后自动生成。', action:{label:'去项目群聊', sec:'chat'} },
+    help:{ title:'项目看板', body:'看板是项目的「总览图」：横轴模块、纵轴阶段，每个格子是可点击的任务单元。点格子看版本、定位群聊、做影响分析。支持战略 / 管理 / 执行三种视角与状态色 / 技术层色 / 负责人色。', tips:['点格子 → 🕑 版本冻结确认基线','点格子 → 🎯 定位群聊对齐任务','🌊 影响分析评估改动波及面'], docUrl:null }
+  },
+  cleanup: {
+    name:'清理中心', tagline:'上下文管理与本地数据清理',
+    empty:null,
+    help:{ title:'清理中心', body:'随使用增长，上下文与本地文件会膨胀。清理中心帮你压缩对话上下文、删除冗余草稿与临时文件，保持元神「轻装上阵」，省 token、降长上下文代价。', tips:['定期清理可显著降低 token 消耗','「磨」压缩保留全历史（无损）','删除操作有预览与撤销'], docUrl:null }
+  },
+  memory: {
+    name:'长期记忆', tagline:'从对话提炼、跨会话保留的事实',
+    empty:{ title:'暂无长期记忆', desc:'长期记忆是跨会话保留的「关于你 / 关于项目」的事实。元神会从对话自动提炼，你也能手动添加。', action:{label:'去元神窗喂点料', sec:'meta'} },
+    help:{ title:'长期记忆', body:'长期记忆让元神「记得你」：你的利益关切、决策倾向、项目背景。它从对话自动提炼，你也能手动添加与修正。记忆用于个性化回应与蒸馏。', tips:['从对话自动提炼，也可手动加','画像越全，元神越像你','可逐条删除或修正'], docUrl:null }
+  },
+  skills: {
+    name:'技能库', tagline:'把可复用流程沉淀成技能件',
+    empty:{ title:'暂无技能', desc:'技能是把重复流程固化成的可复用件。对话中反复出现的操作会被自动提炼，你也能手动添加。', action:{label:'去技能库添加', sec:'skills'} },
+    help:{ title:'技能库', body:'技能 = 一段可复用的工作流（带步骤与触发条件）。元神在对话中遇到相似任务会自动调用；你也能手动创建、版本化、启停。技能让团队越干越快。', tips:['从对话自动提炼重复流程','支持版本管理与启停','技能可被多个角色共享'], docUrl:null }
+  },
+  experiences: {
+    name:'经验库', tagline:'成功 / 踩坑案例，类脑自进化燃料',
+    empty:{ title:'暂无经验', desc:'经验是「目标 → 尝试 → 效果」的案例。成功与踩坑都会被记录，日后同类任务元神自动召回。', action:{label:'去经验库添加', sec:'experiences'} },
+    help:{ title:'经验库', body:'经验库是类脑自进化的燃料：每条经验记录场景、做法与效果。元神在日后同类任务自动召回相关经验，并经由质量门安全晋升固化——错误不会复利。', tips:['成功与踩坑都要记','召回是自动的，无需手动','质量门防止错误经验被固化'], docUrl:null }
+  },
+  evolution: {
+    name:'进化中心', tagline:'经验召回 / 记忆面板 / 自进化审计',
+    empty:null,
+    help:{ title:'进化中心', body:'进化中心是元神「长得更快」的中枢：查看经验召回命中、记忆面板（总量 / 分类 / 已固化 / 淘汰 / 护栏拦截）、自进化 lineage 可追溯。所有晋升都经质量门，错误经验被护栏拦截。', tips:['记忆面板看经验全貌','lineage 可审计每条经验来源','护栏拦截的危险经验不晋升'], docUrl:null }
+  },
+  autopilot: {
+    name:'元神续航', tagline:'自动驾驶 / 正常 / 休息 三模式调度',
+    empty:null,
+    help:{ title:'元神续航', body:'续航调度器决定元神「什么时候干活、干多猛」：自动驾驶模式替代你持续推进项目；正常模式按需响应；休息模式按作息休眠、只巡检卡死。还有并发、token、连败熔断等护栏。', tips:['自动驾驶：元神替代你持续推进','休息：按作息休眠，护你电脑','可设每小时 / 每日预算上限'], docUrl:null }
+  },
+  about: {
+    name:'帮助中心', tagline:'分身使用手册与帮助入口',
+    empty:null,
+    help:{ title:'欢迎使用分身', body:'分身是一个「群聊形态 AI 团队总管」：每项目一个群聊，元神调度角色、跟踪进度、交付成果。本帮助中心按模块提供使用说明；官网 fenshen-docs 完整图文文档即将上线。', tips:['左侧每个模块都能在这里查说明','新手可点「🚀 开始新手导览」','有问题随时 @元神'], docUrl:null }
+  }
+};
+// 引导是否开启（boot 时由 /api/meta/settings 写入 window.IN_APP_GUIDE_ON）
+function guideOn(){ return window.IN_APP_GUIDE_ON === true; }
+// 空状态渲染：引导开启且命中内容 → 富空状态；否则回退原文案（零侵入）。
+function guideEmpty(key, fallback){
+  const g = IN_APP_GUIDE[key];
+  if(!guideOn() || !g || !g.empty) return fallback || '';
+  const e = g.empty;
+  let act = '';
+  if(e.action){
+    if(e.action.fn) act = `<button class="btn sm meta" style="margin-top:10px" onclick="${escapeHtml(e.action.fn)}()">${escapeHtml(e.action.label)}</button>`;
+    else if(e.action.sec) act = `<button class="btn sm meta" style="margin-top:10px" onclick="goSec('${escapeHtml(e.action.sec)}')">${escapeHtml(e.action.label)}</button>`;
+  }
+  return `<div class="empty"><div class="ic">💡</div><div style="font-size:14px;color:var(--gray-600);font-weight:600;margin-bottom:4px">${escapeHtml(e.title)}</div><div style="font-size:12px;color:var(--gray-400);max-width:320px;line-height:1.6">${escapeHtml(e.desc)}</div>${act}</div>`;
+}
+// 导航到某模块（用于空状态 CTA）
+function goSec(sec){ const nav=document.querySelector('.navitem[data-sec="'+sec+'"]'); if(nav) nav.click(); else toast('未找到该模块'); }
 
 /* ── 公共工具：转义 / 提示 / 忙碌态 ───────────────────────────────
    前端和能执行命令的接口同源，所以任何用户输入、模型输出、文件名、
@@ -1754,13 +1873,15 @@ async function renderRoles(){ const g=document.getElementById('roleGrid'); g.inn
   g.innerHTML='';
   roles.forEach(r=>{ const c=document.createElement('div'); c.className='card';
     c.innerHTML=`<div class="ch"><div class="av" style="background:var(--meta-700)">${escapeHtml(String(r.name||r.id||'?')[0])}</div><div><div class="nm">${escapeHtml(r.name||r.id)}</div><div class="rl">${escapeHtml(r.id)}</div></div></div>
-      <div class="desc">${escapeHtml(r.mandate||'—')}</div><div class="kv">门禁：${escapeHtml(r.gate||'—')}</div><div>${(r.skills||'').split(',').filter(s=>s.trim()).map(s=>`<span class="pill">${escapeHtml(s.trim())}</span>`).join('')}</div>`; g.appendChild(c); }); }
+      <div class="desc">${escapeHtml(r.mandate||'—')}</div><div class="kv">门禁：${escapeHtml(r.gate||'—')}</div><div>${(r.skills||'').split(',').filter(s=>s.trim()).map(s=>`<span class="pill">${escapeHtml(s.trim())}</span>`).join('')}</div>`; g.appendChild(c); });
+  if(!roles.length){ g.innerHTML=guideEmpty('roles','<div style="color:var(--gray-400);padding:24px;text-align:center">暂无角色，先添加一个</div>'); } }
 async function renderResources(){ const g=document.getElementById('resGrid'); g.innerHTML='加载中…';
   try{ const res=await fetch('/api/resources'); resources=await res.json(); }catch(e){ console.error(e); resources=[]; }
   g.innerHTML='';
   resources.forEach(r=>{ const c=document.createElement('div'); c.className='card';
     c.innerHTML=`<div class="ch"><div class="av" style="background:var(--gray-status)">${escapeHtml(String(r.category||'?')[0])}</div><div><div class="nm">${escapeHtml(r.name)}</div><div class="rl">${escapeHtml(r.category||'')}</div></div></div>
-      <label class="switch ${r.auth?'on':''}" onclick="toggleRes('${jsStr(r.id)}')"><span class="tk"></span>${r.auth?'已授权':'未授权'}</label>`; g.appendChild(c); }); }
+      <label class="switch ${r.auth?'on':''}" onclick="toggleRes('${jsStr(r.id)}')"><span class="tk"></span>${r.auth?'已授权':'未授权'}</label>`; g.appendChild(c); });
+  if(!resources.length){ g.innerHTML=guideEmpty('resources','<div style="color:var(--gray-400);padding:24px;text-align:center">暂无资源，去添加并授权</div>'); } }
 async function toggleRes(id){ await fetch('/api/resources/'+id+'/auth',{method:'POST'}); renderResources(); }
 
 /* 新建角色 */
@@ -1914,6 +2035,76 @@ async function openDistillOthers(){
     }
     toast(`已创建「${name}」的数字克隆体对象。现在可在“画像”里切换对象，并上传${name}的聊天记录/演讲稿/工作文档进行蒸馏。`);
     curProfileSubject=sid; toggleProfile();
+  });
+}
+/* ── v6.5 蒸馏克隆体授权管理 UI ── */
+async function openSubjectManager(){
+  const m=document.createElement('div'); m.className='mask'; m.style.zIndex=70;
+  m.innerHTML=`<div class="modal" style="max-width:560px;max-height:86vh;overflow:auto">
+    <div class="mh">蒸馏克隆体 · 授权管理 <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="this.closest('.mask').remove()">✕</span></div>
+    <div class="mb">
+      <div style="font-size:11px;color:var(--gray-400);margin-bottom:8px">元神宪法：蒸馏他人须获其明示授权，否则克隆体不可用于任务；撤销/拒绝将冻结其事实（保留审计）。</div>
+      <div id="subjList"></div>
+      <div style="margin-top:12px;border-top:.5px solid var(--gray-200);padding-top:10px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:6px">＋ 新建克隆体（他人 · 赛博人类）</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <input id="newSubjName" placeholder="姓名/昵称（如：同事小王）" style="flex:1;min-width:150px;padding:5px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px">
+          <input id="newSubjProof" placeholder="授权证据（口头/微信/公开）" style="flex:1;min-width:150px;padding:5px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px">
+          <button class="btn sm primary" onclick="createSubjectFromMgr()">创建并授权</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  m.onclick=e=>{ if(e.target===m) m.remove(); };
+  document.body.appendChild(m);
+  await renderSubjectList();
+}
+async function renderSubjectList(){
+  const el=document.getElementById('subjList'); if(!el) return;
+  try{
+    const d=await apiJson('/api/meta/distill/subjects');
+    const subs=d.subjects||[];
+    if(!subs.length){ el.innerHTML='<div style="color:var(--gray-400);font-size:12px">暂无克隆体</div>'; return; }
+    const badge=s=>{ const x={owner:['本人','#d4edda','#155724'],authorized:['已授权','#d4edda','#155724'],pending:['待授权','#fff3cd','#856404'],revoked:['已撤销','#f8d7da','#721c24'],denied:['已拒绝','#f8d7da','#721c24']}[s]||[s,'#eee','#333']; return `<span style="font-size:10px;padding:2px 7px;border-radius:8px;background:${x[1]};color:${x[2]}">${x[0]}</span>`; };
+    el.innerHTML=subs.map(s=>{
+      const pct=Math.round((s.binding_progress||0)*100);
+      const isSelf=s.target_type==='self';
+      const acts=isSelf?'<span style="font-size:11px;color:var(--gray-400)">默认本体</span>':
+        `<button class="btn sm" onclick="mgrAuth('${escapeHtml(s.id)}','authorized')">授权</button>
+         <button class="btn sm" onclick="mgrAuth('${escapeHtml(s.id)}','pending')">待定</button>
+         <button class="btn sm ghost" onclick="mgrAuth('${escapeHtml(s.id)}','revoked')">撤销</button>
+         <button class="btn sm ghost" onclick="mgrAuth('${escapeHtml(s.id)}','denied')">拒绝</button>`;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:.5px solid var(--gray-100)">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:var(--gray-800)">${escapeHtml(s.name)} ${s.target_type==='other'?'<span style="font-size:10px;color:var(--gray-400)">· 赛博人类</span>':''}</div>
+          <div style="font-size:10px;color:var(--gray-400);margin-top:2px">绑定 ${pct}% · ${(s.created_at||'').slice(0,10)}</div>
+        </div>
+        ${badge(s.authorization_status)}
+        <div style="display:flex;gap:4px;flex-wrap:wrap">${acts}</div>
+      </div>`;
+    }).join('');
+  }catch(e){ el.innerHTML='<div style="color:var(--gray-400)">加载失败：'+e+'</div>'; }
+}
+async function mgrAuth(sid,status){
+  let proof='';
+  if(status==='authorized'){ proof=prompt('记录授权证据（口头同意/微信确认/公开演讲等）：'); if(proof===null) return; }
+  await withBusy(null,'处理中…',async()=>{
+    const r=await apiJson('/api/meta/distill/authorize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:sid,status,proof:proof.trim()})});
+    if(r.ok){ toast('已更新授权状态','ok'); await renderSubjectList(); await loadSubjectsIntoSelect(); }
+    else toast(r.error||'失败','err');
+  });
+}
+async function createSubjectFromMgr(){
+  const name=(document.getElementById('newSubjName').value||'').trim(); if(!name){ toast('请填写名称'); return; }
+  const proof=(document.getElementById('newSubjProof').value||'').trim();
+  await withBusy(null,'创建中…',async()=>{
+    const r=await apiJson('/api/meta/distill/subjects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    if(!r.ok){ toast(r.error||'创建失败','err'); return; }
+    const sid=r.subject.id;
+    if(proof){ await apiJson('/api/meta/distill/authorize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:sid,status:'authorized',proof})}); }
+    toast('已创建克隆体'+(proof?'并授权':'（待授权）'),'ok');
+    document.getElementById('newSubjName').value=''; document.getElementById('newSubjProof').value='';
+    await renderSubjectList(); await loadSubjectsIntoSelect();
   });
 }
 
@@ -2112,6 +2303,7 @@ async function loadMetaBoard(){
 async function loadPatrolSettings(){
   try{
     const r=await fetch('/api/meta/settings'); const s=await r.json();
+    window.IN_APP_GUIDE_ON = !!s.in_app_guide_enabled;
     const en=document.getElementById('patrolEnabled'); if(en) en.checked=!!s.patrol_enabled;
     const iv=document.getElementById('patrolInterval'); if(iv) iv.value=String(s.patrol_interval||60);
     const lv=document.getElementById('patrolLevel'); if(lv) lv.value=s.patrol_level||'red';
@@ -2276,6 +2468,8 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
   if(n.dataset.sec==='cockpit'){ renderCockpit(); }
   // E7 元神记忆面板：切过来拉取经验库聚合
   if(n.dataset.sec==='evolution'){ loadMemPanel(); }
+  // v6.5 帮助中心：切过来渲染 Help Hub
+  if(n.dataset.sec==='about'){ showAbout(); }
 });
 
 /* E7 元神记忆面板：读取经验库聚合（受 memory_panel_enabled 门控，关→后端返回 403 前端隐藏） */
@@ -2416,23 +2610,59 @@ function exportAnnot(){ let md='# 修改单（分身 v1 实装版）\n\n'; docum
   toast('已导出 '+annotCount+' 条修改单（见控制台）'); console.log(md); }
 
 /* 原型说明 */
-function showAbout(){ document.querySelectorAll('.navitem').forEach(x=>x.classList.remove('active')); document.querySelectorAll('.section').forEach(s=>s.classList.remove('active')); document.getElementById('sec-about').classList.add('active');
-  document.getElementById('aboutBody').innerHTML=`
-    <h2>分身 v1 · 实装版说明</h2>
-    <p>本客户端为阶段1 实装，四机制已接入本地后端（FastAPI + SQLite，端口 8002），数据持久化在桌面本地。</p>
-    <h3>已落地的数据链路</h3>
-    <ul>
-      <li><b>项目群聊</b>：房间列表 / 消息 / 元神「检查·中止·重派」均读写后端 <code>/api/projects</code> · <code>/api/messages</code>，刷新不丢</li>
-      <li><b>成立项目</b>：向导「成立团队」落库 <code>/api/projects</code>，重新拉取房间</li>
-      <li><b>角色库 / 资源库</b>：<code>/api/roles</code> · <code>/api/resources</code>，授权开关落库</li>
-      <li><b>元神 · 我的分身</b>：私聊走 <code>/api/meta/chat</code>（可插拔多模型 + 人格 grounding），资料库走 <code>/api/meta/files</code></li>
-      <li><b>模型设置</b>：为元神与每个角色单独指定供应商（DeepSeek / OpenAI / Claude / Ollama 本地）+ Key，存本地</li>
-      <li><b>终端</b>：元神以你的最高权限在电脑上执行命令（<code>/api/exec</code>），危险命令需确认，全量审计日志</li>
-    </ul>
-    <h3>标注模式</h3>
-    <p>开启后点击任意位置 → 记录组件/坐标 → 弹框录意见 → 生成修改单 → 导出 Markdown。</p>
-    <h3>手机 H5 访问</h3>
-    <p>桌面起服务后，手机同局域网浏览器打开 <code>http://&lt;桌面局域网IP&gt;:8002/</code> 即可使用，已做响应式适配。</p>`; }
+let _helpCur='about';
+function showAbout(){ document.querySelectorAll('.navitem').forEach(x=>x.classList.remove('active')); document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  const sec=document.getElementById('sec-about'); if(sec) sec.classList.add('active');
+  const nav=document.querySelector('.navitem[data-sec="about"]'); if(nav) nav.classList.add('active');
+  const idx=Object.keys(IN_APP_GUIDE).map(k=>{
+    const m=IN_APP_GUIDE[k];
+    return `<div class="help-idx-item" data-key="${k}" onclick="showHelpModule('${k}')"><b>${escapeHtml(m.name)}</b><span>${escapeHtml(m.tagline||'')}</span></div>`;
+  }).join('');
+  const gOn=window.IN_APP_GUIDE_ON===true;
+  document.getElementById('aboutBody').innerHTML = `
+    <div class="help-hub">
+      <div class="help-side">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+          <div style="font-weight:700;font-size:15px">帮助中心</div>
+          <button class="btn sm meta" onclick="openOnboardTour()">🚀 新手导览</button>
+        </div>
+        <div style="font-size:11px;color:var(--gray-400);margin-bottom:10px">分身使用手册 · 按模块查阅</div>
+        <input id="helpSearch" placeholder="搜索功能 / 关键词…" oninput="searchHelp(this.value)" style="width:100%;padding:7px 10px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px;margin-bottom:10px;box-sizing:border-box">
+        <div class="help-idx">${idx}</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-500);margin-top:12px;cursor:pointer"><input type="checkbox" id="guideToggle" ${gOn?'checked':''} onchange="saveGuide()"> 显示新手引导（空状态提示 / 导览）</label>
+        <div style="margin-top:10px;font-size:11px;color:var(--gray-400);line-height:1.6">还有疑问？官网图文文档（fenshen-docs）即将上线，届时会有更完整的教程与外部触发器说明。</div>
+      </div>
+      <div class="help-main" id="helpMain"></div>
+    </div>`;
+  showHelpModule(_helpCur);
+}
+function showHelpModule(k){
+  _helpCur=k;
+  const m=IN_APP_GUIDE[k]; if(!m) return;
+  document.querySelectorAll('.help-idx-item').forEach(x=>x.classList.toggle('active', x.dataset.key===k));
+  const h=m.help||{};
+  const tips=(h.tips||[]).map(t=>`<li style="margin:3px 0">${escapeHtml(t)}</li>`).join('');
+  const doc = h.docUrl ? `<a href="${escapeHtml(h.docUrl)}" target="_blank" style="color:var(--accent)">查看官网完整文档 →</a>` : `<span style="font-size:11px;color:var(--gray-400)">📄 官网图文文档即将上线（fenshen-docs）</span>`;
+  const main=document.getElementById('helpMain'); if(!main) return;
+  main.innerHTML = `
+    <div style="font-size:16px;font-weight:700;margin-bottom:2px">${escapeHtml(m.name)}</div>
+    <div style="font-size:11px;color:var(--gray-400);margin-bottom:12px">${escapeHtml(m.tagline||'')}</div>
+    <div style="font-size:13px;line-height:1.8;color:var(--gray-600)">${escapeHtml(h.body||'')}</div>
+    ${tips?`<div style="margin-top:12px"><b style="font-size:12px">上手要点</b><ul style="font-size:12px;color:var(--gray-600);padding-left:18px;margin-top:4px">${tips}</ul></div>`:''}
+    <div style="margin-top:14px;padding-top:10px;border-top:.5px dashed var(--gray-200)">${doc}</div>`;
+}
+function searchHelp(q){
+  q=(q||'').trim().toLowerCase();
+  document.querySelectorAll('.help-idx-item').forEach(x=>{
+    const k=x.dataset.key||''; const m=IN_APP_GUIDE[k]||{};
+    const hay=(m.name+' '+(m.tagline||'')+' '+((m.help&&m.help.body)||'')+' '+((m.help&&m.help.tips)||[]).join(' ')).toLowerCase();
+    x.style.display = (!q || hay.includes(q)) ? '' : 'none';
+  });
+}
+async function saveGuide(){
+  const el=document.getElementById('guideToggle'); const on=el?el.checked:false;
+  try{ await fetch('/api/meta/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({in_app_guide_enabled:on})}); window.IN_APP_GUIDE_ON=!!on; toast(on?'✅ 已开启新手引导':'已关闭新手引导（恢复原始界面）','ok'); }catch(e){ toast('保存失败：'+errText(e)); }
+}
 
 /* ── 模型设置 ── */
 async function renderModels(){
@@ -2880,7 +3110,7 @@ const TOUR_STEPS=[
 ];
 function openTour(){ window._tour={active:true, idx:0, path:TOUR_STEPS}; renderTour(); }
 function nextTour(){ if(!window._tour||!window._tour.active) return; if(window._tour.idx>=window._tour.path.length-1){ closeTour(); return; } window._tour.idx++; renderTour(); }
-function closeTour(){ window._tour={active:false, idx:0, path:[]}; document.getElementById('tourOverlay')?.remove(); }
+function closeTour(){ window._tour={active:false, idx:0, path:[]}; localStorage.setItem('fs_guide_toured','1'); document.getElementById('tourOverlay')?.remove(); }
 function renderTour(){
   const t=window._tour; if(!t||!t.active) return;
   const step=t.path[t.idx];
@@ -2899,6 +3129,16 @@ function renderTour(){
   ov.onclick=(e)=>{ if(e.target===ov) closeTour(); };
   document.body.appendChild(ov);
 }
+// v6.5 新手导览：覆盖 6 大核心模块（首次使用自动触发，受 in_app_guide_enabled 门控）
+const ONBOARD_TOUR_STEPS=[
+  {t:'① 项目群聊：用说话管项目', d:'在群里说出目标（如「做一个落地页」），元神会自动建项目、拆任务、派给角色并跟踪进度。所有进度同步到「项目看板」。'},
+  {t:'② 元神：你的数字分身总管', d:'元神默认就是能干活的技术 PM 工具人；你越喂它（访谈 / 上传资料），它越像你。点左侧「元神 · 我的分身」培养。'},
+  {t:'③ 角色库：团队的专才', d:'架构 / 后端 / 前端 / 测试……每个角色有专属技能与门禁。元神派单时自动选人，你也能手动加角色。'},
+  {t:'④ 项目看板：模块 × 阶段矩阵', d:'看板把项目拆成「模块 × 阶段」的格子。点格子看任务、版本、定位群聊、做影响分析。点左侧「项目看板」体验。'},
+  {t:'⑤ 技能库：把流程沉淀成可复用件', d:'对话中重复出现的流程会被自动提炼成技能；手动也能加。技能让团队越干越快。'},
+  {t:'⑥ 经验库 + 进化中心：类脑自进化', d:'成功 / 踩坑案例沉淀为经验，元神在日后同类任务自动召回，并安全晋升固化——错误不会复利。'},
+];
+function openOnboardTour(){ window._tour={active:true, idx:0, path:ONBOARD_TOUR_STEPS}; renderTour(); }
 
 // ── 群聊↔看板联动：从群聊里带 task_id 的系统动态，跳转到对应看板卡片 ──
 async function openTaskCard(tid){
@@ -3414,19 +3654,40 @@ async function compressContextNow(btn){
 }
 
 /* ── 长期记忆 ── */
+let allMem = [];
+let memCatFilter = '', memSearchTerm = '';
 async function loadMemory(){
   const el=document.getElementById('memList'); if(!el)return;
-  try{ const r=await fetch('/api/memory'); const rows=await r.json();
-    if(!rows.length){ el.innerHTML='<div style="color:var(--gray-400)">暂无长期记忆，可从对话提炼或手动添加</div>'; return; }
-    el.innerHTML=rows.map(m=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-bottom:0.5px solid var(--gray-200)">
-      <span style="font-size:10px;background:var(--gray-100);padding:2px 6px;border-radius:4px;color:var(--gray-400);white-space:nowrap;margin-top:2px">${escapeHtml(m.category)}</span>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;color:var(--gray-900);word-break:break-all">${escapeHtml(m.content)}</div>
-        <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${escapeHtml(m.source||'')} · ${escapeHtml(String(m.ts||'').slice(0,10))}</div>
-      </div>
-      <button class="btn sm" style="flex-shrink:0" onclick="deleteMem(${m.id})">删除</button>
-    </div>`).join('');
+  try{ const r=await fetch('/api/memory'); allMem=await r.json();
+    renderMemStats(); renderMemChips(); renderMemList();
   }catch(e){ el.textContent='加载失败'; }
+}
+function renderMemStats(){
+  const el=document.getElementById('memStats'); if(el) el.textContent = allMem.length ? (allMem.length+' 条记忆') : '';
+}
+function renderMemChips(){
+  const el=document.getElementById('memChips'); if(!el) return;
+  const cats={}; allMem.forEach(m=>{ cats[m.category]=(cats[m.category]||0)+1; });
+  const keys=Object.keys(cats);
+  el.innerHTML = '<button class="btn sm '+(memCatFilter===''?'primary':'')+'" onclick="setMemCat(\'\')">全部</button>'+
+    keys.map(c=>`<button class="btn sm ${memCatFilter===c?'primary':''}" onclick="setMemCat('${escapeHtml(c)}')">${escapeHtml(c)} ${cats[c]}</button>`).join('');
+}
+function setMemCat(c){ memCatFilter=c; renderMemChips(); renderMemList(); }
+function filterMemory(){ memSearchTerm=(document.getElementById('memSearch').value||'').trim().toLowerCase(); renderMemList(); }
+function renderMemList(){
+  const el=document.getElementById('memList'); if(!el) return;
+  let rows=allMem;
+  if(memCatFilter) rows=rows.filter(m=>m.category===memCatFilter);
+  if(memSearchTerm) rows=rows.filter(m=>(m.content||'').toLowerCase().includes(memSearchTerm)||(m.source||'').toLowerCase().includes(memSearchTerm));
+  if(!rows.length){ el.innerHTML=guideEmpty('memory','<div style="color:var(--gray-400)">没有匹配的回忆，换个关键词或分类试试</div>'); return; }
+  el.innerHTML=rows.map(m=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-bottom:0.5px solid var(--gray-200)">
+    <span style="font-size:10px;background:var(--gray-100);padding:2px 6px;border-radius:4px;color:var(--gray-400);white-space:nowrap;margin-top:2px">${escapeHtml(m.category)}</span>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:13px;color:var(--gray-900);word-break:break-all">${escapeHtml(m.content)}</div>
+      <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${escapeHtml(m.source||'')} · ${escapeHtml(String(m.ts||'').slice(0,10))}</div>
+    </div>
+    <button class="btn sm" style="flex-shrink:0" onclick="deleteMem(${m.id})">删除</button>
+  </div>`).join('');
 }
 async function deleteMem(id){
   try{ await fetch('/api/memory/'+id,{method:'DELETE'}); loadMemory(); }
@@ -3455,7 +3716,7 @@ let skills = [];
 async function loadSkills(){
   const el=document.getElementById('skillList'); if(!el)return;
   try{ const r=await fetch('/api/skills'); skills=await r.json();
-    if(!skills.length){ el.innerHTML='<div style="color:var(--gray-400)">暂无技能。可从对话自动提炼，或手动添加一个可复用流程。</div>'; return; }
+    if(!skills.length){ el.innerHTML=guideEmpty('skills','<div style="color:var(--gray-400)">暂无技能。可从对话自动提炼，或手动添加一个可复用流程。</div>'); return; }
     el.innerHTML=skills.map(s=>{
       let steps=''; try{ steps=JSON.parse(s.steps||'[]').map((x,i)=>`<div style="padding:2px 0">${i+1}. ${esc(x)}</div>`).join(''); }catch(e){}
       return `<div class="card" style="margin-bottom:10px">
@@ -3542,7 +3803,7 @@ function _wbar(label, v){
 async function loadExperiences(cat){
   const el=document.getElementById('expList'); if(!el)return;
   try{ const r=await fetch('/api/experiences'+(cat?'?category='+cat:'')); experiences=await r.json();
-    if(!experiences.length){ el.innerHTML='<div style="color:var(--gray-400)">暂无经验。可从对话自动提炼，或手动添加一条成功/踩坑案例。</div>'; return; }
+    if(!experiences.length){ el.innerHTML=guideEmpty('experiences','<div style="color:var(--gray-400)">暂无经验。可从对话自动提炼，或手动添加一条成功/踩坑案例。</div>'); return; }
     el.innerHTML=experiences.map(e=>`<div class="card" style="margin-bottom:10px">
       <div class="ch">
         <span style="font-size:10px;padding:2px 8px;border-radius:10px;color:#fff;background:${e.category==='success'?'var(--green)':'var(--red)'}">${e.category==='success'?'✅ 成功':'⚠️ 踩坑'}</span>
@@ -3560,11 +3821,56 @@ async function loadExperiences(cat){
         <span style="color:var(--gray-400)"> · 综合权重越高越优先被召回</span>
       </div>
       <div style="display:flex;gap:6px;margin-top:10px">
+        <button class="btn sm" onclick="openExpDetail(${e.id})">明细</button>
         <button class="btn sm" onclick="openExpEdit(${e.id})">编辑</button>
         <button class="btn sm ghost" onclick="if(confirm('删除该经验？'))deleteExp(${e.id})">删除</button>
       </div>
     </div>`).join('');
     }catch(e){ el.textContent='加载失败'; }
+}
+/* ── 经验明细 + lineage（E5 可追溯）── */
+async function openExpDetail(id){
+  const e=experiences.find(x=>x.id===id); if(!e) return;
+  const m=document.createElement('div'); m.className='mask'; m.style.zIndex=70;
+  m.innerHTML=`<div class="modal" style="max-width:520px;max-height:86vh;overflow:auto">
+    <div class="mh">经验明细 · ${e.category==='success'?'✅ 成功':'⚠️ 踩坑'} <span style="cursor:pointer;color:var(--gray-400);float:right" onclick="this.closest('.mask').remove()">✕</span></div>
+    <div class="mb">
+      <div class="desc"><b>场景</b>：${esc(e.scenario)}</div>
+      ${e.goal?`<div class="desc"><b>目标</b>：${esc(e.goal)}</div>`:''}
+      ${e.attempts?`<div class="desc"><b>尝试</b>：${esc(e.attempts)}</div>`:''}
+      ${e.outcome?`<div class="desc"><b>效果</b>：${esc(e.outcome)}</div>`:''}
+      ${e.lesson?`<div class="desc" style="color:var(--meta-700)"><b>教训</b>：${esc(e.lesson)}</div>`:''}
+      <div class="wbars">${_wbar('权重',e.weight)}${_wbar('信任',e.trust_score)}${_wbar('相关',e.relevance)}${_wbar('时效',e.recency)}${_wbar('反馈',e.explicit_feedback)}</div>
+      <div class="rl" style="margin-top:6px">复用 ${e.frequency||0}${e.persistent?' · 📌持久':''}${e.eliminated?' · 🗑已淘汰':''}${e.unsafe?' · 🛡护栏拦截':''} · 来源 ${esc(e.source||'')} · ${(e.ts||'').slice(0,10)}</div>
+      <div id="expLineage" style="margin-top:10px;border-top:.5px solid var(--gray-200);padding-top:8px;font-size:12px;color:var(--gray-400)">🧬 lineage：加载中…</div>
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn sm" onclick="openExpEdit(${e.id})">编辑</button>
+        <button class="btn sm" onclick="expSignal(${e.id},'use')">标记复用</button>
+        <button class="btn sm" onclick="expSignal(${e.id},'positive')">👍 有用</button>
+        <button class="btn sm ghost" onclick="if(confirm('删除该经验？'))deleteExp(${e.id})">删除</button>
+      </div>
+    </div>
+  </div>`;
+  m.onclick=e=>{ if(e.target===m) m.remove(); };
+  document.body.appendChild(m);
+  try{
+    const r=await fetch('/api/meta/evolution/lineage?eid='+e.id);
+    const el=document.getElementById('expLineage');
+    if(r.status===403){ el.innerHTML='🧬 lineage：未开启 evolution_lineage_enabled（设置 → 进化相关开关）'; return; }
+    const j=await r.json();
+    if(!j.ok){ el.innerHTML='🧬 lineage：'+escapeHtml(j.error||'无'); return; }
+    const L=j.lineage||{};
+    const chain=[['来源任务', L.source_task_id||'—'],['验收结果', L.acceptance_result||'—'],['版本指纹', L.version_fingerprint||'—']];
+    el.innerHTML='<div style="font-weight:600;margin-bottom:6px;color:var(--gray-700)">🧬 经验 lineage（可溯源 · 可回滚）</div>'+
+      '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">'+
+      chain.map((c,i)=>`<div style="background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:8px;padding:4px 8px;font-size:11px"><span style="color:var(--gray-400);display:block">${c[0]}</span><b style="color:var(--gray-700);word-break:break-all">${escapeHtml(String(c[1]))}</b></div>${i<chain.length-1?'<span style="color:var(--gray-400)">→</span>':''}`).join('')+
+      (L.snippet?`<div style="margin-top:6px;font-size:11px;color:var(--gray-500);white-space:pre-wrap;background:var(--gray-50);border-radius:8px;padding:6px 8px">${escapeHtml(L.snippet)}</div>`:'')+
+      (L.persistent?'<div style="margin-top:4px;font-size:11px;color:#34c98e">📌 已固化（persistent）</div>':'');
+  }catch(e){ const el=document.getElementById('expLineage'); if(el) el.textContent='🧬 lineage：加载失败'; }
+}
+async function expSignal(eid,kind){
+  try{ await apiJson('/api/experiences/'+eid+'/signal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind})}); toast('已记录 '+kind,'ok'); }
+  catch(e){ toast('操作失败'); }
 }
 async function toggleExpTree(){
   const t=document.getElementById('expTree'); const b=document.getElementById('btnExpTree');
@@ -3876,6 +4182,16 @@ function onbGo(target){
   toast('培养元神中…（完成后回来点「完成引导」即可解锁）');
 }
 setTimeout(checkOnboarding, 1500);
+// v6.5 新手导览自动触发：引导开启且未看过导览、且非引导中 → 首次进入弹一次
+async function bootGuide(){
+  try{ const s=await (await fetch('/api/meta/settings')).json(); window.IN_APP_GUIDE_ON=!!s.in_app_guide_enabled; }catch(e){}
+  setTimeout(()=>{
+    if(window.IN_APP_GUIDE_ON && !localStorage.getItem('fs_guide_toured') && !window.__ONB_PENDING__){
+      openOnboardTour();
+    }
+  }, 2600);
+}
+setTimeout(bootGuide, 1600);
 
 /* v5.1 移动端信息架构：语音输入（Web Speech → 文字 → 与打字同链路；移动端「按住说话」） */
 function voiceHoldStart(inpId, btnId){
@@ -4146,6 +4462,16 @@ async function renderCockpit(){
     if(!ckFocus) ckFocus = ps[0].id;
   }
   if(ckFocus) loadCockpitProject(ckFocus);
+  // v6.5 KPI 仪表条
+  try{
+    const ap=await apiJson('/api/autopilot/state');
+    const fpAll=ap.focus_paths||{}; let fpCount=0; for(const k in fpAll) fpCount+=(fpAll[k]||[]).length;
+    let memberCount=0;
+    if(ckFocus){ try{ const ms=await apiJson('/api/projects/'+ckFocus+'/members'); memberCount=(ms.members||[]).length; }catch(e){} }
+    const kpis=[['在岗成员',memberCount],['关键路径',fpCount],['休息窗',s.rest_window_active?'激活':'关'],['模式',s.mode||'-'],['今日派单',s.today_dispatched||0]];
+    const kEl=document.getElementById('ckKpis');
+    if(kEl) kEl.innerHTML=kpis.map(k=>`<div style="background:#fff;border:.5px solid var(--gray-200);border-radius:10px;padding:6px 12px;min-width:84px"><div style="font-size:10px;color:var(--gray-400)">${k[0]}</div><div style="font-size:15px;font-weight:600;color:var(--gray-800)">${k[1]}</div></div>`).join('');
+  }catch(e){}
 }
 function ckSelect(pid){ ckFocus = pid; renderCockpit(); }
 function renderCkHistory(hist){
@@ -4470,6 +4796,8 @@ async function delMember(mid){
         <div style="font-size:11px;color:var(--gray-500);line-height:1.3">蒸馏充足度<div id="ckSuffLabel" style="font-size:10px;color:var(--gray-400)">元神懂你多少</div></div>
       </div>
     </div>
+    <!-- v6.5 驾驶舱 KPI 仪表条 -->
+    <div class="ck-kpis" id="ckKpis" style="display:flex;gap:10px;flex-wrap:wrap;padding:10px 16px;background:var(--gray-50);border-bottom:.5px solid var(--gray-200)"></div>
     <!-- 状态轨迹：元神如何走到此刻（事件溯源，来自 /api/meta/state.history） -->
     <div class="ck-hist" id="ckHist"><span class="lbl">状态轨迹：</span><span style="color:var(--gray-400)">加载中…</span></div>
     <div class="ck-body">

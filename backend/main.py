@@ -8930,6 +8930,7 @@ def meta_settings_get():
         "approval_timeout": int(get_setting("approval_timeout", "90")),    # 秒，超时按拒绝
         "bind": "lan" if _lan_mode() else "localhost",
         "lan_enabled": get_setting("lan_enabled", "0") == "1",  # v5.5 局域网一键开关
+        "in_app_guide_enabled": get_setting("in_app_guide_enabled", "1") == "1",  # v6.5 产品内引导开关（默认开：纯增量非破坏，可随时关）
         # v5.2 监控自动兜底：服务端口监控配置 [{name,port,restart_cmd}]
         "services": json.loads(get_setting("services", "[]")),
     }
@@ -9013,6 +9014,7 @@ async def meta_settings_set(req: Request):
         "evolution_record_enabled", "evolution_recall_enabled", "evolution_quality_gate_enabled",
         "evolution_heldout_enabled", "evolution_lineage_enabled", "evolution_guardrail_enabled",
         "cost_visibility_enabled",
+        "in_app_guide_enabled",
         "memory_archive_enabled", "memory_panel_enabled",
     }
     for _k, _v in data.items():
