@@ -31,13 +31,23 @@ def _disk_accessible() -> bool:
     """完全磁盘访问：探测受保护目录（~/.fenshen 数据目录 + 系统保护路径）。"""
     try:
         os.makedirs(os.path.expanduser("~/.fenshen"), exist_ok=True)
-        # 受保护探测：读 macOS 保护目录
+        # 受保护探测：读 macOS 保护目录（Safari 历史等；不存在则试另一个保护路径）
         probe = os.path.expanduser("~/Library/Safari")
         if os.path.isdir(probe):
             os.listdir(probe)
-        return True
+            return True
+        probe2 = os.path.expanduser("~/Library/Mail")
+        if os.path.isdir(probe2):
+            os.listdir(probe2)
+            return True
+        return False  # 保护目录都缺失 → 无法确认有完全磁盘访问，视为未授权
     except Exception:
         return False
+
+
+# 重装/升级后 macOS TCC 旧授权失配（未签名应用按 inode 绑定）的逃生舱：
+# 用户已授权过但仍检测不到时，点「跳过授权直接进入」，写标志文件记住，下次不再弹引导。
+_PERM_SKIP_FILE = os.path.expanduser("~/.fenshen/.perm_skipped")
 
 
 def _permissions() -> dict:
@@ -62,6 +72,17 @@ class _Api:
 
     def open_settings(self, pane: str = "accessibility"):
         _open_system_settings(pane)
+        return "ok"
+
+    def skip_permissions(self):
+        """逃生舱：用户确认已授权/愿意稍后授权 → 记住跳过，直接进主界面。"""
+        try:
+            os.makedirs(os.path.dirname(_PERM_SKIP_FILE), exist_ok=True)
+            with open(_PERM_SKIP_FILE, "w") as f:
+                f.write("1")
+        except Exception:
+            pass
+        self.goto_main()
         return "ok"
 
     def goto_main(self):
@@ -111,8 +132,8 @@ def main():
     _start_server()
     api = _Api()
     perms = _permissions()
-    # 首次/未授权 → 引导页（file://）；已授权 → 直接主界面
-    if perms["accessibility"] and perms["disk"]:
+    # 首次/未授权 → 引导页（file://）；已授权或用户点过「跳过」 → 直接主界面
+    if (perms["accessibility"] and perms["disk"]) or os.path.exists(_PERM_SKIP_FILE):
         url = f"http://127.0.0.1:{PORT}/"
     else:
         base = os.path.dirname(os.path.abspath(__file__))

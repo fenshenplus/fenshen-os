@@ -18,7 +18,9 @@
   .st.no{background:rgba(229,72,77,.18);color:#ff7b83}
   .btn{width:100%;margin-top:18px;padding:12px;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;background:linear-gradient(90deg,#6d5bd0,#34c98e);color:#fff}
   .btn:disabled{opacity:.4;cursor:default}
+  .btn.ghost{margin-top:8px;background:transparent;border:1px solid rgba(255,255,255,.18);color:#b9bfdd;font-weight:500}
   .hint{font-size:11px;color:#7f86a8;margin-top:12px;line-height:1.7;text-align:center}
+  .warn{font-size:11.5px;color:#ffb36b;background:rgba(255,150,60,.1);border:1px solid rgba(255,150,60,.22);border-radius:10px;padding:10px 12px;margin-bottom:14px;line-height:1.7}
   .logo{width:54px;height:54px;border-radius:15px;background:linear-gradient(135deg,#6d5bd0,#34c98e);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;color:#fff;margin-bottom:16px}
 </style>
 </head>
@@ -27,6 +29,8 @@
   <div class="logo">分</div>
   <h1>分身 · 桌面助手授权</h1>
   <div class="sub">分身是你的桌面 AI 助手，需要控制这台电脑才能真正帮你干活。请授权以下权限，之后不会再打扰你。</div>
+
+  <div class="warn" id="warnBox" style="display:none">⚠️ 系统设置里已显示「分身」已授权，但这里仍检测不到？<br>这是 macOS 重装应用后的旧授权失配（未签名应用按文件指纹绑定，重装即失效）。请在「系统设置 → 隐私与安全性 → 辅助功能」里把「分身」<b>关闭再打开</b>（或点 − 移除后，点 ＋ 重新添加 /Applications/分身.app）；「完全磁盘访问」同样处理。</div>
 
   <div class="perm">
     <div class="ic">⌘</div>
@@ -47,6 +51,7 @@
   </div>
 
   <button class="btn" id="btnOpen" onclick="openSettings()">打开系统设置授权</button>
+  <button class="btn ghost" id="btnSkip" onclick="skipAuth()">跳过授权，直接进入（已授权过请选此项）</button>
   <div class="hint">点击后会打开系统设置；授权完成后回到本窗口会自动进入分身。<br>如未出现「分身」条目，先「＋」添加：<b>/Applications/分身.app</b>，再勾选开启。</div>
 </div>
 <script>
@@ -54,11 +59,18 @@
     var ax=state.accessibility, disk=state.disk;
     set('stAx', ax, ax?'已授权':'未授权');
     set('stDisk', disk, disk?'已授权':'未授权');
+    // 系统里已授权但这里仍检测不到 → 提示 TCC 失配处理指引
+    var mismatch = (!ax || !disk);
+    document.getElementById('warnBox').style.display = mismatch ? 'block' : 'none';
     if(ax && disk){ document.getElementById('btnOpen').textContent='✅ 授权完成，进入分身…'; gotoMain(); }
   }
   function set(id, ok, txt){
     var el=document.getElementById(id);
     el.textContent=txt; el.className='st '+(ok?'ok':'no');
+  }
+  function skipAuth(){
+    if(window.pywebview && window.pywebview.api) window.pywebview.api.skip_permissions();
+    else location.href='http://127.0.0.1:8002/';
   }
   function openSettings(){
     if(window.pywebview && window.pywebview.api) window.pywebview.api.open_settings();
