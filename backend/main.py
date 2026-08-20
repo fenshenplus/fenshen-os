@@ -1391,6 +1391,80 @@ def resolve_provider_cfg(agent_id: str):
     return None
 
 
+# ── v6.5 模型注册与路由层（真·多模型 vs 角色扮演）──────────────────
+# 用户洞察：单模型多角色 = 角色扮演（上下文重复，token 并不更省）；
+# 真·群聊 = 多个大模型各自独立执行。本层把"成员级模型绑定(model_cfg)"接到真实执行链，
+# 并诚实标记当前部署是 roleplay(单模型) 还是 multimodel(真多模型)。缺 key 时自动回退到单模型角色扮演。
+
+def _member_model_override(model_cfg_str):
+    """从成员 model_cfg(JSON 字符串) 解析 (provider,base,key,model) 覆盖；
+    若未显式绑定 provider+api_key（绝大多数成员默认如此），返回 None → 走全局路由。"""
+    if not model_cfg_str or model_cfg_str in ("", "{}"):
+        return None
+    try:
+        cfg = json.loads(model_cfg_str)
+    except Exception:
+        return None
+    provider = cfg.get("provider")
+    key = cfg.get("api_key")
+    if not provider or not key:
+        return None
+    preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])
+    base = cfg.get("base_url") or preset["base"]
+    model = cfg.get("model_name") or cfg.get("model") or preset["default_model"]
+    return (provider, base, key, model)
+
+
+def _resolve_member_model(conn, pid: str, role: str):
+    """解析某角色当前激活成员的 (member_id, override)；无专属模型则 (None, None)。"""
+    try:
+        m = conn.execute(
+            "SELECT id,model_cfg FROM agent_members WHERE project_id=? AND role_title=? "
+            "AND work_mode<>'offline' ORDER BY created_at LIMIT 1",
+            (pid, role)).fetchone()
+        if m:
+            return m["id"], _member_model_override(m["model_cfg"])
+    except Exception:
+        pass
+    return None, None
+
+
+def get_model_strategy():
+    """返回当前部署的模型策略：
+    - roleplay     : 仅 1 个或 0 个独立供方（所有角色共用同一模型 = 角色扮演）
+    - multimodel   : ≥2 个独立供方已配置（真·多模型群聊可行）
+    同时扫描 model_configs 与 agent_members.model_cfg 两处绑定。"""
+    providers = set()
+    try:
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT provider FROM model_configs WHERE api_key IS NOT NULL AND api_key != ''").fetchall()
+        for r in rows:
+            if r["provider"]:
+                providers.add(r["provider"])
+        mrows = conn.execute(
+            "SELECT model_cfg FROM agent_members WHERE model_cfg IS NOT NULL "
+            "AND model_cfg != '' AND model_cfg != '{}'").fetchall()
+        conn.close()
+        for m in mrows:
+            try:
+                c = json.loads(m["model_cfg"])
+                if c.get("api_key") and c.get("provider"):
+                    providers.add(c["provider"])
+            except Exception:
+                pass
+    except Exception:
+        pass
+    mode = "multimodel" if len(providers) >= 2 else "roleplay"
+    return {"mode": mode, "distinct_providers": len(providers), "providers": sorted(providers)}
+
+
+@app.get("/api/model-strategy")
+def api_model_strategy():
+    """当前部署的模型策略：roleplay(单模型角色扮演) / multimodel(真·多模型群聊)。"""
+    return get_model_strategy()
+
+
 # v5.9：实时 token 累加器（进程级，单租户本地应用，前端轮询展示底部 token 条）
 LIVE_TOKENS = {"input": 0, "output": 0, "total": 0, "calls": 0, "last_provider": "", "last_model": ""}
 # 每进程 token 上限兜底（防失控循环烧钱）；到达后整体降级为离线
@@ -1508,7 +1582,7 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
         return j["choices"][0]["message"]["content"].strip(), _usage
 
 
-def _available_providers(agent_id: str):
+def _available_providers(agent_id: str, member_override: tuple = None):
     """收集该角色可用的 provider 候选链：自己的配置优先，其余已配置 Key 的按 FALLBACK_ORDER 顶上。
 
     候选链已真正建起（审查 #12 的修复）：
@@ -1526,6 +1600,13 @@ def _available_providers(agent_id: str):
             return
         seen.add(provider)
         cands.append((provider, base, key, model))
+
+    # 0) 成员级模型覆盖（最高优先级）：该成员在 model_cfg 显式绑定了 provider+key 时，优先用其专属模型
+    if member_override:
+        try:
+            _add(*member_override)  # (provider, base, key, model)
+        except Exception:
+            pass
 
     # 1) 该角色自己的配置——永远排第一
     cfg = get_model_config(agent_id)
@@ -1593,12 +1674,13 @@ def _is_conn_error(e: Exception) -> bool:
 
 
 def call_llm(agent_id: str, history: list, system_prompt: str = None,
-             phase: str = "", scope_modules: int = -1, project_id: str = ""):
+             phase: str = "", scope_modules: int = -1, project_id: str = "",
+             member_override: tuple = None):
     """统一 LLM 调用（Phase 5：埋点 + 降级链）。主模型失败自动尝试其他可用模型。
     debug v4.1：连接类瞬时故障在同一 provider 自动重试一次，再进降级链。
     评测 P1（2026-08-16）：新增 phase/scope_modules/project_id 透传——话题/记忆/磨/蒸馏等
     直调调用点可携带项目维度记账，修复 token 报告的项目级归集缺失。"""
-    cands = _available_providers(agent_id)
+    cands = _available_providers(agent_id, member_override)
     if not cands:
         _log_usage(agent_id, "none", "", 0, "offline", phase=phase, scope_modules=scope_modules, project_id=project_id)
         return "[元神·离线] 当前该角色未配置可用模型 Key，已记录你的输入，配置后联网补答。"
@@ -4952,12 +5034,13 @@ def _match_skill_steps(system_prompt: str, user_text: str) -> str:
 
 
 async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, tools: list = None,
-                          phase: str = "", scope_modules: int = -1, project_id: str = "") -> str:
+                          phase: str = "", scope_modules: int = -1, project_id: str = "",
+                          member_override: tuple = None) -> str:
     """通用工具对话循环（元神/群聊共用，v0.27.0）：最多 6 轮（支持多步工具操作）。
     批次 B / P2-1：tools 参数控制工具集——元神默认 META_TOOLS（只读+搭建，无写文件），
     角色默认 ROLE_TOOLS（含 write_file 可动手产出）。
     批次 C / P3-2：命中 trigger_words 的启用技能会注入 system_prompt（活配件）。"""
-    cands = _available_providers(agent_id)
+    cands = _available_providers(agent_id, member_override)
     if not cands:
         return "[分身·离线] 当前该角色未配置可用模型 Key。"
     tool_list = tools if tools is not None else (META_TOOLS if agent_id == META_PID else ROLE_TOOLS)
@@ -6067,6 +6150,46 @@ def _judge_light(reply: str, done_criteria: str = "", standards: str = "") -> tu
     return "done", "T1 轻量验收通过（产出长度正常）"
 
 
+def _parse_dispatch_plan(text: str):
+    """解析元神调度 JSON（容错）：LLM 偶发截断（结尾缺 ] 或 }）时，按括号栈补全后重试。
+    返回 dict 或 None（非 JSON / 无法修复）。"""
+    if not text or "{" not in text or "}" not in text:
+        return None
+    seg = text[text.find("{"):text.rfind("}") + 1]
+    try:
+        return json.loads(seg)
+    except Exception:
+        pass
+    # 截断补全：扫描括号栈，把缺失的收尾 ]/} 补上再试
+    stack = []
+    instr = False
+    esc = False
+    for ch in seg:
+        if instr:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                instr = False
+        else:
+            if ch == '"':
+                instr = True
+            elif ch in "[{":
+                stack.append(ch)
+            elif ch in "]}":
+                if not stack or (ch == "}" and stack[-1] != "{") or (ch == "]" and stack[-1] != "["):
+                    return None  # 括号不匹配，无法修复
+                stack.pop()
+    if not stack:
+        return None
+    tail = "".join("}" if b == "{" else "]" for b in reversed(stack))
+    try:
+        return json.loads(seg + tail)
+    except Exception:
+        return None
+
+
 def _token_phase_stats() -> dict:
     """驾驶舱 token 三段显性化：按 调度/执行/其他 聚合 model_usage token 与调用数。"""
     try:
@@ -6157,10 +6280,13 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         "输出格式（必须为合法 JSON）：\n"
         '{"tier": 0或1或2（0=即时问答元神直答不派单；1=单一明确小任务只派单一个角色快速完成；2=复杂任务完整团队协作，含质量门与验收）, '
         '"reply": "给用户的简短回复（中文，说明你安排了什么）", '
+        '"team_mode": "single(单一角色即可完成，只派一个角色) 或 multi(需多角色跨职能协作，如设计+编码+测试)", '
         f'"actions": [{{"role": "{role_enum}", "task_name": "简短任务名（10字内）", "detail": "给角色的执行指令", '
         '"done_criteria": "该任务完成的、可验证的判定标准（例如：接口返回 200 且通过测试）", '
         '"plan": "可选：你对该任务的执行计划（先做什么、改哪些文件、如何验证），供角色参考"}}]\n'
         f"注意：actions 最多 {max_actions} 个；done_criteria 务必具体、可验证，用于后续自动判定角色产出是否达标。如果只需要一个角色，就只放一个。闲聊/提问时 actions 为空。\n"
+        "【复杂度→调度模式】单点/明确任务用 team_mode=single 只派一个角色（更聚焦、更省 token）；"
+        "只有真正需要跨职能协作（如既要设计又要编码又要测试）才用 team_mode=multi 拆给多个角色。\n"
         "【自主原则（v4.2）】你是团队的自主调度者：能自己查状态、能自行安排先后顺序、能自行决策，"
         "不要向用户提问确认（除非缺少关键信息无法继续）。用户要的是你把看板任务推进到 100%。"
     )
@@ -6214,10 +6340,11 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     meta_reply = dispatch_reply
     actions = []
     tier = _tier if _tier in (0, 1, 2) else None  # 启发式已定则直接用；否则看元神输出 tier 字段
+    team_mode = None  # v6.5：元神输出的调度模式（single/multi），由任务复杂度决定
     _t1_mode = False  # v6.5：T1 单角色速办标记（try 内可能改写）
     try:
-        if "{" in dispatch_reply and "}" in dispatch_reply:
-            j = json.loads(dispatch_reply[dispatch_reply.find("{"):dispatch_reply.rfind("}") + 1])
+        j = _parse_dispatch_plan(dispatch_reply)
+        if j is not None:
             meta_reply = j.get("reply", dispatch_reply)
             actions = j.get("actions", [])
             # v6.5：元神输出 tier 字段（启发式未定时使用）；非法则按 actions 数量兜底
@@ -6230,6 +6357,7 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             # 每个 action 补默认空完成标准（批次 B / P1-1）
             for _a in actions:
                 _a.setdefault("done_criteria", "")
+            team_mode = j.get("team_mode")  # v6.5：single/multi
             # v6.5 T1 单角色速办：只取第一个 action，跳过 D8 交叉验证（tier1_skip_xverify）
             _t1_mode = (tier == 1) and get_setting("tier1_solo_exec", "1") == "1"
             if _t1_mode and actions:
@@ -6262,6 +6390,13 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     _trajectory_event(run_id, pid, "plan", "元神",
                       f"调度计划：{meta_reply[:300]}" + (f"\n派单 {len(actions)} 个角色任务" if actions else "（仅回复，无派单）"),
                       {"actions": [{"role": a.get("role"), "task": a.get("task_name")} for a in actions]})
+    # v6.5：记录本次运行的模型策略（roleplay / multimodel）与调度模式，诚实反映"真多模型"还是"角色扮演"
+    _strat = get_model_strategy()
+    _trajectory_event(run_id, pid, "model_strategy", "元神",
+                      f"模型策略：{_strat['mode']}"
+                      f"（已配置 {_strat['distinct_providers']} 个独立供方：{', '.join(_strat['providers']) or '无'}）"
+                      + (f"；调度模式：{team_mode}" if team_mode else ""),
+                      {"mode": _strat["mode"], "providers": _strat["providers"], "team_mode": team_mode or ""})
 
     # 落库元神回复
     conn = get_db()
@@ -6304,12 +6439,20 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         role = act.get("role", "backend")
         if role not in role_systems:
             role = "backend"
+        # v6.5：解析该角色激活成员的专属模型覆盖（成员 model_cfg 绑定了 provider+key 才生效，否则 None=走全局路由）
+        try:
+            _mc = get_db()
+            member_id, member_override = _resolve_member_model(_mc, pid, role)
+            _mc.close()
+        except Exception:
+            member_id, member_override = None, None
         task_name = act.get("task_name", "未命名任务")[:20]
         detail = act.get("detail", "")
         done_criteria = (act.get("done_criteria") or "").strip()[:300]
         # v5.9：回放事件——角色开始执行
         _trajectory_event(run_id, pid, "role_start", role_names.get(role, role),
-                          f"▶️ 派单：{task_name}（{role_names.get(role, role)}）", {"detail": detail[:300]})
+                          f"▶️ 派单：{task_name}（{role_names.get(role, role)}）",
+                          {"detail": detail[:300], "member_id": member_id or "", "model_override": bool(member_override)})
 
         conn = get_db()
         # v6.4 P0 修复：对话任务必须落进真实 module×stage 格（见 _resolve_dispatch_module）
@@ -6480,7 +6623,7 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             try:
                 role_reply = await _chat_with_tools(role, role_hist, role_sys_ctx,
                                                  phase=f"role-exec:{role}", scope_modules=_role_scope,
-                                                 project_id=pid)
+                                                 project_id=pid, member_override=member_override)
             except Exception as e:
                 role_reply = f"这次没有产出。{role_names.get(role, role)}执行时出错：{e}"
             if not verify_enabled:
@@ -6584,8 +6727,8 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         replan_reply = await _chat_with_tools(META_PID, replan_hist, replan_sys, tools=[])  # v4.2: 重规划同样禁用工具
         pending_actions = []
         try:
-            if "{" in replan_reply and "}" in replan_reply:
-                j = json.loads(replan_reply[replan_reply.find("{"):replan_reply.rfind("}") + 1])
+            j = _parse_dispatch_plan(replan_reply)
+            if j is not None:
                 pending_actions = (j.get("actions") or [])[:max_actions]
                 for _a in pending_actions:
                     _a.setdefault("done_criteria", "")
@@ -6618,7 +6761,8 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     except Exception:
         pass
     return {"reply": meta_reply, "actions": role_results, "ok": True, "rounds": round_no, "all_done": all_done,
-            "blast_radius": sorted(_blast) if _blast else [], "blast_scope": _blast_scope, "run_id": run_id}
+            "blast_radius": sorted(_blast) if _blast else [], "blast_scope": _blast_scope, "run_id": run_id,
+            "model_strategy": _strat, "team_mode": team_mode or ""}
 
 
 # ── v4.2 立项自动拆解：沟通内容 → 看板（模块 + 任务 + 目标/标准）──
