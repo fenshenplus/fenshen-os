@@ -80,6 +80,12 @@
       "保存设置": "Save Settings",
       "开启": "On",
       "关闭": "Off",
+      // ── 群聊设置 ──
+      "群聊设置": "Group Settings",
+      "项目目标": "Project Goal",
+      "完成标准 / 当前阶段": "Acceptance / Phase",
+      "团队成员": "Team Members",
+      "暂无成员": "No members",
       // ── 通用 ──
       "取消": "Cancel",
       "确认": "Confirm",

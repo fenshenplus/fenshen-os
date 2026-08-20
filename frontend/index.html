@@ -153,12 +153,12 @@
   .section.active { display:flex; flex-direction:column; }
 
   /* 群聊双栏 */
-  .rooms { width:220px; border-right:0.5px solid var(--gray-200); display:flex; flex-direction:column; }
-  .rooms-head { display:flex; align-items:center; justify-content:space-between; padding:12px; }
+  .rooms { width:260px; border-right:0.5px solid var(--gray-200); display:flex; flex-direction:column; background:var(--bg); }
+  .rooms-head { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; }
   .rooms-head .t { font-size:14px; font-weight:500; }
   .room-add { width:22px; height:22px; border-radius:50%; border:none; background:var(--blue-500); color:var(--on-accent); cursor:pointer; font-size:14px; }
   .room-list { flex:1; overflow-y:auto; }
-  .room { padding:10px 12px; display:flex; align-items:center; gap:8px; cursor:pointer; border-left:2px solid transparent; }
+  .room { padding:10px 12px; display:flex; align-items:center; gap:8px; cursor:pointer; border-left:2px solid transparent; position:relative; }
   .room:hover { background:var(--gray-100); }
   .room.active { background:var(--blue-50); border-left-color:var(--blue-500); }
   .room .s { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
@@ -166,6 +166,26 @@
   .room .nm { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .room .ds { font-size:11px; color:var(--gray-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .room .tm { font-size:10px; color:var(--gray-400); flex-shrink:0; }
+  /* 微信式项目群聊卡片 */
+  .room-project { gap:12px; padding:10px 14px; border-left-width:3px; }
+  .room-av { width:42px; height:42px; border-radius:10px; background:linear-gradient(135deg,var(--meta-700),var(--meta-500)); color:#fff; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; flex-shrink:0; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+  .room-av:hover { filter:brightness(1.08); }
+  .room-info { flex:1; min-width:0; }
+  .room-row { display:flex; align-items:center; justify-content:space-between; gap:6px; }
+  .room-nm { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--fg); }
+  .room-time { font-size:10px; color:var(--gray-400); flex-shrink:0; }
+  .room-preview { font-size:11px; color:var(--gray-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; display:flex; align-items:center; gap:4px; }
+  .room-badge { position:absolute; top:8px; left:42px; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:var(--danger); color:#fff; font-size:10px; font-weight:600; display:none; align-items:center; justify-content:center; box-shadow:0 0 0 2px var(--bg); }
+  .room-badge.show { display:flex; }
+  /* 群聊设置 - 成员列表 */
+  .rs-member-list { display:flex; flex-direction:column; gap:6px; }
+  .rs-member { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; cursor:pointer; border:0.5px solid var(--gray-200); background:var(--bg); }
+  .rs-member:hover { background:var(--gray-50); }
+  .rs-av { width:36px; height:36px; border-radius:50%; color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; flex-shrink:0; }
+  .rs-info { flex:1; min-width:0; }
+  .rs-name { font-size:13px; font-weight:500; color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rs-role { font-size:11px; color:var(--gray-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+  .rs-arrow { font-size:18px; color:var(--gray-300); }
 
   .chat { flex:1; display:flex; flex-direction:column; min-width:0; }
   .chat-head { padding:11px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:0.5px solid var(--gray-200); }
@@ -1504,20 +1524,82 @@ function renderRooms(){ const el=document.getElementById('roomList'); el.innerHT
     <div style="font-size:10px;color:var(--gray-400);margin-top:1px">点我培养画像 · 持续了解你</div></div>
     <span style="font-size:10px;color:var(--gray-400)">置顶</span>`;
   el.appendChild(metaCard);
-  rooms.forEach(r=>{ const d=document.createElement('div'); d.className='room'+(r.id===curRoom?' active':''); d.onclick=()=>selectRoom(r.id);
+  rooms.forEach(r=>{ const d=document.createElement('div'); d.className='room room-project'+(r.id===curRoom?' active':''); d.onclick=()=>selectRoom(r.id);
     // v5.1 移动端：房间卡左滑 → 该项目看板
     attachRoomSwipe(d,r.id);
-    const st=r.status||'green';
-    const ph=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
     const fz=r.frozen?' 🔒':'';
-    // v5.0 移动端深化：完成度小条（项目列表一屏看进度）
     const c=r.completion||{};
     const pct=c.percent||0;
-    const bar=`<div style="height:3px;background:var(--gray-200);border-radius:99px;margin-top:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct>=100?'#34c98e':'var(--meta-700)'};border-radius:99px"></div></div>`;
-    // v5.0 移动端深化：最后消息摘要 + 时间（微信式列表）
-    const lm=r.last_msg?`<div style="font-size:11px;color:var(--gray-400);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.last_msg)}</div>`:'';
-    const lt=r.last_ts?`<span style="font-size:10px;color:var(--gray-400)">${escapeHtml(r.last_ts.slice(5))}</span>`:'';
-    d.innerHTML=`<span class="s" style="background:var(--${escapeHtml(st)})"></span><div class="info"><div class="nm">${escapeHtml(r.name)}${fz}</div><div class="ds">${escapeHtml(ph)} · 完成度 ${pct}%${bar}</div>${lm}</div><span class="tm">${STATUS_LABEL[st]||''}</span>`; el.appendChild(d); }); }
+    const initial=escapeHtml((r.name||'项').slice(0,1));
+    const lm=r.last_msg?escapeHtml(r.last_msg):'';
+    const lt=r.last_ts?escapeHtml(r.last_ts.slice(5,16)):'';
+    const unread=r.unread||0;
+    const badge=unread?`<span class="room-badge show">${unread>99?'99+':unread}</span>`:'';
+    const preview=lm?`<div class="room-preview"><span>${lm}</span>${pct>0?`<span style="color:var(--meta-700)">· 完成 ${pct}%</span>`:''}</div>`:(pct>0?`<div class="room-preview"><span style="color:var(--meta-700)">完成度 ${pct}%</span></div>`:'');
+    d.innerHTML=`<div class="room-av" onclick="openRoomSettings('${jsStr(r.id)}',event)" data-i18n-title="群聊设置" title="群聊设置">${initial}</div>${badge}
+      <div class="room-info">
+        <div class="room-row"><div class="room-nm">${escapeHtml(r.name)}${fz}</div><div class="room-time">${lt}</div></div>
+        ${preview}
+      </div>`; el.appendChild(d); }); }
+let rsPid='';
+function stringToColor(str){
+  let h=0; const s=String(str||'A');
+  for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))%360;
+  return `hsl(${h},70%,45%)`;
+}
+async function openRoomSettings(pid, ev){
+  if(ev) ev.stopPropagation();
+  rsPid = pid || curRoom;
+  if(!rsPid) return;
+  const mask=document.getElementById('roomSettingsMask');
+  const body=document.getElementById('rsBody');
+  const title=document.getElementById('rsTitle');
+  const room=rooms.find(r=>r.id===rsPid);
+  title.textContent=(room?room.name:'群聊')+' · 设置';
+  mask.style.display='flex';
+  body.innerHTML='<div class="empty"><div class="ic">⏳</div><div>加载成员中…</div></div>';
+  try{
+    const [projRes, membersRes]=await Promise.all([fetch('/api/projects/'+rsPid), fetch('/api/projects/'+rsPid+'/members')]);
+    const proj=await projRes.json().catch(()=>({}));
+    const mdata=await membersRes.json().catch(()=>({members:[]}));
+    renderRoomSettings(proj, mdata.members||[]);
+  }catch(e){
+    console.error(e);
+    body.innerHTML='<div class="empty"><div class="ic">⚠️</div><div>加载失败，请重试</div></div>';
+  }
+}
+function closeRoomSettings(){ document.getElementById('roomSettingsMask').style.display='none'; rsPid=''; }
+function renderRoomSettings(proj, members){
+  const body=document.getElementById('rsBody');
+  const goal=proj.goal||'未设目标';
+  const standards=proj.standards||'未设完成标准';
+  const phase=PHASE_NAMES[proj.phase]||proj.phase||'需求澄清';
+  const membersHtml=members.map(m=>{
+    const bg=stringToColor(m.name||m.role_title||'A');
+    return `<div class="rs-member" onclick="openMemberDrawer('${jsStr(m.id)}'); closeRoomSettings();">
+      <div class="rs-av" style="background:${bg}">${escapeHtml((m.name||'?').slice(0,1))}</div>
+      <div class="rs-info">
+        <div class="rs-name">${escapeHtml(m.name||m.role_title||'未命名')}</div>
+        <div class="rs-role">${escapeHtml(m.role_title||'')} · ${escapeHtml(m.work_mode||'online')}</div>
+      </div>
+      <div class="rs-arrow">›</div>
+    </div>`;
+  }).join('') || `<div class="empty" style="padding:30px 0"><div class="ic">🤖</div><div>${__t('暂无成员')}</div></div>`;
+  body.innerHTML=`
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:4px">${__t('项目目标')}</div>
+      <div style="font-size:13px;color:var(--fg);line-height:1.6;background:var(--gray-50);border-radius:8px;padding:10px 12px">${escapeHtml(goal)}</div>
+    </div>
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:4px">${__t('完成标准 / 当前阶段')}</div>
+      <div style="font-size:13px;color:var(--fg);line-height:1.6">${escapeHtml(standards)}<span style="margin-left:10px;color:var(--meta-700);background:var(--meta-50);padding:2px 8px;border-radius:10px;font-size:11px">${escapeHtml(phase)}</span></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:500">${__t('团队成员')}（${members.length}）</div>
+    </div>
+    <div class="rs-member-list">${membersHtml}</div>
+  `;
+}
 async function loadChat(pid){ const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
   const r=rooms.find(x=>x.id===pid); document.getElementById('chatTitle').textContent=r?r.name:''; document.getElementById('chatSub').textContent=r?STATUS_LABEL[r.status]||'':'';
   const gb=document.getElementById('chatGoalBar');
@@ -1530,7 +1612,8 @@ async function loadChat(pid){ const b=document.getElementById('chatBody'); b.inn
   else gb.style.display='none';
   refreshPhaseUI(r);
   let msgs=[]; try{ const res=await fetch('/api/messages/'+pid); msgs=await res.json(); }catch(e){ console.error(e); }
-  renderChat(msgs); attachThinking(); if(window.__splitOpen) loadTrajPanel(); }
+  renderChat(msgs); attachThinking(); if(window.__splitOpen) loadTrajPanel();
+  if(window.innerWidth>768 && window.__splitOpen===undefined) ensureSplitOpen('board'); }
 function refreshPhaseUI(r){
   if(!r) return;
   document.getElementById('phaseBadge').textContent=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
@@ -1606,6 +1689,7 @@ function openDrawer(){ const m=document.getElementById('drawerMask'), d=document
 function closeDrawer(){ const m=document.getElementById('drawerMask'), d=document.getElementById('drawer'); if(m)m.classList.remove('show'); if(d)d.classList.remove('show'); window.__drawerOpen=false; }
 function filterDrawer(q){ q=(q||'').trim().toLowerCase(); document.querySelectorAll('#drawerNav .navitem').forEach(it=>{ const t=it.textContent.toLowerCase(); it.style.display=(!q||t.includes(q))?'':'none'; }); }
 function toggleSplit(){ const p=document.getElementById('splitPanel'); if(!p)return; const open=p.style.display!=='none'; if(open){ p.style.display='none'; window.__splitOpen=false; } else { p.style.display='flex'; window.__splitOpen=true; switchSplit('traj'); } }
+function ensureSplitOpen(tab){ const p=document.getElementById('splitPanel'); if(!p || p.style.display!=='none') return; p.style.display='flex'; window.__splitOpen=true; switchSplit(tab||'board'); }
 function switchSplit(tab){ const t1=document.getElementById('tabTraj'),t2=document.getElementById('tabBoard'),tp=document.getElementById('trajPane'),bp=document.getElementById('boardPane'); if(t1)t1.classList.toggle('active',tab==='traj'); if(t2)t2.classList.toggle('active',tab==='board'); if(tp)tp.style.display=tab==='traj'?'block':'none'; if(bp)bp.style.display=tab==='board'?'block':'none'; if(tab==='traj') loadTrajPanel(); else loadSplitBoard(); }
 async function loadSplitBoard(){ if(!curRoom) return; try{ await loadBoard(); }catch(e){} const src=(window._boardView==='status')?document.getElementById('boardGridInline'):document.getElementById('boardMatrix'); const dst=document.getElementById('splitBoard'); if(src&&dst) dst.innerHTML=src.innerHTML; }
 function renderEv(ev){
@@ -4871,6 +4955,16 @@ async function delMember(mid){
   </div>
 </section>
 <!-- 成员详情抽屉：可改 soul/rule/模型/状态/技能/经验进化 -->
+<!-- 群聊设置：成员列表 / 项目信息 -->
+<div id="roomSettingsMask" class="mask" style="display:none" onclick="if(event.target===this)closeRoomSettings()">
+  <div class="dialog" style="max-width:520px;width:94vw;height:80vh;display:flex;flex-direction:column;background:var(--bg);border-radius:var(--r-md);overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:.5px solid var(--gray-200)">
+      <div class="t" id="rsTitle" style="font-size:15px;font-weight:600" data-i18n="群聊设置">群聊设置</div>
+      <button class="btn sm" onclick="closeRoomSettings()">关闭</button>
+    </div>
+    <div id="rsBody" style="flex:1;overflow:auto;padding:14px 16px"></div>
+  </div>
+</div>
 <div id="memberMask" class="mask" style="display:none" onclick="if(event.target===this)closeMemberDrawer()">
   <div class="dialog" style="max-width:560px;width:94vw;height:88vh;display:flex;flex-direction:column">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:.5px solid var(--gray-200)">
