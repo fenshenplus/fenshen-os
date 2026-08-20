@@ -15,7 +15,7 @@ import os
 import subprocess
 
 # ── 版本号（语义化 MAJOR.MINOR.PATCH）──
-SEMVER = "0.64.19"
+SEMVER = "0.64.20"
 
 # ── 发布标识（对外给人看的版本，如 v6.4）──
 RELEASE = "v6.4"

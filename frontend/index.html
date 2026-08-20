@@ -1633,7 +1633,7 @@ async function loadChat(pid){ const b=document.getElementById('chatBody'); b.inn
   refreshPhaseUI(r);
   let msgs=[]; try{ const res=await fetch('/api/messages/'+pid); msgs=await res.json(); }catch(e){ console.error(e); }
   renderChat(msgs); attachThinking(); if(window.__splitOpen) loadTrajPanel();
-  if(window.innerWidth>768 && window.__splitOpen===undefined) ensureSplitOpen('board');
+  if(window.innerWidth>768 && window.__splitOpen===undefined){ window.__splitOpen=false; }
   updateSplitBtn(); }
 function refreshPhaseUI(r){
   if(!r) return;
@@ -1710,7 +1710,7 @@ function openDrawer(){ const m=document.getElementById('drawerMask'), d=document
 function closeDrawer(){ const m=document.getElementById('drawerMask'), d=document.getElementById('drawer'); if(m)m.classList.remove('show'); if(d)d.classList.remove('show'); window.__drawerOpen=false; }
 function filterDrawer(q){ q=(q||'').trim().toLowerCase(); document.querySelectorAll('#drawerNav .navitem').forEach(it=>{ const t=it.textContent.toLowerCase(); it.style.display=(!q||t.includes(q))?'':'none'; }); }
 function updateSplitBtn(){ const b=document.getElementById('btnSplit'); if(!b)return; const open=window.__splitOpen; b.textContent= open?'收起产出区':'展开产出区'; b.classList.toggle('active', !!open); }
-function toggleSplit(){ const p=document.getElementById('splitPanel'); if(!p)return; const open=p.style.display!=='none'; if(open){ p.style.display='none'; window.__splitOpen=false; } else { p.style.display='flex'; window.__splitOpen=true; switchSplit('traj'); } updateSplitBtn(); }
+function toggleSplit(){ const p=document.getElementById('splitPanel'); if(!p)return; const open=p.style.display!=='none'; if(open){ p.style.display='none'; window.__splitOpen=false; } else { p.style.display='flex'; window.__splitOpen=true; switchSplit('board'); } updateSplitBtn(); }
 function ensureSplitOpen(tab){ const p=document.getElementById('splitPanel'); if(!p || p.style.display!=='none') return; p.style.display='flex'; window.__splitOpen=true; switchSplit(tab||'board'); updateSplitBtn(); }
 function switchSplit(tab){ const t1=document.getElementById('tabTraj'),t2=document.getElementById('tabBoard'),tp=document.getElementById('trajPane'),bp=document.getElementById('boardPane'); if(t1)t1.classList.toggle('active',tab==='traj'); if(t2)t2.classList.toggle('active',tab==='board'); if(tp)tp.style.display=tab==='traj'?'block':'none'; if(bp)bp.style.display=tab==='board'?'block':'none'; if(tab==='traj') loadTrajPanel(); else loadSplitBoard(); }
 async function loadSplitBoard(){ if(!curRoom) return; try{ await loadBoard(); }catch(e){} const src=(window._boardView==='status')?document.getElementById('boardGridInline'):document.getElementById('boardMatrix'); const dst=document.getElementById('splitBoard'); if(src&&dst) dst.innerHTML=src.innerHTML; }
