@@ -9,13 +9,14 @@
   .card{width:520px;max-width:92vw;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:20px;padding:34px 32px;backdrop-filter:blur(8px)}
   h1{font-size:22px;margin:0 0 6px;font-weight:600}
   .sub{font-size:13px;color:#aab0d0;line-height:1.6;margin-bottom:22px}
-  .perm{display:flex;align-items:center;gap:12px;padding:13px 14px;background:rgba(255,255,255,.05);border-radius:12px;margin-bottom:10px;border:1px solid rgba(255,255,255,.08)}
+  .perm{display:flex;align-items:center;gap:12px;padding:13px 14px;background:rgba(255,255,255,.05);border-radius:12px;margin-bottom:10px;border:1px solid rgba(255,255,255,.08);cursor:pointer;transition:border-color .15s,background .15s}
+  .perm:hover{border-color:rgba(109,91,208,.6);background:rgba(255,255,255,.08)}
   .perm .ic{width:34px;height:34px;border-radius:9px;background:rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-size:16px}
   .perm .tt{font-size:14px;font-weight:500}
   .perm .dd{font-size:11px;color:#9aa0be;margin-top:2px}
-  .perm .st{margin-left:auto;font-size:12px;font-weight:600;padding:4px 10px;border-radius:99px}
+  .perm .st{margin-left:auto;font-size:12px;font-weight:600;padding:4px 10px;border-radius:99px;flex-shrink:0}
   .st.ok{background:rgba(52,201,142,.18);color:#34c98e}
-  .st.no{background:rgba(229,72,77,.18);color:#ff7b83}
+  .st.no{background:rgba(229,72,77,.18);color:#ff7b83;text-decoration:underline dotted;cursor:pointer}
   .btn{width:100%;margin-top:18px;padding:12px;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;background:linear-gradient(90deg,#6d5bd0,#34c98e);color:#fff}
   .btn:disabled{opacity:.4;cursor:default}
   .btn.ghost{margin-top:8px;background:transparent;border:1px solid rgba(255,255,255,.18);color:#b9bfdd;font-weight:500}
@@ -30,9 +31,9 @@
   <h1>分身 · 桌面助手授权</h1>
   <div class="sub">分身是你的桌面 AI 助手，需要控制这台电脑才能真正帮你干活。请授权以下权限，之后不会再打扰你。</div>
 
-  <div class="warn" id="warnBox" style="display:none">⚠️ 系统设置里已显示「分身」已授权，但这里仍检测不到？<br>这是 macOS 重装应用后的旧授权失配（未签名应用按文件指纹绑定，重装即失效）。请在「系统设置 → 隐私与安全性 → 辅助功能」里把「分身」<b>关闭再打开</b>（或点 − 移除后，点 ＋ 重新添加 /Applications/分身.app）；「完全磁盘访问」同样处理。</div>
+  <div class="warn" id="warnBox" style="display:none">⚠️ 系统设置里已授权，但这里仍检测不到？<br>① 请<b>完全退出分身再重新打开</b>（Cmd+Q 后重开）——macOS 对未签名应用授权绑定应用文件，重装后需重启生效；<br>② 仍未通过则在下方对应权限里点「−」移除「分身」条目，再「＋」重新添加 <b>/Applications/分身.app</b> 并勾选。</div>
 
-  <div class="perm">
+  <div class="perm" id="permAx" onclick="openSettings('accessibility')">
     <div class="ic">⌘</div>
     <div>
       <div class="tt">辅助功能（Accessibility）</div>
@@ -41,7 +42,7 @@
     <div class="st no" id="stAx">未授权</div>
   </div>
 
-  <div class="perm">
+  <div class="perm" id="permDisk" onclick="openSettings('disk')">
     <div class="ic">💾</div>
     <div>
       <div class="tt">完全磁盘访问（Full Disk Access）</div>
@@ -50,18 +51,18 @@
     <div class="st no" id="stDisk">未授权</div>
   </div>
 
-  <button class="btn" id="btnOpen" onclick="openSettings()">打开系统设置授权</button>
+  <button class="btn" id="btnOpen" onclick="openSettings('accessibility')">打开系统设置授权</button>
+  <button class="btn ghost" id="btnRecheck" onclick="recheck()">🔄 我已授权，重新检测</button>
   <button class="btn ghost" id="btnSkip" onclick="skipAuth()">跳过授权，直接进入（已授权过请选此项）</button>
-  <div class="hint">点击后会打开系统设置；授权完成后回到本窗口会自动进入分身。<br>如未出现「分身」条目，先「＋」添加：<b>/Applications/分身.app</b>，再勾选开启。</div>
+  <div class="hint">点击权限条会打开<b>对应</b>的系统设置面板；授权后回到本窗口自动检测进入。<br>如列表里没有「分身」，先点「＋」添加 <b>/Applications/分身.app</b>，再勾选开启。</div>
 </div>
 <script>
   function render(state){
     var ax=state.accessibility, disk=state.disk;
     set('stAx', ax, ax?'已授权':'未授权');
     set('stDisk', disk, disk?'已授权':'未授权');
-    // 系统里已授权但这里仍检测不到 → 提示 TCC 失配处理指引
-    var mismatch = (!ax || !disk);
-    document.getElementById('warnBox').style.display = mismatch ? 'block' : 'none';
+    // 有未授权 → 显示失配处理指引（系统里已授权但检测不到）
+    document.getElementById('warnBox').style.display = (!ax || !disk) ? 'block' : 'none';
     if(ax && disk){ document.getElementById('btnOpen').textContent='✅ 授权完成，进入分身…'; gotoMain(); }
   }
   function set(id, ok, txt){
@@ -72,9 +73,17 @@
     if(window.pywebview && window.pywebview.api) window.pywebview.api.skip_permissions();
     else location.href='http://127.0.0.1:8002/';
   }
-  function openSettings(){
-    if(window.pywebview && window.pywebview.api) window.pywebview.api.open_settings();
-    else window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+  function openSettings(pane){
+    pane = pane || 'accessibility';
+    if(window.pywebview && window.pywebview.api) window.pywebview.api.open_settings(pane);
+    else window.open(pane==='disk'
+      ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'
+      : 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+  }
+  function recheck(){
+    if(window.pywebview && window.pywebview.api){
+      window.pywebview.api.check_permissions().then(function(s){ render(JSON.parse(s)); });
+    }
   }
   function gotoMain(){
     if(window.pywebview && window.pywebview.api) window.pywebview.api.goto_main();
