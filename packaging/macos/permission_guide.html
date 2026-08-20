@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>分身 · 首次授权</title>
+<style>
+  body{margin:0;font-family:-apple-system,'PingFang SC',sans-serif;background:linear-gradient(160deg,#0f0c28,#1d1745 60%,#123a33);color:#eef0fb;display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .card{width:520px;max-width:92vw;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:20px;padding:34px 32px;backdrop-filter:blur(8px)}
+  h1{font-size:22px;margin:0 0 6px;font-weight:600}
+  .sub{font-size:13px;color:#aab0d0;line-height:1.6;margin-bottom:22px}
+  .perm{display:flex;align-items:center;gap:12px;padding:13px 14px;background:rgba(255,255,255,.05);border-radius:12px;margin-bottom:10px;border:1px solid rgba(255,255,255,.08)}
+  .perm .ic{width:34px;height:34px;border-radius:9px;background:rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-size:16px}
+  .perm .tt{font-size:14px;font-weight:500}
+  .perm .dd{font-size:11px;color:#9aa0be;margin-top:2px}
+  .perm .st{margin-left:auto;font-size:12px;font-weight:600;padding:4px 10px;border-radius:99px}
+  .st.ok{background:rgba(52,201,142,.18);color:#34c98e}
+  .st.no{background:rgba(229,72,77,.18);color:#ff7b83}
+  .btn{width:100%;margin-top:18px;padding:12px;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;background:linear-gradient(90deg,#6d5bd0,#34c98e);color:#fff}
+  .btn:disabled{opacity:.4;cursor:default}
+  .hint{font-size:11px;color:#7f86a8;margin-top:12px;line-height:1.7;text-align:center}
+  .logo{width:54px;height:54px;border-radius:15px;background:linear-gradient(135deg,#6d5bd0,#34c98e);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;color:#fff;margin-bottom:16px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">分</div>
+  <h1>分身 · 桌面助手授权</h1>
+  <div class="sub">分身是你的桌面 AI 助手，需要控制这台电脑才能真正帮你干活。请授权以下权限，之后不会再打扰你。</div>
+
+  <div class="perm">
+    <div class="ic">⌘</div>
+    <div>
+      <div class="tt">辅助功能（Accessibility）</div>
+      <div class="dd">分身执行命令、控制电脑（如运行脚本、操作应用）必需</div>
+    </div>
+    <div class="st no" id="stAx">未授权</div>
+  </div>
+
+  <div class="perm">
+    <div class="ic">💾</div>
+    <div>
+      <div class="tt">完全磁盘访问（Full Disk Access）</div>
+      <div class="dd">分身读写你的文件、扫描项目工作区必需（建议授权）</div>
+    </div>
+    <div class="st no" id="stDisk">未授权</div>
+  </div>
+
+  <button class="btn" id="btnOpen" onclick="openSettings()">打开系统设置授权</button>
+  <div class="hint">点击后会打开系统设置；授权完成后回到本窗口会自动进入分身。<br>如未出现「分身」条目，先「＋」添加：<b>/Applications/分身.app</b>，再勾选开启。</div>
+</div>
+<script>
+  function render(state){
+    var ax=state.accessibility, disk=state.disk;
+    set('stAx', ax, ax?'已授权':'未授权');
+    set('stDisk', disk, disk?'已授权':'未授权');
+    if(ax && disk){ document.getElementById('btnOpen').textContent='✅ 授权完成，进入分身…'; gotoMain(); }
+  }
+  function set(id, ok, txt){
+    var el=document.getElementById(id);
+    el.textContent=txt; el.className='st '+(ok?'ok':'no');
+  }
+  function openSettings(){
+    if(window.pywebview && window.pywebview.api) window.pywebview.api.open_settings();
+    else window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+  }
+  function gotoMain(){
+    if(window.pywebview && window.pywebview.api) window.pywebview.api.goto_main();
+    else location.href='http://127.0.0.1:8002/';
+  }
+  function poll(){
+    if(window.pywebview && window.pywebview.api){
+      window.pywebview.api.check_permissions().then(function(s){ render(JSON.parse(s)); });
+    }
+    setTimeout(poll, 1500);
+  }
+  setTimeout(poll, 800);
+</script>
+</body>
+</html>
