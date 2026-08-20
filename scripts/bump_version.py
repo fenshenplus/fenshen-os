@@ -60,9 +60,10 @@ def compile_gate() -> bool:
 
 
 def smoke_gate() -> bool:
-    print("▶ 回归冒烟门禁 (tests/smoke_v40.py → 8002)…")
-    print("  （需本机 8002 引擎运行中；冒烟用例自带清理，不污染业务数据）")
-    r = subprocess.run([sys.executable, SMOKE])
+    base = os.environ.get("FENSHEN_SMOKE_BASE", "http://127.0.0.1:8002")
+    print(f"▶ 回归冒烟门禁 (tests/smoke_v40.py → {base})…")
+    print("  （需目标引擎运行中；冒烟用例自带清理，不污染业务数据）")
+    r = subprocess.run([sys.executable, SMOKE, "--base", base])
     return r.returncode == 0
 
 

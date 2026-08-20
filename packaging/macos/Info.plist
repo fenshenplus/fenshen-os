@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>分身</string>
+  <key>CFBundleDisplayName</key><string>分身</string>
+  <key>CFBundleIdentifier</key><string>com.fenshen.app</string>
+  <key>CFBundleVersion</key><string>0.64.18</string>
+  <key>CFBundleShortVersionString</key><string>6.4</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>分身</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>分身需要辅助功能权限以执行命令、控制电脑完成你的任务</string>
+  <key>NSSystemAdministrationUsageDescription</key><string>分身需要完全磁盘访问以读写你的文件</string>
+</dict>
+</plist>
