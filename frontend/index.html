@@ -781,6 +781,7 @@
       <div class="section" id="sec-models">
         <div class="grid-wrap">
           <div class="grid-head"><span class="t">模型设置（元神 + 角色级）</span><span class="rl" style="font-size:11px;color:var(--gray-400)">为元神与每个角色指定大模型与 Key · 可交叉验证与用量统计</span></div>
+          <div id="strategyBadge" style="margin-bottom:12px"></div>
           <div class="grid" id="modelGrid"></div>
           <!-- v5.2 监控自动兜底：服务监控配置 -->
           <div class="card" style="margin-top:14px">
@@ -2797,8 +2798,21 @@ async function saveGuide(){
 }
 
 /* ── 模型设置 ── */
+async function renderModelStrategy(){
+  const el=document.getElementById('strategyBadge'); if(!el) return;
+  try{
+    const r=await fetch('/api/model-strategy'); const s=await r.json();
+    const multi = s.mode==='multimodel';
+    el.innerHTML = `<div class="card" style="padding:10px 14px;border-left:3px solid ${multi?'var(--green)':'var(--amber)'};background:${multi?'#f6ffed':'#fffbe6'}">
+      <div style="font-size:13px;font-weight:600">当前模型策略：<b style="color:${multi?'var(--green)':'var(--amber)'}">${multi?'真·多模型群聊':'单模型角色扮演'}</b>
+      <span style="font-size:11px;color:var(--gray-500);font-weight:400">（已配置 ${s.distinct_providers} 个独立供方${s.providers.length?'：'+escapeHtml(s.providers.join('、')):'，仅 DeepSeek 兜底'}）</span></div>
+      <div style="font-size:11px;color:var(--gray-500);margin-top:4px">${multi?'✅ 不同角色已绑定不同模型，派单时各角色用各自模型独立执行。':'💡 想开启真·多模型：给不同角色填不同供应商 + Key（如 architect→Claude、frontend→OpenAI），或在通讯录成员资料页绑定专属模型。缺省所有角色共用 DeepSeek = 角色扮演。'}</div>
+    </div>`;
+  }catch(e){ el.innerHTML=''; }
+}
 async function renderModels(){
   const g=document.getElementById('modelGrid'); g.innerHTML='加载中…';
+  await renderModelStrategy();
   let cfgs=[]; try{ const r=await fetch('/api/models'); cfgs=await r.json(); }catch(e){ console.error(e); cfgs=[]; }
   g.innerHTML='';
   cfgs.forEach(c=>{
@@ -4776,11 +4790,24 @@ async function openMemberDrawer(mid){
     <div class="md-row"><label>Soul 文件（灵魂：语气 / 边界 / 价值观）</label><textarea id="mdSoul" rows="4">${escapeHtml(d.soul||'')}</textarea></div>
     <div class="md-row"><label>Rule（行为规则，一行一条）</label><textarea id="mdRule" rows="3">${escapeHtml((d.rule||[]).join('\n'))}</textarea></div>
     <div class="md-row"><label>工程规范</label><textarea id="mdEng" rows="2">${escapeHtml(d.eng_spec||'')}</textarea></div>
-    <div class="md-row"><label>模型配置</label>
-      模型 <input id="mdModel" value="${escapeHtml(mc.model||'deepseek-v4-flash')}" style="width:150px">
-      温度 <input id="mdTemp" type="number" step="0.1" value="${mc.temp!=null?mc.temp:0.3}" style="width:56px">
-      推理 <input type="checkbox" id="mdReason" ${mc.reason?'checked':''}>
-      上限 <input id="mdTok" type="number" value="${mc.max_tokens||8000}" style="width:74px">
+    <div class="md-row"><label>模型配置（绑定专属模型 = 真·多模型；留空 = 跟随全局链）</label>
+      供应商 <select id="mdProvider">
+        <option value="">跟随全局</option>
+        <option value="deepseek"${mc.provider==='deepseek'?' selected':''}>DeepSeek</option>
+        <option value="openai"${mc.provider==='openai'?' selected':''}>OpenAI</option>
+        <option value="claude"${mc.provider==='claude'?' selected':''}>Claude</option>
+        <option value="qwen"${mc.provider==='qwen'?' selected':''}>通义千问</option>
+        <option value="moonshot"${mc.provider==='moonshot'?' selected':''}>Moonshot</option>
+        <option value="zhipu"${mc.provider==='zhipu'?' selected':''}>智谱 GLM</option>
+        <option value="ollama"${mc.provider==='ollama'?' selected':''}>Ollama 本地</option>
+      </select>
+      模型 <input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-v4-flash')}" style="width:140px" placeholder="如 gpt-4o-mini">
+      Key <input id="mdKey" type="password" value="${escapeHtml(mc.api_key||'')}" style="width:150px" placeholder="${mc.api_key?'已保存（重填覆盖）':'专属模型才填'}">
+      Base URL <input id="mdBase" value="${escapeHtml(mc.base_url||'')}" style="width:130px" placeholder="留空=官方">
+      <br><span style="font-size:10px;color:var(--gray-400)">温度</span> <input id="mdTemp" type="number" step="0.1" value="${mc.temp!=null?mc.temp:0.3}" style="width:52px">
+      <span style="font-size:10px;color:var(--gray-400)">推理</span> <input type="checkbox" id="mdReason" ${mc.reason?'checked':''}>
+      <span style="font-size:10px;color:var(--gray-400)">上限</span> <input id="mdTok" type="number" value="${mc.max_tokens||8000}" style="width:64px">
+      <div style="font-size:10.5px;color:var(--gray-400);margin-top:4px">填了「供应商 + Key」→ 该成员执行时用专属模型（跨角色真·多模型）；留空 → 走全局模型链（角色扮演）。Key 只存本机。</div>
     </div>
     <div class="md-row"><label>工作模式 · 时间</label>
       状态 <select id="mdWork">${['online','offline','busy','idle'].map(w=>`<option value="${w}" ${d.work_mode===w?'selected':''}>${WM[w][0]}</option>`).join('')}</select>
@@ -4822,7 +4849,7 @@ async function saveMember(){
     soul: document.getElementById('mdSoul').value,
     rule: document.getElementById('mdRule').value.split('\n').map(x=>x.trim()).filter(Boolean),
     eng_spec: document.getElementById('mdEng').value,
-    model_cfg: {model: document.getElementById('mdModel').value, temp: +(document.getElementById('mdTemp').value||0.3), reason: document.getElementById('mdReason').checked, max_tokens: +(document.getElementById('mdTok').value||8000)},
+    model_cfg: {provider: document.getElementById('mdProvider').value, api_key: document.getElementById('mdKey').value.trim(), base_url: document.getElementById('mdBase').value.trim(), model_name: document.getElementById('mdModel').value.trim(), model: document.getElementById('mdModel').value.trim(), temp: +(document.getElementById('mdTemp').value||0.3), reason: document.getElementById('mdReason').checked, max_tokens: +(document.getElementById('mdTok').value||8000)},
     work_mode: document.getElementById('mdWork').value,
     work_hours: document.getElementById('mdHours').value,
     current_task: document.getElementById('mdTask').value,
