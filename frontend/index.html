@@ -209,8 +209,10 @@
   .more-row label { font-size:11px; color:var(--gray-400); flex:none; }
   .chat-body { flex:1; overflow-y:auto; padding:16px 20px; display:flex; flex-direction:column; gap:8px; }
   .meta-board { flex:1; overflow-y:auto; }
-  .msg { display:flex; }
+  .msg { display:flex; align-items:flex-end; gap:8px; }
   .msg.left { justify-content:flex-start; } .msg.right { justify-content:flex-end; }
+  .msg-av{width:32px;height:32px;border-radius:9px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;margin-bottom:4px;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .msg-av:hover{filter:brightness(1.08)}
   .bubble { max-width:74%; padding:8px 12px; border-radius:var(--r-lg); font-size:13px; line-height:1.5; }
   .bubble.agent { background:var(--gray-200); color:var(--gray-900); border-bottom-left-radius:4px; }
   .bubble.self { background:var(--blue-500); color:var(--on-accent); border-bottom-right-radius:4px; }
@@ -463,7 +465,7 @@
   <div class="body">
     <!-- v6 外壳：最左深色图标栏（WorkBuddy 极简风） -->
     <div class="rail">
-      <div class="rail-avatar" id="railAvatar" onclick="openDrawer()" data-i18n-title="账户与设置" title="账户与设置">分</div>
+      <div class="rail-avatar" id="railAvatar" onclick="openMetaProfile()" data-i18n-title="元神 · 我的分身" title="元神 · 我的分身">元</div>
       <div class="rail-item navitem active" data-sec="chat" data-i18n-title="对话" title="对话">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.6-.8L3 21l1.9-5.5A8.5 8.5 0 1 1 21 11.5z"/></svg>
       </div>
@@ -471,8 +473,8 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/><path d="M12 2v2M4 12H2M22 12h-2"/></svg>
       </div>
       <div class="rail-sep"></div>
-      <div class="rail-item" onclick="openDrawer()" data-i18n-title="设置" title="设置">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <div class="rail-item" onclick="openDrawer()" data-i18n-title="工作台" title="工作台">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
       </div>
     </div>
 
@@ -485,21 +487,57 @@
       </div>
       <div class="drawer-search"><input id="drawerSearch" data-i18n-ph="搜索功能…" placeholder="搜索功能…" oninput="filterDrawer(this.value)"></div>
       <div class="drawer-nav" id="drawerNav">
-        <div class="navitem meta" data-sec="meta"><span class="dotk"></span><span data-i18n="元神 · 我的分身">元神 · 我的分身</span></div>
-        <div class="navitem meta" data-sec="cockpit"><span class="dotk"></span><span data-i18n="元神驾驶舱">元神驾驶舱</span></div>
-        <div class="navitem" data-sec="roles"><span class="dotk"></span><span data-i18n="角色库">角色库</span></div>
-        <div class="navitem" data-sec="resources"><span class="dotk"></span><span data-i18n="公共资源库">公共资源库</span></div>
-        <div class="navitem" data-sec="models"><span class="dotk"></span><span data-i18n="模型设置">模型设置</span></div>
-        <div class="navitem" data-sec="terminal"><span class="dotk"></span><span data-i18n="终端">终端</span></div>
-        <div class="navitem" data-sec="browser"><span class="dotk"></span><span data-i18n="浏览器">浏览器</span></div>
-        <div class="navitem" data-sec="board"><span class="dotk"></span><span data-i18n="项目看板">项目看板</span></div>
-        <div class="navitem" data-sec="cleanup"><span class="dotk"></span><span data-i18n="清理中心">清理中心</span></div>
-        <div class="navitem" data-sec="memory"><span class="dotk"></span><span data-i18n="长期记忆">长期记忆</span></div>
-        <div class="navitem" data-sec="skills"><span class="dotk"></span><span data-i18n="技能库">技能库</span></div>
-        <div class="navitem" data-sec="experiences"><span class="dotk"></span><span data-i18n="经验库">经验库</span></div>
-        <div class="navitem" data-sec="evolution"><span class="dotk"></span><span data-i18n="进化中心">进化中心</span></div>
-        <div class="navitem meta" data-sec="autopilot"><span class="dotk"></span><span data-i18n="元神续航">元神续航</span></div>
-        <div class="navitem" data-sec="about"><span class="dotk"></span><span data-i18n="关于分身">关于分身</span></div>
+        <!-- 折叠分组：工作台分类收敛 -->
+        <div class="drawer-group expanded">
+          <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>元神</span><span class="chevron">▾</span></div>
+          <div class="drawer-group-body">
+            <div class="navitem meta" data-sec="meta"><span class="dotk"></span><span data-i18n="我的分身">我的分身</span></div>
+            <div class="navitem meta" data-sec="cockpit"><span class="dotk"></span><span data-i18n="驾驶舱">驾驶舱</span></div>
+            <div class="navitem meta" data-sec="autopilot"><span class="dotk"></span><span data-i18n="续航">续航</span></div>
+          </div>
+        </div>
+        <div class="drawer-group expanded">
+          <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>项目</span><span class="chevron">▾</span></div>
+          <div class="drawer-group-body">
+            <div class="navitem" data-sec="board"><span class="dotk"></span><span data-i18n="项目看板">项目看板</span></div>
+          </div>
+        </div>
+        <div class="drawer-group expanded">
+          <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>团队</span><span class="chevron">▾</span></div>
+          <div class="drawer-group-body">
+            <div class="navitem" data-sec="roles"><span class="dotk"></span><span data-i18n="角色库">角色库</span></div>
+            <div class="navitem" data-sec="resources"><span class="dotk"></span><span data-i18n="公共资源库">公共资源库</span></div>
+          </div>
+        </div>
+        <div class="drawer-group">
+          <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>能力</span><span class="chevron">▸</span></div>
+          <div class="drawer-group-body">
+            <div class="navitem" data-sec="models"><span class="dotk"></span><span data-i18n="模型设置">模型设置</span></div>
+            <div class="navitem" data-sec="skills"><span class="dotk"></span><span data-i18n="技能库">技能库</span></div>
+            <div class="navitem" data-sec="experiences"><span class="dotk"></span><span data-i18n="经验库">经验库</span></div>
+            <div class="navitem" data-sec="evolution"><span class="dotk"></span><span data-i18n="进化中心">进化中心</span></div>
+          </div>
+        </div>
+        <div class="drawer-group">
+          <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>记忆</span><span class="chevron">▸</span></div>
+          <div class="drawer-group-body">
+            <div class="navitem" data-sec="memory"><span class="dotk"></span><span data-i18n="长期记忆">长期记忆</span></div>
+          </div>
+        </div>
+        <div class="drawer-group">
+          <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>工具</span><span class="chevron">▸</span></div>
+          <div class="drawer-group-body">
+            <div class="navitem" data-sec="terminal"><span class="dotk"></span><span data-i18n="终端">终端</span></div>
+            <div class="navitem" data-sec="browser"><span class="dotk"></span><span data-i18n="浏览器">浏览器</span></div>
+            <div class="navitem" data-sec="cleanup"><span class="dotk"></span><span data-i18n="清理中心">清理中心</span></div>
+          </div>
+        </div>
+        <div class="drawer-group">
+          <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>关于</span><span class="chevron">▸</span></div>
+          <div class="drawer-group-body">
+            <div class="navitem" data-sec="about"><span class="dotk"></span><span data-i18n="关于分身">关于分身</span></div>
+          </div>
+        </div>
         <div class="foot"><span id="ctxBadge" style="font-size:10px;color:var(--gray-400)">上下文：— 条消息</span><span onclick="toggleLang()" style="font-size:10px;color:var(--meta);cursor:pointer;margin-left:8px" title="切换语言 / Switch language">🌐 EN</span></div>
       </div>
     </div>
@@ -526,6 +564,15 @@
     .drawer-nav .navitem{color:#2a2e3a}
     .drawer-nav .navitem.active{background:var(--blue-50);color:var(--blue-600)}
     .drawer-nav .foot{margin-top:auto;padding:10px 4px}
+    .drawer-group{border-radius:8px;overflow:hidden;margin-bottom:2px}
+    .drawer-group-title{display:flex;align-items:center;justify-content:space-between;padding:9px 10px;font-size:13px;font-weight:500;color:#1f2230;cursor:pointer;border-radius:8px;user-select:none}
+    .drawer-group-title:hover{background:#f3f4f9}
+    .drawer-group-title .chevron{font-size:10px;color:#9aa0b4;transition:transform .15s}
+    .drawer-group.expanded .drawer-group-title .chevron{transform:rotate(0deg)}
+    .drawer-group:not(.expanded) .drawer-group-title .chevron{transform:rotate(-90deg)}
+    .drawer-group-body{display:none;flex-direction:column;gap:2px;padding-left:6px}
+    .drawer-group.expanded .drawer-group-body{display:flex}
+    .drawer-group .navitem{padding:7px 8px 7px 18px;border-radius:6px;font-size:12.5px}
     /* 联系人列微调（微信网页端观感） */
     .rooms{width:248px;background:#f7f8fa}
     /* v6：群聊区改为横向三栏 rooms | chat | split（微信网页端式） */
@@ -1692,6 +1739,12 @@ function renderReportCard(m){
     +`<div class="rc-foot">元神将继续自主推进，你随时可 @元神 干预。</div>`
     +`</div></div>`;
 }
+function _findMemberBySender(sender){
+  if(!sender) return null;
+  if(sender==='元神') return {id:'meta', name:'元神'};
+  const all = (curRoom && roomMembers[curRoom]) || [];
+  return all.find(x => x.name===sender || x.role_title===sender || (x.name && sender.includes(x.name))) || null;
+}
 function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerHTML='';
   if(!msgs.length){ b.innerHTML='<div class="empty"><div class="ic">💬</div><div>还没有消息，发送第一条指令开始工作</div></div>'; b.scrollTop=b.scrollHeight; return; }
   let lastRow=null;
@@ -1706,7 +1759,16 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
     else { row.className='msg '+(m.kind==='self'?'right':'left');
       const cls=escapeHtml(m.kind==='meta'?'meta':m.kind); const tag=m.tag?`<span class="tag ${escapeHtml(m.tag)}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
       let acts=''; if(m.kind==='meta') acts=`<div class="acts"><button class="btn sm" onclick="metaCheck(this)">检查产出</button><button class="btn sm ghost" onclick="metaStop()">中止</button><button class="btn sm" onclick="metaReassign(this)">重派</button></div>`;
-      row.innerHTML=`<div class="bubble ${cls}"><div class="sender">${escapeHtml(m.sender||'')}</div>${tag}<span class="btext">${escapeHtml(m.text)}</span>${acts}</div>`; }
+      // 左侧消息（agent / 元神）加可点头像
+      let avHtml='';
+      if(m.kind!=='self'){
+        const mem = _findMemberBySender(m.sender);
+        const avText = mem ? (mem.name||'?').slice(0,1) : (m.sender||'?').slice(0,1);
+        const avBg = mem ? stringToColor(mem.name||mem.role_title||'A') : (m.kind==='meta'?'#6d5bd0':'#9aa0b4');
+        const avClick = mem ? `onclick="openMemberDrawer('${jsStr(mem.id)}')"` : '';
+        avHtml = `<div class="msg-av" ${avClick} style="background:${avBg}" title="${escapeHtml(mem?mem.name:m.sender||'未知')}">${escapeHtml(avText)}</div>`;
+      }
+      row.innerHTML=`${avHtml}<div class="bubble ${cls}"><div class="sender">${escapeHtml(m.sender||'')}</div>${tag}<span class="btext">${escapeHtml(m.text)}</span>${acts}</div>`; }
     b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; });
   b.scrollTop=b.scrollHeight;
   if(window.__DEMO_STREAM__ && window.__LAST_SENT__ && lastRow){ streamText(lastRow); window.__LAST_SENT__=false; } }
@@ -1719,7 +1781,23 @@ let activeChatAbort=null;
 /* ===== v6：设置抽屉 / 分栏 / 思考链 / 进程轨迹 ===== */
 function openDrawer(){ const m=document.getElementById('drawerMask'), d=document.getElementById('drawer'); if(m)m.classList.add('show'); if(d)d.classList.add('show'); window.__drawerOpen=true; }
 function closeDrawer(){ const m=document.getElementById('drawerMask'), d=document.getElementById('drawer'); if(m)m.classList.remove('show'); if(d)d.classList.remove('show'); window.__drawerOpen=false; }
-function filterDrawer(q){ q=(q||'').trim().toLowerCase(); document.querySelectorAll('#drawerNav .navitem').forEach(it=>{ const t=it.textContent.toLowerCase(); it.style.display=(!q||t.includes(q))?'':'none'; }); }
+function filterDrawer(q){
+  q=(q||'').trim().toLowerCase();
+  document.querySelectorAll('#drawerNav .navitem').forEach(it=>{
+    const t=it.textContent.toLowerCase();
+    const show=!q||t.includes(q);
+    it.style.display=show?'':'none';
+    // 搜索命中时自动展开所在分组
+    if(show && q){ const g=it.closest('.drawer-group'); if(g) g.classList.add('expanded'); }
+  });
+}
+function toggleDrawerGroup(el){
+  const g=el.closest('.drawer-group');
+  const expanded=g.classList.contains('expanded');
+  // 可选：手风琴模式，展开当前时收起其他
+  if(!expanded){ document.querySelectorAll('#drawerNav .drawer-group.expanded').forEach(x=>{ if(x!==g) x.classList.remove('expanded'); }); }
+  g.classList.toggle('expanded', !expanded);
+}
 function updateSplitBtn(){ const b=document.getElementById('btnSplit'); if(!b)return; const open=window.__splitOpen; b.textContent= open?'收起产出区':'展开产出区'; b.classList.toggle('active', !!open); }
 function toggleSplit(){ const p=document.getElementById('splitPanel'); if(!p)return; const open=p.style.display!=='none'; if(open){ p.style.display='none'; window.__splitOpen=false; } else { p.style.display='flex'; window.__splitOpen=true; switchSplit('board'); } updateSplitBtn(); }
 function ensureSplitOpen(tab){ const p=document.getElementById('splitPanel'); if(!p || p.style.display!=='none') return; p.style.display='flex'; window.__splitOpen=true; switchSplit(tab||'board'); updateSplitBtn(); }
@@ -4797,85 +4875,218 @@ async function ckAddMember(){
   const t = await apiJson('/api/projects/'+ckFocus+'/members', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, role_title: name})});
   if(t.ok){ toast('已添加成员'); loadCockpitProject(ckFocus); } else toast('添加失败');
 }
-let mdMid = '';
+let mdMid = '', mdProfileData = null, mdProfileTab = 'role';
+function _isMetaMember(d){ return !!(d && (d.is_meta || d.name==='元神' || d.role_title==='元神' || String(d.id).startsWith('meta'))); }
+function _xpPercent(d){ const next=(d.level||1)*100; const cur=d.experience||0; return Math.min(100, Math.round(cur/next*100)); }
+function _avColor(d){ return _isMetaMember(d)?'#6d5bd0':stringToColor(d.name||d.role_title||'A'); }
+
 async function openMemberDrawer(mid){
   mdMid = mid;
   let m;
   try { m = await apiJson('/api/members/'+mid); } catch(e){ toast('成员加载失败'); return; }
   if(!m.ok){ toast('成员加载失败'); return; }
-  const d = m.member, mc = d.model_cfg || {};
-  document.getElementById('mdTitle').textContent = d.name + ' · 详情';
-  document.getElementById('mdBody').innerHTML = `
-    <div class="md-row"><label>角色名</label><input id="mdName" value="${escapeHtml(d.name)}"></div>
-    <div class="md-row"><label>一句话定位</label><input id="mdTitle2" value="${escapeHtml(d.role_title||'')}"></div>
-    <div class="md-row"><label>所属轨道</label><select id="mdTrack">${['web','h5','app','mp','generic'].map(t=>`<option ${d.track===t?'selected':''}>${t}</option>`).join('')}</select></div>
-    <div class="md-row"><label>Soul 文件（灵魂：语气 / 边界 / 价值观）</label><textarea id="mdSoul" rows="4">${escapeHtml(d.soul||'')}</textarea></div>
-    <div class="md-row"><label>Rule（行为规则，一行一条）</label><textarea id="mdRule" rows="3">${escapeHtml((d.rule||[]).join('\n'))}</textarea></div>
-    <div class="md-row"><label>工程规范</label><textarea id="mdEng" rows="2">${escapeHtml(d.eng_spec||'')}</textarea></div>
-    <div class="md-row"><label>模型配置（绑定专属模型 = 真·多模型；留空 = 跟随全局链）</label>
-      供应商 <select id="mdProvider">
-        <option value="">跟随全局</option>
-        <option value="deepseek"${mc.provider==='deepseek'?' selected':''}>DeepSeek</option>
-        <option value="openai"${mc.provider==='openai'?' selected':''}>OpenAI</option>
-        <option value="claude"${mc.provider==='claude'?' selected':''}>Claude</option>
-        <option value="qwen"${mc.provider==='qwen'?' selected':''}>通义千问</option>
-        <option value="moonshot"${mc.provider==='moonshot'?' selected':''}>Moonshot</option>
-        <option value="zhipu"${mc.provider==='zhipu'?' selected':''}>智谱 GLM</option>
-        <option value="ollama"${mc.provider==='ollama'?' selected':''}>Ollama 本地</option>
-      </select>
-      模型 <input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-v4-flash')}" style="width:140px" placeholder="如 gpt-4o-mini">
-      Key <input id="mdKey" type="password" value="${escapeHtml(mc.api_key||'')}" style="width:150px" placeholder="${mc.api_key?'已保存（重填覆盖）':'专属模型才填'}">
-      Base URL <input id="mdBase" value="${escapeHtml(mc.base_url||'')}" style="width:130px" placeholder="留空=官方">
-      <br><span style="font-size:10px;color:var(--gray-400)">温度</span> <input id="mdTemp" type="number" step="0.1" value="${mc.temp!=null?mc.temp:0.3}" style="width:52px">
-      <span style="font-size:10px;color:var(--gray-400)">推理</span> <input type="checkbox" id="mdReason" ${mc.reason?'checked':''}>
-      <span style="font-size:10px;color:var(--gray-400)">上限</span> <input id="mdTok" type="number" value="${mc.max_tokens||8000}" style="width:64px">
-      <div style="font-size:10.5px;color:var(--gray-400);margin-top:4px">填了「供应商 + Key」→ 该成员执行时用专属模型（跨角色真·多模型）；留空 → 走全局模型链（角色扮演）。Key 只存本机。</div>
-    </div>
-    <div class="md-row"><label>工作模式 · 时间</label>
-      状态 <select id="mdWork">${['online','offline','busy','idle'].map(w=>`<option value="${w}" ${d.work_mode===w?'selected':''}>${WM[w][0]}</option>`).join('')}</select>
-      时段 <select id="mdHours">${['24h','worktime','follow_meta'].map(h=>`<option ${d.work_hours===h?'selected':''}>${h}</option>`).join('')}</select>
-    </div>
-    <div class="md-row"><label>当前任务</label><input id="mdTask" value="${escapeHtml(d.current_task||'')}"></div>
-    <div class="md-row"><label>技能情况</label><div class="md-chips">${((d.skills||[]).map(s=>'<span class="md-chip">'+escapeHtml(s.name||s)+'</span>')).join('') || '<span style="font-size:11px;color:var(--gray-500)">暂无</span>'}</div></div>
-    <div class="md-row"><label>经验 · 进化树（系统记录，元神据此自动升级）</label>
-      <div style="font-size:11px;color:var(--gray-500);margin-bottom:8px">Lv.${d.level||1} · 经验 ${d.experience||0} · 版本 v${d.version||1}${((d.evo_tree||[]).length?' · 进化 '+d.evo_tree.length+' 次':'')}</div>
-      <div class="evo-tree">${((d.evo_tree||[]).slice().reverse().map(e=>{
-        const tb = ({fail:['自动升级','#f5222d'],weak:['弱项强化','#fa8c16'],manual:['定向强化','#722ed1']})[e.type] || ['进化','#6d5bd0'];
-        const chips = (e.added||[]).map(a=>'<span class="evo-chip">'+escapeHtml(a)+'</span>').join('');
-        return '<div class="evo-node"><div class="evo-dot" style="background:'+tb[1]+'"></div><div class="evo-card">'+
-          '<div class="evo-head"><b>v'+(e.v||'?')+'</b><span class="evo-badge" style="background:'+tb[1]+'1a;color:'+tb[1]+';border:.5px solid '+tb[1]+'55">'+tb[0]+'</span><span class="evo-time">'+escapeHtml((e.at||'').slice(0,16))+'</span></div>'+
-          '<div class="evo-note">'+escapeHtml(e.note||'')+'</div>'+
-          (chips?'<div class="evo-added">+ '+chips+'</div>':'')+
-        '</div></div>';
-      }).join('')) || '<div style="font-size:11px;color:var(--gray-400)">尚无进化记录</div>'}</div>
-    </div>
-    <div class="md-row"><label>经历库（每次任务 / 升级留痕）</label>
-      <div class="md-exp">${((d.experiences||[]).map(e=>'<div class="md-exp-i"><span class="md-exp-k md-exp-'+(e.kind||'general')+'">'+(e.kind||'general')+'</span> <span style="font-size:10px;color:var(--gray-400)">'+escapeHtml((e.created_at||'').slice(0,16))+'</span><div style="font-size:11px;color:var(--gray-700);margin-top:2px">'+escapeHtml(e.note||'')+'</div></div>')).join('') || '<div style="font-size:11px;color:var(--gray-400)">尚无经历</div>'}</div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-      <button class="btn meta" onclick="saveMember()">保存</button>
-      <button class="btn" onclick="upgradeMember('${d.id}')">⚡ 元神升级</button>
-      <button class="btn" onclick="autoUpgradeMember('${d.id}')">🛠 自动补能力</button>
-      <button class="btn" onclick="openDirect('${d.id}','${escapeHtml(d.name)}')">💬 私聊</button>
-      <button class="btn sm" style="margin-left:auto;color:#cf1322" onclick="delMember('${d.id}')">删除</button>
-    </div>`;
+  mdProfileData = m.member;
+  mdProfileTab = _isMetaMember(mdProfileData) ? 'meta' : 'role';
+  _renderProfile();
   document.getElementById('memberMask').style.display = 'flex';
 }
-function closeMemberDrawer(){ document.getElementById('memberMask').style.display = 'none'; }
-async function saveMember(){
-  if(!mdMid) return;
-  const payload = {
-    name: document.getElementById('mdName').value,
-    role_title: document.getElementById('mdTitle2').value,
-    track: document.getElementById('mdTrack').value,
-    soul: document.getElementById('mdSoul').value,
-    rule: document.getElementById('mdRule').value.split('\n').map(x=>x.trim()).filter(Boolean),
-    eng_spec: document.getElementById('mdEng').value,
-    model_cfg: {provider: document.getElementById('mdProvider').value, api_key: document.getElementById('mdKey').value.trim(), base_url: document.getElementById('mdBase').value.trim(), model_name: document.getElementById('mdModel').value.trim(), model: document.getElementById('mdModel').value.trim(), temp: +(document.getElementById('mdTemp').value||0.3), reason: document.getElementById('mdReason').checked, max_tokens: +(document.getElementById('mdTok').value||8000)},
-    work_mode: document.getElementById('mdWork').value,
-    work_hours: document.getElementById('mdHours').value,
-    current_task: document.getElementById('mdTask').value,
+
+/* 元神自己的资料卡（rail 头像 / 当前用户） */
+function openMetaProfile(){
+  mdMid = 'meta';
+  mdProfileData = {
+    id:'meta', name:'元神', role_title:'我的分身', is_meta:true, work_mode:'online', work_hours:'24h',
+    level: window.__metaLevel || 1, experience: window.__metaExp || 0, version: window.__metaVer || '1.0',
+    soul: window.__metaSoul || '绝对站本机用户本人利益。唯一委托人=本机用户；冲突护用户；钱/隐私/声誉保守；用户完全控制权；蒸馏他人须明示授权。',
+    eng_spec: window.__metaEng || 'R8 清爽规则：函数≤50行，嵌套≤3层；真实 API 集成不接受 mock；优先交付可交互产物。',
+    skills: window.__metaSkills || ['任务调度','团队搭建','验收门禁','长期记忆','进化复盘','模型路由'],
+    model_cfg: window.__metaModel || {provider:'deepseek', model_name:'deepseek-v4-flash'},
+    rule: window.__metaRule || ['用户完全控制权','冲突时护用户','钱/隐私/声誉保守'],
+    current_task: window.__metaTask || '统筹所有项目与 Agent 团队',
+    memory: window.__metaMemory || [],
+    evo_tree: window.__metaEvo || []
   };
+  mdProfileTab = 'meta';
+  _renderProfile();
+  document.getElementById('memberMask').style.display = 'flex';
+}
+
+function _renderProfile(){
+  const d = mdProfileData; if(!d) return;
+  const isMeta = _isMetaMember(d);
+  const mc = d.model_cfg || {};
+  const c = _avColor(d);
+  const xp = _xpPercent(d);
+  const status = d.work_mode || 'online';
+  const statusLabel = (WM[status] || ['在线','#389e0d'])[0];
+
+  // 头部
+  document.getElementById('mdHeader').innerHTML = `
+    <div class="profile-header">
+      <div class="profile-av" style="background:${c}">${isMeta?'元':escapeHtml((d.name||'?').slice(0,1))}</div>
+      <div class="profile-meta">
+        <div class="profile-name">${escapeHtml(d.name||'未命名')}${isMeta?'<span class="profile-badge meta">元神</span>':''}</div>
+        <div class="profile-role">${escapeHtml(d.role_title||'')}${d.track?' · '+d.track:''}</div>
+        <div class="profile-badges">
+          <span class="profile-badge ${status}">${statusLabel}</span>
+          <span class="profile-badge" style="background:#fff7e6;color:#d46b08;border-color:#ffd591">Lv.${d.level||1}</span>
+          <span class="profile-badge" style="background:#f0f5ff;color:#2f54eb;border-color:#c7dcff">v${d.version||1}</span>
+          ${d.current_task?'<span class="profile-badge" style="background:#f6ffed;color:#389e0d;border-color:#b7eb8f">'+escapeHtml(d.current_task.slice(0,10))+(d.current_task.length>10?'…':'')+'</span>':''}
+        </div>
+        <div class="profile-xp">
+          <div class="profile-xp-bar"><div class="profile-xp-fill" style="width:${xp}%"></div></div>
+          <div class="profile-xp-txt">经验 ${d.experience||0} / 升级需 ${(d.level||1)*100} · 已完成 ${xp}%</div>
+        </div>
+      </div>
+    </div>`;
+
+  // Tab
+  const tabs = isMeta
+    ? [['meta','元神'],['role','角色'],['soul','Soul'],['eng','工程'],['model','模型'],['skills','技能'],['memory','记忆'],['evo','进化']]
+    : [['role','角色'],['soul','Soul'],['eng','工程'],['model','模型'],['skills','技能'],['team','团队'],['memory','记忆'],['evo','进化']];
+  document.getElementById('mdTabs').innerHTML = tabs.map(([k,l])=>`<div class="profile-tab ${mdProfileTab===k?'active':''}" data-tab="${k}" onclick="_switchProfileTab('${k}')">${l}</div>`).join('');
+
+  // 内容
+  document.getElementById('mdBody').innerHTML = _renderProfileBody(d, isMeta);
+}
+
+function _renderProfileBody(d, isMeta){
+  const mc = d.model_cfg || {};
+  const body = {
+    meta: `
+      <div class="profile-hint">元神是你所有 Agent 的总管。它只搭建基础设施与团队，不直接执行；账号归属权是你的核心数字资产。</div>
+      <div class="md-row"><label>元神宪法（最高优先级）</label><textarea id="mdSoul" rows="5">${escapeHtml(d.soul||'')}</textarea></div>
+      <div class="md-row"><label>调度范围</label><input id="mdTask" value="${escapeHtml(d.current_task||'')}" placeholder="例如：统筹所有项目与 Agent 团队"></div>
+      <div class="md-row"><label>全局规则（一行一条）</label><textarea id="mdRule" rows="3">${escapeHtml((d.rule||[]).join('\n'))}</textarea></div>
+      <div class="md-row"><label>元神秘钥 / 全局模型</label>
+        供应商 <select id="mdProvider">${_providerOptions(mc.provider)}</select>
+        模型 <input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-v4-flash')}" style="width:160px" placeholder="如 deepseek-v4-flash">
+        Key <input id="mdKey" type="password" value="${escapeHtml(mc.api_key||'')}" style="width:160px" placeholder="${mc.api_key?'已保存（重填覆盖）':'全局 Key'}">
+      </div>
+      <div class="md-row"><label>记忆空间（仅你可见，跨项目共享）</label><textarea id="mdMemory" rows="4" placeholder="记录你的偏好、习惯、决策…">${escapeHtml((d.memory||[]).join('\n'))}</textarea></div>
+    `,
+    role: `
+      <div class="md-row"><label>角色名</label><input id="mdName" value="${escapeHtml(d.name||'')}"/></div>
+      <div class="md-row"><label>一句话定位</label><input id="mdTitle2" value="${escapeHtml(d.role_title||'')}" placeholder="例如：全栈工程师"/></div>
+      <div class="md-row"><label>所属轨道</label><select id="mdTrack">${['web','h5','app','mp','generic'].map(t=>`<option ${d.track===t?'selected':''}>${t}</option>`).join('')}</select></div>
+      <div class="md-row"><label>当前任务</label><input id="mdTask" value="${escapeHtml(d.current_task||'')}" placeholder="正在做的事"/></div>
+      <div class="md-row"><label>工作模式</label>
+        状态 <select id="mdWork">${['online','offline','busy','idle'].map(w=>`<option value="${w}" ${d.work_mode===w?'selected':''}>${WM[w][0]}</option>`).join('')}</select>
+        时段 <select id="mdHours">${['24h','worktime','follow_meta'].map(h=>`<option ${d.work_hours===h?'selected':''}>${h}</option>`).join('')}</select>
+      </div>
+    `,
+    soul: `
+      <div class="profile-hint">Soul 是角色的灵魂说明书：语气、边界、价值观、决策风格。元神据此派活。</div>
+      <div class="md-row"><label>Soul 文件</label><textarea id="mdSoul" rows="8">${escapeHtml(d.soul||'')}</textarea></div>
+      <div class="md-row"><label>行为规则（一行一条）</label><textarea id="mdRule" rows="4">${escapeHtml((d.rule||[]).join('\n'))}</textarea></div>
+    `,
+    eng: `
+      <div class="profile-hint">工程规范是该角色写代码 / 做交付时的强制约束。</div>
+      <div class="md-row"><label>工程规范</label><textarea id="mdEng" rows="8">${escapeHtml(d.eng_spec||'')}</textarea></div>
+    `,
+    model: `
+      <div class="profile-hint">绑定专属模型 = 真·多模型（该角色独立供方+Key）；留空 = 跟随全局链（单模型角色扮演）。Key 只存本机。</div>
+      <div class="md-row">
+        <label>供应商</label>
+        <select id="mdProvider">${_providerOptions(mc.provider)}</select>
+      </div>
+      <div class="md-row"><label>模型名</label><input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-v4-flash')}" placeholder="如 gpt-4o-mini"/></div>
+      <div class="md-row"><label>API Key</label><input id="mdKey" type="password" value="${escapeHtml(mc.api_key||'')}" placeholder="${mc.api_key?'已保存（重填覆盖）':'专属模型才填'}"/></div>
+      <div class="md-row"><label>Base URL</label><input id="mdBase" value="${escapeHtml(mc.base_url||'')}" placeholder="留空=官方"/></div>
+      <div class="md-row" style="display:flex;gap:12px;align-items:flex-end">
+        <div style="flex:1"><label>温度</label><input id="mdTemp" type="number" step="0.1" value="${mc.temp!=null?mc.temp:0.3}"/></div>
+        <div style="flex:1"><label>最大 token</label><input id="mdTok" type="number" value="${mc.max_tokens||8000}"/></div>
+        <div style="flex:1"><label>推理</label><div><input type="checkbox" id="mdReason" ${mc.reason?'checked':''}/> 开启</div></div>
+      </div>
+    `,
+    skills: `
+      <div class="profile-hint">技能是可复用的标准化工作流。当前角色已掌握的技能由元神根据任务与进化自动维护。</div>
+      <div class="md-row"><label>已掌握技能</label><div class="md-chips">${((d.skills||[]).map(s=>'<span class="md-chip">'+escapeHtml(s.name||s)+'</span>')).join('') || '<span style="font-size:11px;color:var(--gray-500)">暂无</span>'}</div></div>
+      <div class="md-row"><label>技能备注 / 待学习</label><textarea id="mdSkillNote" rows="3" placeholder="想让他学什么，写在这里，元神会在进化时参考">${escapeHtml(d.skill_note||'')}</textarea></div>
+    `,
+    team: `
+      <div class="profile-hint">所在团队与项目归属。</div>
+      <div class="md-row"><label>当前项目</label><input value="${escapeHtml((window.curRoom && curRoom.name) || ckFocus || '未加入项目')}" readonly style="background:var(--gray-50)"/></div>
+      <div class="md-row"><label>成员 ID</label><input value="${escapeHtml(d.id)}" readonly style="background:var(--gray-50);font-family:monospace;font-size:11px"/></div>
+      <div class="md-row"><label>创建时间</label><input value="${escapeHtml((d.created_at||'').slice(0,16))}" readonly style="background:var(--gray-50)"/></div>
+    `,
+    memory: `
+      <div class="profile-hint">该角色的单独记忆空间：偏好、习惯、关键决策、用户反馈。跨任务持久化。</div>
+      <div class="md-row"><label>记忆条目（一行一条）</label><textarea id="mdMemory" rows="10">${escapeHtml((d.memory||[]).join('\n'))}</textarea></div>
+    `,
+    evo: `
+      <div class="profile-hint">经验、升级与进化树。元神据此判断角色成长方向。</div>
+      <div class="md-row"><label>等级 · 经验 · 版本</label>
+        <div style="font-size:13px;font-weight:500">Lv.${d.level||1} · ${d.experience||0} XP · v${d.version||1}${((d.evo_tree||[]).length?' · 进化 '+d.evo_tree.length+' 次':'')}</div>
+      </div>
+      <div class="md-row"><label>进化树</label>
+        <div class="evo-tree">${((d.evo_tree||[]).slice().reverse().map(e=>{
+          const tb = ({fail:['自动升级','#f5222d'],weak:['弱项强化','#fa8c16'],manual:['定向强化','#722ed1']})[e.type] || ['进化','#6d5bd0'];
+          const chips = (e.added||[]).map(a=>'<span class="evo-chip">'+escapeHtml(a)+'</span>').join('');
+          return '<div class="evo-node"><div class="evo-dot" style="background:'+tb[1]+'"></div><div class="evo-card">'+
+            '<div class="evo-head"><b>v'+(e.v||'?')+'</b><span class="evo-badge" style="background:'+tb[1]+'1a;color:'+tb[1]+';border:.5px solid '+tb[1]+'55">'+tb[0]+'</span><span class="evo-time">'+escapeHtml((e.at||'').slice(0,16))+'</span></div>'+
+            '<div class="evo-note">'+escapeHtml(e.note||'')+'</div>'+
+            (chips?'<div class="evo-added">+ '+chips+'</div>':'')+
+          '</div></div>';
+        }).join('')) || '<div style="font-size:11px;color:var(--gray-400)">尚无进化记录</div>'}</div>
+      </div>
+      <div class="md-row"><label>经历库</label>
+        <div class="md-exp">${((d.experiences||[]).map(e=>'<div class="md-exp-i"><span class="md-exp-k md-exp-'+(e.kind||'general')+'">'+(e.kind||'general')+'</span> <span style="font-size:10px;color:var(--gray-400)">'+escapeHtml((e.created_at||'').slice(0,16))+'</span><div style="font-size:11px;color:var(--gray-700);margin-top:2px">'+escapeHtml(e.note||'')+'</div></div>')).join('') || '<div style="font-size:11px;color:var(--gray-400)">尚无经历</div>'}</div>
+      </div>
+    `
+  };
+
+  const tabBody = body[mdProfileTab] || body.role;
+  const actions = isMeta
+    ? `<button class="btn meta" onclick="saveMember()">保存元神配置</button><button class="btn" onclick="closeMemberDrawer()">关闭</button>`
+    : `<button class="btn meta" onclick="saveMember()">保存</button><button class="btn" onclick="upgradeMember('${d.id}')">⚡ 元神升级</button><button class="btn" onclick="autoUpgradeMember('${d.id}')">🛠 自动补能力</button><button class="btn" onclick="openDirect('${d.id}','${escapeHtml(d.name)}')">💬 私聊</button><button class="btn" style="margin-left:auto;color:#cf1322" onclick="delMember('${d.id}')">删除</button>`;
+  return tabBody + `<div class="profile-actions">${actions}</div>`;
+}
+
+function _providerOptions(sel){
+  const list = [['','跟随全局'],['deepseek','DeepSeek'],['openai','OpenAI'],['claude','Claude'],['qwen','通义千问'],['moonshot','Moonshot'],['zhipu','智谱 GLM'],['ollama','Ollama 本地']];
+  return list.map(([v,l])=>`<option value="${v}" ${sel===v?'selected':''}>${l}</option>`).join('');
+}
+
+function _switchProfileTab(tab){ mdProfileTab=tab; _renderProfile(); }
+
+function closeMemberDrawer(){ document.getElementById('memberMask').style.display = 'none'; mdProfileData=null; mdProfileTab='role'; }
+
+async function saveMember(){
+  if(!mdMid || !mdProfileData) return;
+  const d = mdProfileData, isMeta = _isMetaMember(d);
+  const payload = { id: d.id };
+  // 按当前 tab 收集字段，避免未渲染的 id 报错
+  const el = id => document.getElementById(id);
+  if(el('mdName')) payload.name = el('mdName').value;
+  if(el('mdTitle2')) payload.role_title = el('mdTitle2').value;
+  if(el('mdTrack')) payload.track = el('mdTrack').value;
+  if(el('mdSoul')) payload.soul = el('mdSoul').value;
+  if(el('mdRule')) payload.rule = el('mdRule').value.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(el('mdEng')) payload.eng_spec = el('mdEng').value;
+  if(el('mdTask')) payload.current_task = el('mdTask').value;
+  if(el('mdWork')) payload.work_mode = el('mdWork').value;
+  if(el('mdHours')) payload.work_hours = el('mdHours').value;
+  if(el('mdSkillNote')) payload.skill_note = el('mdSkillNote').value;
+  if(el('mdMemory')) payload.memory = el('mdMemory').value.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(el('mdModel') || el('mdProvider')){
+    payload.model_cfg = {
+      provider: el('mdProvider')?.value || '',
+      api_key: el('mdKey')?.value.trim() || '',
+      base_url: el('mdBase')?.value.trim() || '',
+      model_name: (el('mdModel')?.value.trim() || 'deepseek-v4-flash'),
+      model: (el('mdModel')?.value.trim() || 'deepseek-v4-flash'),
+      temp: el('mdTemp') ? +(el('mdTemp').value||0.3) : 0.3,
+      reason: el('mdReason') ? el('mdReason').checked : false,
+      max_tokens: el('mdTok') ? +(el('mdTok').value||8000) : 8000
+    };
+  }
+  // 元神本地缓存（不经过后端）
+  if(isMeta && mdMid==='meta'){
+    window.__metaSoul = payload.soul; window.__metaEng = payload.eng_spec; window.__metaRule = payload.rule;
+    window.__metaTask = payload.current_task; window.__metaModel = payload.model_cfg; window.__metaMemory = payload.memory;
+    toast('元神配置已缓存（本地）'); closeMemberDrawer(); return;
+  }
   const j = await apiJson('/api/members/'+mdMid, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
   if(j.ok){ toast('已保存'); if(ckFocus) loadCockpitProject(ckFocus); } else toast('保存失败');
 }
@@ -4975,6 +5186,30 @@ async function delMember(mid){
 .evo-added{margin-top:5px}
 .evo-chip{display:inline-block;font-size:10px;background:#f6ffed;border:.5px solid #b7eb8f;color:#389e0d;border-radius:8px;padding:0 6px;margin:1px 4px 1px 0}
 .md-exp{max-height:140px;overflow:auto;border:.5px solid var(--gray-100);border-radius:8px;padding:6px 8px;background:#fff}
+/* 成员/元神资料卡 */
+.profile-dialog{border-radius:16px;background:#fff}
+.profile-header{display:flex;gap:16px;align-items:flex-start;padding:16px 16px 12px;background:linear-gradient(180deg,rgba(109,91,208,.06) 0%,#fff 100%)}
+.profile-av{width:72px;height:72px;border-radius:18px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:600;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.profile-meta{flex:1;min-width:0}
+.profile-name{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:600;color:#1f2230}
+.profile-role{font-size:12px;color:var(--gray-500);margin-top:2px}
+.profile-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.profile-badge{font-size:11px;font-weight:500;padding:2px 8px;border-radius:8px;border:.5px solid transparent}
+.profile-badge.meta{background:#f0edff;color:#5b4fcf;border-color:#cfc9ef}
+.profile-badge.online{background:#f6ffed;color:#389e0d;border-color:#b7eb8f}
+.profile-badge.busy{background:#fff2e8;color:#d46b08;border-color:#ffbb96}
+.profile-badge.idle{background:#f5f5f5;color:#595959;border-color:#d9d9d9}
+.profile-xp{margin-top:10px}
+.profile-xp-bar{height:6px;background:var(--gray-100);border-radius:3px;overflow:hidden;margin-top:4px}
+.profile-xp-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#6d5bd0,#34c98e)}
+.profile-xp-txt{font-size:10px;color:var(--gray-400);margin-top:3px}
+.profile-tab{padding:9px 12px;font-size:12.5px;color:var(--gray-500);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:.15s}
+.profile-tab:hover{color:var(--gray-700)}
+.profile-tab.active{color:var(--blue-600,#2f6feb);border-bottom-color:var(--blue-600,#2f6feb);font-weight:500}
+.profile-section{display:none}
+.profile-section.active{display:block}
+.profile-hint{font-size:11px;color:var(--gray-400);line-height:1.5;margin-bottom:12px}
+.profile-actions{display:flex;gap:8px;margin-top:18px;padding-top:12px;border-top:.5px solid var(--gray-100);flex-wrap:wrap}
 .md-exp-i{padding:5px 0;border-bottom:.5px solid var(--gray-100)}
 .md-exp-k{display:inline-block;font-size:9px;padding:1px 6px;border-radius:6px;background:var(--gray-100);color:var(--gray-500)}
 .md-exp-upgrade{background:#eef0fb;color:var(--meta-700,#4b3fa8)}
@@ -5036,13 +5271,11 @@ async function delMember(mid){
     <div id="rsBody" style="flex:1;overflow:auto;padding:14px 16px"></div>
   </div>
 </div>
-<div id="memberMask" class="mask" style="display:none" onclick="if(event.target===this)closeMemberDrawer()">
-  <div class="dialog" style="max-width:560px;width:94vw;height:88vh;display:flex;flex-direction:column">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:.5px solid var(--gray-200)">
-      <div class="t" id="mdTitle" style="font-size:15px;font-weight:600">成员详情</div>
-      <button class="btn sm" onclick="closeMemberDrawer()">关闭</button>
-    </div>
-    <div id="mdBody" style="flex:1;overflow:auto;padding:14px 16px"></div>
+<div id="memberMask" class="mask" style="display:none;z-index:90" onclick="if(event.target===this)closeMemberDrawer()">
+  <div class="dialog profile-dialog" style="max-width:680px;width:94vw;height:88vh;display:flex;flex-direction:column;overflow:hidden">
+    <div id="mdHeader" style="flex-shrink:0"></div>
+    <div id="mdTabs" style="flex-shrink:0;display:flex;gap:2px;padding:0 16px;border-bottom:.5px solid var(--gray-200);overflow:auto"></div>
+    <div id="mdBody" style="flex:1;overflow:auto;padding:16px"></div>
   </div>
 </div>
 <!-- 1:1 私聊抽屉：用户 ↔ 成员/元神，结论可同步回群 -->
