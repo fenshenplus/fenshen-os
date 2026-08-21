@@ -609,6 +609,45 @@
       .rooms{width:100%}
       .split{width:100%;position:fixed;inset:0;z-index:70}
     }
+    /* ── 群聊内元神置顶卡：双模式（访谈 / 工作）── */
+    .meta-pin{background:linear-gradient(135deg,var(--meta-50),#fff);border:.5px solid #cfc9ef;border-radius:12px;padding:10px 12px;margin:8px 10px 0;box-shadow:0 1px 4px rgba(80,70,160,.08)}
+    .meta-pin .mp-top{display:flex;align-items:center;gap:10px}
+    .meta-pin .mp-av{width:36px;height:36px;border-radius:50%;background:var(--meta-700);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;flex-shrink:0}
+    .meta-pin .mp-id{cursor:pointer;flex:1}
+    .meta-pin .mp-name{font-size:14px;font-weight:600;color:#3C3489}
+    .meta-pin .mp-sub{font-size:11px;color:var(--gray-400);margin-top:1px}
+    .meta-pin .mp-toggle{display:flex;background:var(--gray-100);border-radius:99px;padding:2px;gap:2px;margin-left:auto;flex-shrink:0}
+    .meta-pin .seg{border:none;background:transparent;font-size:12px;padding:4px 12px;border-radius:99px;cursor:pointer;color:var(--gray-500)}
+    .meta-pin .seg.active{background:#fff;color:var(--meta-700);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+    .mp-iv{padding-top:8px}
+    .mp-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+    .mp-chip{font-size:11px;background:#fff;border:.5px solid #e3def5;color:var(--meta-700);padding:3px 8px;border-radius:99px}
+    .mp-q{font-size:13px;line-height:1.6;color:var(--fg);margin-bottom:4px}
+    .mp-probes{font-size:11px;color:var(--gray-400);line-height:1.6;margin-bottom:6px}
+    .mp-ans{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px;resize:none}
+    .mp-iv-actions{display:flex;gap:8px;margin-top:6px}
+    .mp-reflect{margin-top:10px;font-size:12px;line-height:1.7;color:var(--fg);padding:10px;background:#f6f5fb;border-left:3px solid var(--meta-700);border-radius:6px}
+    .mp-work{padding-top:8px}
+    .mp-work-actions{display:flex;gap:8px;flex-wrap:wrap}
+    .mp-new-menu{margin-top:8px;border:.5px solid var(--gray-200);border-radius:10px;overflow:hidden}
+    .mp-nm-item{padding:10px 12px;font-size:13px;cursor:pointer;border-bottom:.5px solid var(--gray-200)}
+    .mp-nm-item:last-child{border-bottom:none}
+    .mp-nm-item:hover{background:var(--gray-50)}
+    .mp-hint{font-size:11px;color:var(--gray-400);margin-top:8px;line-height:1.6}
+    /* 管理项目：所有项目看板总览，点击进入群聊 */
+    #projBoardMask{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:60;padding:20px}
+    .pb-modal{background:var(--bg);border-radius:14px;width:min(720px,94vw);max-height:84vh;display:flex;flex-direction:column;overflow:hidden}
+    .pb-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:.5px solid var(--gray-200)}
+    .pb-head .t{font-size:15px;font-weight:600}
+    .pb-body{padding:14px;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+    .pb-card{background:var(--gray-50);border:.5px solid var(--gray-200);border-radius:10px;padding:12px;cursor:pointer;transition:.15s}
+    .pb-card:hover{border-color:var(--meta-700);box-shadow:0 2px 8px rgba(80,70,160,.12)}
+    .pb-name{font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px}
+    .pb-bar{height:6px;background:var(--gray-200);border-radius:99px;overflow:hidden;margin-bottom:6px}
+    .pb-bar-fill{height:100%;background:linear-gradient(90deg,#6d5bd0,#34c98e)}
+    .pb-meta{display:flex;justify-content:space-between;font-size:11px;color:var(--meta-700);margin-bottom:6px}
+    .pb-last{font-size:11px;color:var(--gray-400);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    @media(max-width:768px){ .pb-body{grid-template-columns:1fr 1fr} .meta-pin{margin:6px 8px 0} }
     </style>
 
     <div class="main">
@@ -624,8 +663,6 @@
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span id="phaseBadge" style="font-size:10px;background:var(--meta-50);color:var(--meta-700);padding:2px 8px;border-radius:10px;font-weight:500">需求澄清</span>
               <span id="freezeBadge" style="font-size:10px;background:var(--gray-100);color:var(--gray-400);padding:2px 8px;border-radius:10px">未冻结</span>
-              <button class="btn sm" id="btnSplit" onclick="toggleSplit()" title="打开 / 收起右侧产出区">展开产出区</button>
-              <button class="btn sm meta" onclick="openBoard()">模块看板</button>
               <div style="position:relative">
                 <button class="btn sm" id="btnMore" onclick="toggleMoreMenu(event)" title="更多操作">···</button>
                 <div id="moreMenu" class="more-menu" style="display:none">
@@ -633,11 +670,27 @@
                   <div class="more-row"><button class="btn sm" onclick="toggleFreeze()" id="freezeBtn" style="flex:1">冻结</button></div>
                   <div class="more-row"><button class="btn sm" onclick="openChangeOrder()" style="flex:1">修改单</button></div>
                   <div class="more-row"><button class="btn sm" onclick="openSnapshots()" style="flex:1">快照</button></div>
+                  <div class="more-row"><button class="btn sm" id="btnSplit" onclick="toggleSplit()" style="flex:1">展开产出区</button></div>
+                  <div class="more-row"><button class="btn sm meta" id="btnBoard" onclick="openBoard()" style="flex:1">模块看板</button></div>
                   <div class="more-row"><button class="btn ghost sm" id="btnMetaStop" onclick="metaStop()" style="flex:1">元神中止</button></div>
                 </div>
               </div>
             </div>
             <button class="btn sm mobile-only" onclick="backToRooms()">← 列表</button>
+          </div>
+          <div id="metaPin" class="meta-pin" style="display:none">
+            <div class="mp-top">
+              <div class="mp-av" onclick="setView('meta')">元</div>
+              <div class="mp-id" onclick="setView('meta')">
+                <div class="mp-name">元神</div>
+                <div class="mp-sub" id="mpSub">主动了解你 · 蒸馏成长</div>
+              </div>
+              <div class="mp-toggle">
+                <button class="seg" data-mode="interview" onclick="setMetaMode('interview')">访谈</button>
+                <button class="seg" data-mode="work" onclick="setMetaMode('work')">工作</button>
+              </div>
+            </div>
+            <div id="mpBody"></div>
           </div>
           <div id="chatGoalBar" style="font-size:12px;color:var(--gray-600);padding:4px 14px;border-bottom:.5px solid var(--gray-200);display:none"></div>
           <div class="chat-body" id="chatBody"></div>
@@ -664,6 +717,14 @@
           <div id="boardPane" style="display:none;padding:12px"><div id="splitBoard"></div></div>
         </div>
       </div>
+      </div>
+
+      <!-- 管理项目：所有项目看板总览，点击进入群聊 -->
+      <div id="projBoardMask" style="position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:60;padding:20px" onclick="if(event.target===this)closeProjBoard()">
+        <div class="pb-modal">
+          <div class="pb-head"><span class="t">📋 我的项目 · 一目了然</span><button class="btn sm ghost" onclick="closeProjBoard()">✕</button></div>
+          <div class="pb-body" id="pbBody"></div>
+        </div>
       </div>
 
       <!-- 项目看板（总览图）：与群聊并列的定位入口 -->
@@ -1590,7 +1651,7 @@ function renderRooms(){ const el=document.getElementById('roomList'); el.innerHT
   // v5.1 移动端信息架构：元神置顶聊天卡（点我培养画像 → 元神配置/炼制页）
   const metaCard=document.createElement('div');
   metaCard.style.cssText='background:var(--meta-50);border:.5px solid #cfc9ef;border-radius:10px;padding:9px 12px;margin-bottom:8px;display:flex;align-items:center;gap:9px;cursor:pointer';
-  metaCard.onclick=()=>{ const nav=document.querySelector('.navitem[data-sec="meta"]'); if(nav) nav.click(); };
+  metaCard.onclick=()=>setView('meta');
   metaCard.innerHTML=`<span style="width:34px;height:34px;border-radius:50%;background:var(--meta-700);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px">元</span>
     <div style="flex:1"><div style="font-size:13px;font-weight:500;color:#3C3489">元神 · 我的分身</div>
     <div style="font-size:10px;color:var(--gray-400);margin-top:1px">点我培养画像 · 持续了解你</div></div>
@@ -1772,7 +1833,7 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
     b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; });
   b.scrollTop=b.scrollHeight;
   if(window.__DEMO_STREAM__ && window.__LAST_SENT__ && lastRow){ streamText(lastRow); window.__LAST_SENT__=false; } }
-function selectRoom(id){ curRoom=id; renderRooms(); loadChat(id);
+function selectRoom(id){ curRoom=id; setView('project');
   if(window.innerWidth<=768){ document.getElementById('sec-chat').classList.add('chat-open'); } }
 function backToRooms(){ document.getElementById('sec-chat').classList.remove('chat-open'); }
 async function postMsg(project_id, sender, kind, text, tag){ await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id,sender,kind,text,tag})}); }
@@ -1860,6 +1921,7 @@ document.addEventListener('click',function(e){
   if(!e.target.closest('#btnMore') && !e.target.closest('#moreMenu')) m.style.display='none';
 });
 async function sendMsg(){
+  if(curView==='meta'){ await sendMetaInChat(); return; }
   const inp=document.getElementById('msgInput');
   const v=inp.value.trim(); if(!v||!curRoom)return; inp.value=''; autoResizeInput(inp); window.__LAST_SENT__=true;
   // v4.2：异步派单——后端立即返回 job_id，这里轮询进度，不再阻塞等 100-200s
@@ -2138,7 +2200,7 @@ async function loadMeta(){ const b=document.getElementById('metaChat'); b.innerH
   const f=document.getElementById('metaFiles'); f.innerHTML='加载中…';
   let files=[]; try{ const res=await fetch('/api/meta/files'); files=await res.json(); }catch(e){ console.error(e); }
   f.innerHTML=''; files.forEach(x=>{ const d=document.createElement('div'); d.className='room';
-    d.innerHTML=`<span class="s" style="background:var(--meta-700)"></span><div class="info"><div class="nm">${escapeHtml(x.name)}</div><div class="ds">资料库 · 已学习</div></div>`; f.appendChild(d); }); }
+    d.innerHTML=`<span class="s" style="background:var(--meta-700)"></span><div class="info"><div class="nm">${escapeHtml(x.name)}</div><div class="ds">资料库 · 已学习</div></div>`; f.appendChild(d); }); window.metaFileCount=(files||[]).length; }
 async function sendMeta(){
   const inp=document.getElementById('metaInput');
   const v=inp.value.trim(); if(!v)return; inp.value=''; window.__LAST_SENT__=true;
@@ -2166,6 +2228,119 @@ function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.val
     await loadMeta(); };
   reader.readAsText(f); }
 function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元神 = 你的个人人格分身：代表你的利益与风格，拥有最高管理权限，但不替代你做最终决策。'); await loadMeta(); })(); }
+
+/* ── 群聊内元神置顶卡：双模式（访谈 / 工作）── */
+let curView='meta';
+let metaMode=localStorage.getItem('fenshen_meta_mode')||'interview';
+function setMetaMode(m){ metaMode=m; try{localStorage.setItem('fenshen_meta_mode',m);}catch(e){} renderMetaPin(); if(curView==='meta'){ const s=document.getElementById('mpSub'); if(s) s.textContent=(m==='interview'?'主动了解你 · 蒸馏成长':'帮你新建与管理项目'); } }
+function updateChatHead(){
+  const isMeta=curView==='meta';
+  ['phaseBadge','freezeBadge','btnSplit','btnMore'].forEach(id=>{const e=document.getElementById(id); if(e) e.style.display=isMeta?'none':'';});
+  const bd=document.getElementById('btnBoard'); if(bd) bd.style.display=isMeta?'none':'';
+  const mp=document.getElementById('metaPin'); if(mp) mp.style.display=isMeta?'':'none';
+}
+function setView(v, pid){
+  curView=v;
+  if(v==='meta'){ renderMetaPin(); updateChatHead(); loadMetaView(); }
+  else { if(pid) curRoom=pid; renderRooms(); updateChatHead(); if(curRoom) loadChat(curRoom); }
+}
+async function loadMetaView(){
+  document.getElementById('chatTitle').textContent='元神';
+  document.getElementById('chatSub').textContent='你的个人分身';
+  const gb=document.getElementById('chatGoalBar'); if(gb) gb.style.display='none';
+  const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
+  let msgs=[]; try{ const res=await fetch('/api/messages/'+META_PID); msgs=await res.json(); }catch(e){ console.error(e); }
+  renderChat(msgs);
+  const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='和元神说点什么…（Enter 发送）';
+}
+async function sendMetaInChat(){
+  const inp=document.getElementById('msgInput'); const v=inp.value.trim(); if(!v)return; inp.value=''; autoResizeInput(inp); window.__LAST_SENT__=true;
+  inp.placeholder='元神思考中…'; inp.disabled=true; activeChatAbort=new AbortController();
+  try{ await withBusy('btnSendMsg','…',async()=>{ await apiJson('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v}),signal:activeChatAbort.signal}); }); }
+  finally{ activeChatAbort=null; inp.placeholder='和元神说点什么…（Enter 发送）'; inp.disabled=false; }
+  await loadMetaView();
+}
+function renderMetaPin(){
+  const mp=document.getElementById('metaPin'); if(!mp) return;
+  mp.querySelectorAll('.seg').forEach(b=>b.classList.toggle('active', b.dataset.mode===metaMode));
+  const sub=document.getElementById('mpSub'); if(sub) sub.textContent=(metaMode==='interview'?'主动了解你 · 蒸馏成长':'帮你新建与管理项目');
+  const body=document.getElementById('mpBody'); if(!body) return;
+  body.innerHTML = (metaMode==='interview') ? mpInterviewHTML() : mpWorkHTML();
+  if(metaMode==='interview'){ mpLoadInterview(); fillMetaPinStats(); }
+}
+function mpInterviewHTML(){
+  return `<div class="mp-iv">
+    <div class="mp-chips">
+      <span class="mp-chip">空白体 ✦</span>
+      <span class="mp-chip">导入资料 <b id="mpFileCnt">0</b></span>
+      <span class="mp-chip">访谈 <b id="mpIvCnt">0/0</b></span>
+    </div>
+    <div class="mp-q" id="mpQ"></div>
+    <div class="mp-probes" id="mpProbes"></div>
+    <textarea id="mpAns" class="mp-ans" rows="2" placeholder="写下你的回答…（元神会越聊越懂你）"></textarea>
+    <div class="mp-iv-actions">
+      <button class="btn primary sm" onclick="mpSubmitInterview(this)">提交并继续</button>
+      <button class="btn sm ghost" onclick="mpLoadInterview(this)">跳过</button>
+    </div>
+    <div id="mpReflect"></div>
+  </div>`;
+}
+function mpWorkHTML(){
+  return `<div class="mp-work">
+    <div class="mp-work-actions">
+      <button class="btn primary sm" onclick="mpToggleNewMenu()">＋ 新建工作</button>
+      <button class="btn sm meta" onclick="openProjBoard()">📋 管理项目</button>
+    </div>
+    <div id="mpNewMenu" class="mp-new-menu" style="display:none">
+      <div class="mp-nm-item" onclick="createSoloProject()">单人任务</div>
+      <div class="mp-nm-item" onclick="openWizard()">团队任务</div>
+      <div class="mp-nm-item" onclick="metaJudge()">让元神判断</div>
+    </div>
+    <div class="mp-hint">要干啥直接跟元神说，它帮你组建团队、派活、追进度。复杂看板都藏在「···」里。</div>
+  </div>`;
+}
+async function mpLoadInterview(btn){ await withBusy(btn,'加载中…',async()=>{ const d=await apiJson('/api/meta/interview/next'); mpRenderInterview(d); }); }
+function mpRenderInterview(d){
+  const q=document.getElementById('mpQ'); if(!q) return;
+  const cnt=document.getElementById('mpIvCnt'); if(cnt) cnt.textContent=(d.progress||0)+'/'+(d.total||0);
+  const pr=document.getElementById('mpProbes'), an=document.getElementById('mpAns'), rf=document.getElementById('mpReflect');
+  if(d.phase==='complete'||!d.question){ q.textContent='🎉 元神已经比较了解你了！也可以随时补充，或上传资料让它更懂你。'; if(pr)pr.textContent=''; if(an)an.style.display='none'; }
+  else { q.textContent=d.question; if(pr)pr.innerHTML=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>'); if(an){an.style.display='';an.value='';an.dataset.qid=d.qid;} }
+  if(rf) rf.innerHTML = d.reflection ? '<div class="mp-reflect">'+escapeBr(d.reflection)+'</div>' : '';
+}
+async function mpSubmitInterview(btn){
+  const a=document.getElementById('mpAns'); const qid=a.dataset.qid; const v=a.value.trim();
+  if(!v||!qid){ toast('先写点什么再提交'); return; } a.value='';
+  await withBusy(btn,'元神消化中…',async()=>{ const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v})}); mpRenderInterview(d.next||d); });
+  fillMetaPinStats();
+}
+function fillMetaPinStats(){ const fc=document.getElementById('mpFileCnt'); if(fc) fc.textContent=window.metaFileCount||0; }
+function mpToggleNewMenu(){ const m=document.getElementById('mpNewMenu'); if(m) m.style.display=(m.style.display==='none'?'':'none'); }
+async function createSoloProject(){
+  const m=document.getElementById('mpNewMenu'); if(m)m.style.display='none';
+  const name=prompt('给这个单人任务起个名字：'); if(!name||!name.trim())return;
+  const roleId=(typeof roles!=='undefined'&&roles.length)?roles[0].id:'';
+  try{ await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim(),goal:'',standards:'',design_standard:'',modules:[{name:'执行',owner_role:'我'}],roles:roleId?[roleId]:[]})}); toast('✅ 单人任务已创建'); }
+  catch(e){ toast('创建失败：'+errText(e)); return; }
+  await loadRooms(); const c=rooms.find(r=>r.name===name.trim()); if(c){ setView('project', c.id); }
+}
+function metaJudge(){ const m=document.getElementById('mpNewMenu'); if(m)m.style.display='none'; setView('meta'); const inp=document.getElementById('msgInput'); if(inp){ inp.focus(); inp.value='我有个想法想落地，你帮我判断用单人任务还是团队任务：'; autoResizeInput(inp); } }
+async function openProjBoard(){
+  const m=document.getElementById('mpNewMenu'); if(m)m.style.display='none';
+  const mask=document.getElementById('projBoardMask'); const body=document.getElementById('pbBody');
+  if(mask) mask.style.display='flex'; if(body) body.innerHTML='加载中…';
+  try{ const r=await fetch('/api/projects'); const list=await r.json();
+    if(!list||!list.length){ if(body) body.innerHTML='<div class="empty"><div class="ic">📭</div><div>还没有项目，点「新建工作」开始</div></div>'; return; }
+    if(body) body.innerHTML=list.map(p=>{ const c=p.completion||{}; const pct=c.percent||0; const lm=p.last_msg?escapeHtml(p.last_msg):'暂无消息';
+      return `<div class="pb-card" onclick="setView('project','${jsStr(p.id)}');closeProjBoard();">
+        <div class="pb-name">${escapeHtml(p.name)}</div>
+        <div class="pb-bar"><div class="pb-bar-fill" style="width:${pct}%"></div></div>
+        <div class="pb-meta"><span>完成 ${pct}%</span><span>${escapeHtml(p.phase?PHASE_NAMES[p.phase]||p.phase:'需求澄清')}</span></div>
+        <div class="pb-last">${lm}</div>
+      </div>`; }).join('');
+  }catch(e){ if(body) body.innerHTML='<div class="empty"><div class="ic">⚠️</div><div>加载失败</div></div>'; }
+}
+function closeProjBoard(){ const m=document.getElementById('projBoardMask'); if(m) m.style.display='none'; }
 
 /* ── 元神持续访谈 / 画像 ──
    元神窗一共四种视图：对话 / 总看板 / 了解你 / 我的画像，任一时刻只显示一种。
@@ -4380,7 +4555,8 @@ async function loadContextBadge(){
 }
 
 /* init */
-loadRooms(); renderRoles(); renderResources(); loadMeta(); renderModels(); checkAuth();
+loadRooms().then(()=>{ if(window.innerWidth>768){ setView('meta'); } else { curView='project'; updateChatHead(); } });
+renderRoles(); renderResources(); loadMeta(); renderModels(); checkAuth();
 loadCleanupPreview(); loadMemory(); loadContextBadge(); loadSkills(); renderGrindAgg();
 
 /* ── v5.1 首次使用引导：元神软门槛（3 步，可跳过）── */
