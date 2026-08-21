@@ -234,7 +234,7 @@
   .chat-input .send { width:40px; height:40px; border-radius:50%; border:none; background:var(--blue-500); color:var(--on-accent); cursor:pointer; flex-shrink:0; font-size:16px; }
   .chat-input .send:hover { background:var(--blue-600); }
 
-  /* 卡片网格（角色库/资源库） */
+  /* 卡片网格（精选角色库/资源库） */
   .grid-wrap { padding:16px 20px; overflow-y:auto; flex:1; }
   .grid-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
   .grid-head .t { font-size:14px; font-weight:500; }
@@ -505,7 +505,7 @@
         <div class="drawer-group expanded">
           <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>团队</span><span class="chevron">▾</span></div>
           <div class="drawer-group-body">
-            <div class="navitem" data-sec="roles"><span class="dotk"></span><span data-i18n="角色库">角色库</span></div>
+            <div class="navitem" data-sec="roles"><span class="dotk"></span><span data-i18n="精选角色库">精选角色库</span></div>
             <div class="navitem" data-sec="resources"><span class="dotk"></span><span data-i18n="公共资源库">公共资源库</span></div>
           </div>
         </div>
@@ -513,7 +513,7 @@
           <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>能力</span><span class="chevron">▸</span></div>
           <div class="drawer-group-body">
             <div class="navitem" data-sec="models"><span class="dotk"></span><span data-i18n="模型设置">模型设置</span></div>
-            <div class="navitem" data-sec="skills"><span class="dotk"></span><span data-i18n="技能库">技能库</span></div>
+            <div class="navitem" data-sec="skills"><span class="dotk"></span><span data-i18n="精选技能库">精选技能库</span></div>
             <div class="navitem" data-sec="experiences"><span class="dotk"></span><span data-i18n="经验库">经验库</span></div>
             <div class="navitem" data-sec="evolution"><span class="dotk"></span><span data-i18n="进化中心">进化中心</span></div>
           </div>
@@ -654,7 +654,7 @@
       <!-- 项目群聊 -->
       <div class="section active" id="sec-chat">
         <div class="rooms">
-          <div class="rooms-head"><span class="t">项目 / 团队</span><button class="room-add" onclick="openWizard()">+</button></div>
+          <div class="rooms-head"><span class="t">项目 · 任务与群聊</span><button class="room-add" onclick="openWizard()">+</button></div>
           <div class="room-list" id="roomList"></div>
         </div>
         <div class="chat">
@@ -879,10 +879,10 @@
         </div>
       </div>
 
-      <!-- 角色库 -->
+      <!-- 精选角色库 -->
       <div class="section" id="sec-roles">
         <div class="grid-wrap">
-          <div class="grid-head"><span class="t">角色库<span style="font-size:11px;color:var(--gray-400);font-weight:400;margin-left:6px">每个角色一份职责说明书，元神照着它派活</span></span><button class="btn primary sm" onclick="openRole()">+ 新建角色</button></div>
+          <div class="grid-head"><span class="t">精选角色库<span style="font-size:11px;color:var(--gray-400);font-weight:400;margin-left:6px">少而精的专才角色，元神按需调用</span></span><button class="btn primary sm" onclick="openRole()">+ 新建角色</button></div>
           <div class="grid" id="roleGrid"></div>
         </div>
       </div>
@@ -1061,11 +1061,11 @@
         </div>
       </div>
 
-      <!-- 技能库 -->
+      <!-- 精选技能库 -->
       <div class="section" id="sec-skills">
         <div style="padding:16px 20px;flex:1;overflow-y:auto">
-          <div class="grid-head"><span class="t">技能库</span><span class="rl" style="font-size:11px;color:var(--gray-400)">可复用的标准化工作流，跨项目共享 · 支持版本迭代与回滚</span></div>
-          <div style="font-size:11px;color:var(--gray-500);margin:12px 0">预装 13 项核心技能（12 项 coding + 上下文「磨」）：出厂即启用、命中触发词自动装配 · 技能位上限 20（含预装，余 7 位供选配）</div>
+          <div class="grid-head"><span class="t">精选技能库</span><span class="rl" style="font-size:11px;color:var(--gray-400)">精选可复用工作流，不堆量，命中即用</span></div>
+          <div style="font-size:11px;color:var(--gray-500);margin:12px 0">预装 13 项核心技能（12 项 coding + 上下文「磨」）：出厂即启用、命中触发词自动装配 · 技能位上限 20——不追求数量，只保留高频、高质的精选件</div>
           <div id="skillList" style="font-size:12px;color:var(--gray-400)">加载中…</div>
           <!-- P0-B：磨 · 省 token 实测 -->
           <div class="card" style="margin:14px 0;padding:12px">
@@ -1412,9 +1412,9 @@ const PHASE_NAMES = { requirement:'需求澄清', ui:'UI/交互定稿', code:'�
    受 meta_settings.in_app_guide_enabled 门控；关 → 所有引导回退原始界面（零侵入）。 */
 const IN_APP_GUIDE = {
   chat: {
-    name:'项目群聊', tagline:'每个项目 = 一个群聊，元神在此调度团队',
-    empty:{ title:'还没有项目', desc:'在群里用一句话描述目标，元神会自动建项目、拆任务、派角色并跟踪进度。', action:{label:'＋ 成立第一个项目', fn:'openWizard'} },
-    help:{ title:'项目群聊怎么用', body:'分身以「群聊」管理项目：在群里说目标（如「做一个落地页」），元神建项目、拆任务、派单，进度同步到「项目看板」。@元神 随时下达指令；顶部可切换阶段 / 冻结 / 修改单 / 快照。', tips:['点右上「＋」成立第一个项目','分栏里看进程轨迹与看板','群聊消息即项目上下文，刷新不丢'], docUrl:null }
+    name:'项目群聊', tagline:'项目 = 单人任务或群聊，元神按复杂度选择形态',
+    empty:{ title:'还没有项目', desc:'和元神说目标，它会判断开单人任务还是群聊模式，自动拆任务、派角色并跟踪进度。', action:{label:'＋ 成立第一个项目', fn:'openWizard'} },
+    help:{ title:'项目群聊怎么用', body:'分身里，项目可以是「单人任务」（默认，和 WorkBuddy 一样）或「群聊模式」（复杂协作）。在元神窗口说目标，元神会按复杂度选择形态、建项目、拆任务、派单，进度同步到「项目看板」。@元神 随时下达指令；顶部可切换阶段 / 冻结 / 修改单 / 快照。', tips:['点元神置顶卡「＋新建工作」开单人任务','复杂协作才开团队任务（群聊模式）','消息即项目上下文，刷新不丢'], docUrl:null }
   },
   cockpit: {
     name:'元神驾驶舱', tagline:'元神状态总览：续航 / 战队 / 项目 / 自进化',
@@ -1427,9 +1427,9 @@ const IN_APP_GUIDE = {
     help:{ title:'元神是什么', body:'元神是你的数字克隆体总管，默认就是能干活的技术 PM 工具人——开箱即用。你越通过访谈 / 上传资料 / 闲聊喂养它，它越像你。手机端最容易养成它。', tips:['点「了解我」回答访谈（最省事）','上传简历 / 聊天记录 / 笔记做蒸馏','镜像校验让绑定越做越牢'], docUrl:null }
   },
   roles: {
-    name:'角色库', tagline:'团队里的专才：架构 / 后端 / 前端 / 测试',
-    empty:{ title:'还没有角色', desc:'角色是团队里的专才，各有专属技能与门禁。元神派单时自动选人，你也能手动添加。', action:{label:'＋ 添加角色', sec:'roles'} },
-    help:{ title:'角色库', body:'每个角色是一份「职责 + 技能 + 门禁」的配置。元神接到任务后，按职责自动派给最合适的人；危险操作需真人审批（approval_mode）。', tips:['预置角色覆盖研发全链路','手动加角色时写清 mandate 与门禁','门禁决定它能动什么、不能动什么'], docUrl:null }
+    name:'精选角色库', tagline:'少而精的专才：架构 / 后端 / 前端 / 测试',
+    empty:{ title:'还没有角色', desc:'精选角色是团队里的专才，各有专属技能与门禁。元神派单时自动选人，你也能手动添加。', action:{label:'＋ 添加角色', sec:'roles'} },
+    help:{ title:'精选角色库', body:'每个角色是一份「职责 + 技能 + 门禁」的配置。元神接到任务后，按职责自动派给最合适的人；危险操作需真人审批（approval_mode）。我们不追求大库，只保留高频、高质的精选角色。', tips:['预置角色覆盖研发主链路','手动加角色时写清 mandate 与门禁','门禁决定它能动什么、不能动什么'], docUrl:null }
   },
   resources: {
     name:'公共资源库', tagline:'跨项目共享的资料 / 接口 / 凭证',
@@ -1467,9 +1467,9 @@ const IN_APP_GUIDE = {
     help:{ title:'长期记忆', body:'长期记忆让元神「记得你」：你的利益关切、决策倾向、项目背景。它从对话自动提炼，你也能手动添加与修正。记忆用于个性化回应与蒸馏。', tips:['从对话自动提炼，也可手动加','画像越全，元神越像你','可逐条删除或修正'], docUrl:null }
   },
   skills: {
-    name:'技能库', tagline:'把可复用流程沉淀成技能件',
-    empty:{ title:'暂无技能', desc:'技能是把重复流程固化成的可复用件。对话中反复出现的操作会被自动提炼，你也能手动添加。', action:{label:'去技能库添加', sec:'skills'} },
-    help:{ title:'技能库', body:'技能 = 一段可复用的工作流（带步骤与触发条件）。元神在对话中遇到相似任务会自动调用；你也能手动创建、版本化、启停。技能让团队越干越快。', tips:['从对话自动提炼重复流程','支持版本管理与启停','技能可被多个角色共享'], docUrl:null }
+    name:'精选技能库', tagline:'精选可复用流程，不堆量',
+    empty:{ title:'暂无技能', desc:'精选技能是把重复流程固化成的高频复用件。对话中反复出现的操作会被自动提炼，你也能手动添加。', action:{label:'去精选技能库添加', sec:'skills'} },
+    help:{ title:'精选技能库', body:'精选技能 = 一段可复用的工作流（带步骤与触发条件）。元神在对话中遇到相似任务会自动调用；你也能手动创建、版本化、启停。技能位有限，只保留高频、高质的精选件。', tips:['从对话自动提炼重复流程','支持版本管理与启停','技能可被多个角色共享'], docUrl:null }
   },
   experiences: {
     name:'经验库', tagline:'成功 / 踩坑案例，类脑自进化燃料',
@@ -2162,7 +2162,7 @@ async function metaReassign(btn){
   });
 }
 
-/* ── 渲染：角色库 / 资源库 ── */
+/* ── 渲染：精选角色库 / 资源库 ── */
 async function renderRoles(){ const g=document.getElementById('roleGrid'); g.innerHTML='加载中…';
   try{ const res=await fetch('/api/roles'); roles=await res.json(); }catch(e){ console.error(e); roles=[]; }
   g.innerHTML='';
@@ -2232,7 +2232,7 @@ function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元�
 /* ── 群聊内元神置顶卡：双模式（访谈 / 工作）── */
 let curView='meta';
 let metaMode=localStorage.getItem('fenshen_meta_mode')||'interview';
-function setMetaMode(m){ metaMode=m; try{localStorage.setItem('fenshen_meta_mode',m);}catch(e){} renderMetaPin(); if(curView==='meta'){ const s=document.getElementById('mpSub'); if(s) s.textContent=(m==='interview'?'主动了解你 · 蒸馏成长':'帮你新建与管理项目'); } }
+function setMetaMode(m){ metaMode=m; try{localStorage.setItem('fenshen_meta_mode',m);}catch(e){} renderMetaPin(); if(curView==='meta'){ const s=document.getElementById('mpSub'); if(s) s.textContent=(m==='interview'?'主动了解你 · 蒸馏成长':'驾驶 WorkBuddy · 默认单人任务，复杂才开群聊'); } }
 function updateChatHead(){
   const isMeta=curView==='meta';
   ['phaseBadge','freezeBadge','btnSplit','btnMore'].forEach(id=>{const e=document.getElementById(id); if(e) e.style.display=isMeta?'none':'';});
@@ -2263,7 +2263,7 @@ async function sendMetaInChat(){
 function renderMetaPin(){
   const mp=document.getElementById('metaPin'); if(!mp) return;
   mp.querySelectorAll('.seg').forEach(b=>b.classList.toggle('active', b.dataset.mode===metaMode));
-  const sub=document.getElementById('mpSub'); if(sub) sub.textContent=(metaMode==='interview'?'主动了解你 · 蒸馏成长':'帮你新建与管理项目');
+  const sub=document.getElementById('mpSub'); if(sub) sub.textContent=(metaMode==='interview'?'主动了解你 · 蒸馏成长':'驾驶 WorkBuddy · 默认单人任务，复杂才开群聊');
   const body=document.getElementById('mpBody'); if(!body) return;
   body.innerHTML = (metaMode==='interview') ? mpInterviewHTML() : mpWorkHTML();
   if(metaMode==='interview'){ mpLoadInterview(); fillMetaPinStats(); }
@@ -2292,11 +2292,11 @@ function mpWorkHTML(){
       <button class="btn sm meta" onclick="openProjBoard()">📋 管理项目</button>
     </div>
     <div id="mpNewMenu" class="mp-new-menu" style="display:none">
-      <div class="mp-nm-item" onclick="createSoloProject()">单人任务</div>
-      <div class="mp-nm-item" onclick="openWizard()">团队任务</div>
+      <div class="mp-nm-item" onclick="createSoloProject()">单人任务（默认 · 和 WorkBuddy 一样）</div>
+      <div class="mp-nm-item" onclick="openWizard()">团队任务（群聊模式 · 复杂协作）</div>
       <div class="mp-nm-item" onclick="metaJudge()">让元神判断</div>
     </div>
-    <div class="mp-hint">要干啥直接跟元神说，它帮你组建团队、派活、追进度。复杂看板都藏在「···」里。</div>
+    <div class="mp-hint">大部分事情直接开「单人任务」，元神会像 WorkBuddy 一样快速交付；只有需要多人协作时才开「团队任务（群聊模式）」。要干啥直接跟元神说。</div>
   </div>`;
 }
 async function mpLoadInterview(btn){ await withBusy(btn,'加载中…',async()=>{ const d=await apiJson('/api/meta/interview/next'); mpRenderInterview(d); }); }
@@ -2918,7 +2918,7 @@ if(innerWidth<768 && document.querySelector('.navitem[data-sec="chat"]')){ docum
 
 /* v5.0 移动端：更多抽屉（收纳非主导航工具页） */
 const MOBILE_MORE_ITEMS = [
-  ['roles','角色库'],['skills','技能库'],['resources','公共资源库'],['models','模型设置'],
+  ['roles','精选角色库'],['skills','精选技能库'],['resources','公共资源库'],['models','模型设置'],
   ['terminal','终端'],['browser','浏览器'],['cleanup','清理中心'],['memory','长期记忆'],
   ['experiences','经验库'],['evolution','进化中心'],['market','应用市场'],
 ];
@@ -3569,11 +3569,11 @@ function renderTour(){
 }
 // v6.5 新手导览：覆盖 6 大核心模块（首次使用自动触发，受 in_app_guide_enabled 门控）
 const ONBOARD_TOUR_STEPS=[
-  {t:'① 项目群聊：用说话管项目', d:'在群里说出目标（如「做一个落地页」），元神会自动建项目、拆任务、派给角色并跟踪进度。所有进度同步到「项目看板」。'},
-  {t:'② 元神：你的数字分身总管', d:'元神默认就是能干活的技术 PM 工具人；你越喂它（访谈 / 上传资料），它越像你。点左侧「元神 · 我的分身」培养。'},
-  {t:'③ 角色库：团队的专才', d:'架构 / 后端 / 前端 / 测试……每个角色有专属技能与门禁。元神派单时自动选人，你也能手动加角色。'},
-  {t:'④ 项目看板：模块 × 阶段矩阵', d:'看板把项目拆成「模块 × 阶段」的格子。点格子看任务、版本、定位群聊、做影响分析。点左侧「项目看板」体验。'},
-  {t:'⑤ 技能库：把流程沉淀成可复用件', d:'对话中重复出现的流程会被自动提炼成技能；手动也能加。技能让团队越干越快。'},
+  {t:'① 元神：你的数字分身总管', d:'元神是蒸馏自你的唯一数字克隆体，驾驶 WorkBuddy 替你干活。默认就是能干活的技术 PM；你越喂它（访谈 / 上传资料），它越像你。'},
+  {t:'② 单人任务（默认）：和 WorkBuddy 一样快', d:'大部分事情开「单人任务」，元神会像 WorkBuddy 一样快速交付。只有复杂协作才需要群聊模式。'},
+  {t:'③ 团队任务（群聊模式）：复杂协作才开', d:'需要多角色协作时，元神会建项目群聊、拆任务、派给精选角色并跟踪进度。所有进度同步到「项目看板」。'},
+  {t:'④ 精选角色库：少而精的专才', d:'架构 / 后端 / 前端 / 测试……每个精选角色有专属技能与门禁。元神派单时自动选人，你也能手动加角色。'},
+  {t:'⑤ 精选技能库：只留高频复用件', d:'对话中重复出现的流程会被自动提炼成技能；手动也能加。技能位有限，不堆量，只保留精选件。'},
   {t:'⑥ 经验库 + 进化中心：类脑自进化', d:'成功 / 踩坑案例沉淀为经验，元神在日后同类任务自动召回，并安全晋升固化——错误不会复利。'},
 ];
 function openOnboardTour(){ window._tour={active:true, idx:0, path:ONBOARD_TOUR_STEPS}; renderTour(); }
@@ -4149,7 +4149,7 @@ async function saveMemory(){
   }catch(e){ toast('保存失败'); }
 }
 
-/* ── 技能库（Phase 3）── */
+/* ── 精选技能库（Phase 3）── */
 let skills = [];
 async function loadSkills(){
   const el=document.getElementById('skillList'); if(!el)return;
