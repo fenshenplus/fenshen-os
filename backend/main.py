@@ -437,6 +437,9 @@ _ALIYUN_SMS_SK = os.environ.get("ALIYUN_SMS_SK", "")
 _ALIYUN_SMS_SIGN = os.environ.get("ALIYUN_SMS_SIGN", "安徽叒叕创业投资有限公司")
 _ALIYUN_SMS_TPL = os.environ.get("ALIYUN_SMS_TPL", "REDACTED_ALIYUN_SMS_TEMPLATE")
 _DEV_SMS = os.environ.get("FENSHEN_DEV_SMS", "") == "1"
+# v6.4 短信模板：注册 / 密码重置 分别使用独立模板（旧 ALIYUN_SMS_TPL 仍作为注册模板的兜底）
+_ALIYUN_SMS_TPL_REGISTER = os.environ.get("ALIYUN_SMS_TPL_REGISTER", os.environ.get("ALIYUN_SMS_TPL", "SMS_511885275"))
+_ALIYUN_SMS_TPL_RESET = os.environ.get("ALIYUN_SMS_TPL_RESET", "SMS_511935313")
 
 
 def _aliyun_percent_encode(s: str) -> str:
@@ -454,12 +457,14 @@ def _aliyun_sms_sign(params: dict, secret: str) -> str:
     ).decode("ascii")
 
 
-def send_sms_code(phone: str, code: str) -> dict:
-    """调用阿里云短信发送验证码。返回阿里云原始响应（Code=='OK' 为成功）。"""
+def send_sms_code(phone: str, code: str, purpose: str = "register") -> dict:
+    """调用阿里云短信发送验证码。purpose='register' 用注册模板，'reset' 用密码重置模板。
+    返回阿里云原始响应（Code=='OK' 为成功）。"""
     if _DEV_SMS:
         return {"Code": "OK", "Message": "dev-skip", "dev_code": code}
     if not _ALIYUN_SMS_AK or not _ALIYUN_SMS_SK:
         return {"Code": "ERR", "Message": "短信服务未配置（缺少 ALIYUN_SMS_AK / ALIYUN_SMS_SK 环境变量）"}
+    tpl = _ALIYUN_SMS_TPL_RESET if purpose == "reset" else _ALIYUN_SMS_TPL_REGISTER
     params = {
         "AccessKeyId": _ALIYUN_SMS_AK,
         "Action": "SendSms",
@@ -470,7 +475,7 @@ def send_sms_code(phone: str, code: str) -> dict:
         "SignatureMethod": "HMAC-SHA1",
         "SignatureNonce": str(uuid.uuid4()),
         "SignatureVersion": "1.0",
-        "TemplateCode": _ALIYUN_SMS_TPL,
+        "TemplateCode": tpl,
         "TemplateParam": json.dumps({"code": code}, ensure_ascii=False),
         "Timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "Version": "2017-05-25",
@@ -496,6 +501,9 @@ async def auth_send_code(req: Request):
     except Exception:
         return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
     phone = (data.get("phone") or "").strip()
+    purpose = (data.get("purpose") or "register").strip()
+    if purpose not in ("register", "reset"):
+        purpose = "register"
     if not _CN_MOBILE_RE.match(phone):
         return JSONResponse({"ok": False, "error": "手机号格式不正确"}, status_code=400)
     conn = get_db()
@@ -511,7 +519,7 @@ async def auth_send_code(req: Request):
             conn.close()
             return JSONResponse({"ok": False, "error": "今日验证码发送次数已达上限"}, status_code=429)
     code = _gen_sms_code()
-    r = send_sms_code(phone, code)
+    r = send_sms_code(phone, code, purpose)
     if r.get("Code") != "OK":
         conn.close()
         return JSONResponse({"ok": False, "error": f"短信发送失败：{r.get('Message', '未知错误')}"}, status_code=502)

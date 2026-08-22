@@ -428,7 +428,7 @@
     <button class="btn hidden" onclick="showAbout()">原型说明</button>
   </div>
 
-  <!-- 账号登录/注册遮罩（v6.4：邮箱/手机号双通道，本地持久登录，为国际化与云端能力打基础） -->
+  <!-- 账号登录/注册/重置遮罩（v6.4：邮箱/手机号双通道，手机号短信验证码，本地持久登录） -->
   <div id="authMask" class="auth-mask" style="display:none">
     <div class="auth-card">
       <div class="auth-title" data-i18n="分身账号">分身账号</div>
@@ -438,10 +438,16 @@
         <span class="auth-tab" id="tabReg" data-i18n="注册" onclick="authSwitch('register')">注册</span>
       </div>
       <input id="authPhone" class="auth-input" data-i18n-ph="邮箱或手机号" placeholder="邮箱或手机号" inputmode="email" oninput="authDetectMode()">
-      <input id="authCode" class="auth-input" style="display:none" data-i18n-ph="短信验证码" placeholder="短信验证码" inputmode="numeric" maxlength="6">
+      <div class="auth-code-row" id="authCodeRow" style="display:none">
+        <input id="authCode" class="auth-input auth-code-input" data-i18n-ph="短信验证码" placeholder="短信验证码" inputmode="numeric" maxlength="6">
+        <button id="authSendCode" class="auth-send-btn" onclick="authSendCode()" data-i18n="获取验证码">获取验证码</button>
+      </div>
       <input id="authPwd" class="auth-input" type="password" data-i18n-ph="密码（邮箱≥8位 · 手机号≥6位）" placeholder="密码（邮箱≥8位 · 手机号≥6位）">
       <div class="auth-err" id="authErr"></div>
       <button class="btn meta auth-btn" id="authSubmit" data-i18n="登录" onclick="authSubmit()">登录</button>
+      <div class="auth-links">
+        <span id="authForgot" data-i18n="忘记密码？" onclick="authSwitch('reset')">忘记密码？</span>
+      </div>
       <div class="auth-skip" data-i18n="暂不登录（本地模式）" onclick="hideAuthModal()">暂不登录（本地模式）</div>
     </div>
   </div>
@@ -457,6 +463,11 @@
   .auth-input:focus{border-color:#4f46e5}
   .auth-err{color:#e5484d;font-size:11px;min-height:14px;margin-bottom:8px}
   .auth-btn{width:100%;padding:10px;font-size:14px}
+  .auth-code-row{display:flex;gap:8px;align-items:stretch;margin-bottom:10px}
+  .auth-code-input{flex:1;margin-bottom:0}
+  .auth-send-btn{white-space:nowrap;padding:0 12px;font-size:12px;border:.5px solid #4f46e5;color:#4f46e5;background:#fff;border-radius:9px;cursor:pointer}
+  .auth-send-btn:disabled{opacity:.5;cursor:not-allowed;border-color:#c9c9d6;color:#9aa0b4}
+  .auth-links{text-align:right;font-size:11px;color:#4f46e5;margin-top:-2px;margin-bottom:10px;cursor:pointer}
   .auth-skip{text-align:center;font-size:11px;color:#9aa0b4;margin-top:10px;cursor:pointer}
   .user-chip{font-size:11px;color:#3C3489;background:var(--meta-50);border:.5px solid #cfc9ef;padding:3px 9px;border-radius:10px;cursor:pointer}
   .user-chip:hover{background:#e9e4fb}
@@ -1581,8 +1592,14 @@ function hideAuthModal(){ const m=document.getElementById('authMask'); if(m) m.s
 function authSwitch(m){ _authMode=m;
   document.getElementById('tabLogin').classList.toggle('active',m==='login');
   document.getElementById('tabReg').classList.toggle('active',m==='register');
-  document.getElementById('authSubmit').textContent = m==='login'?'登录':'注册';
-  document.getElementById('authErr').textContent=''; }
+  const submit=document.getElementById('authSubmit');
+  const forgot=document.getElementById('authForgot');
+  const pwd=document.getElementById('authPwd');
+  document.getElementById('authErr').textContent='';
+  if(m==='reset'){ submit.textContent='重置密码'; forgot.style.display='none'; pwd.placeholder=__t('新密码（至少 6 位）'); }
+  else if(m==='login'){ submit.textContent='登录'; forgot.style.display='inline'; pwd.placeholder=__t('密码（邮箱≥8位 · 手机号≥6位）'); }
+  else { submit.textContent='注册'; forgot.style.display='none'; pwd.placeholder=__t('密码（至少 6 位）'); }
+  authDetectMode(); }
 async function authSubmit(){
   const acc=document.getElementById('authPhone').value.trim();
   const pwd=document.getElementById('authPwd').value;
@@ -1593,7 +1610,18 @@ async function authSubmit(){
   if(!isEmail && !isPhone){ err.textContent='请输入正确的邮箱或 11 位手机号'; return; }
   if(isEmail && pwd.length<8){ err.textContent='邮箱注册密码至少 8 位'; return; }
   if(isPhone && pwd.length<6){ err.textContent='手机号密码至少 6 位'; return; }
-  if(isPhone && _authMode==='register' && !code){ err.textContent='手机号注册需要短信验证码'; return; }
+  if(isPhone && (_authMode==='register'||_authMode==='reset') && !code){ err.textContent='请先获取并填写短信验证码'; return; }
+  if(_authMode==='reset'){
+    if(!isPhone){ err.textContent='密码重置仅支持手机号'; return; }
+    try{
+      const r=await fetch('/api/auth/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:acc,code,password:pwd})});
+      const j=await r.json();
+      if(!j.ok){ err.textContent=j.error||'重置失败'; return; }
+      hideAuthModal(); toast('✅ 密码已重置，请用新密码登录');
+      authSwitch('login');
+    }catch(e){ err.textContent='网络错误：'+errText(e); }
+    return;
+  }
   const url = _authMode==='login' ? '/api/auth/login' : '/api/auth/register';
   const body = isEmail ? {email:acc,password:pwd} : {phone:acc,password:pwd};
   if(isPhone && _authMode==='register') body.code=code;
@@ -1605,15 +1633,40 @@ async function authSubmit(){
     hideAuthModal(); renderUserBar(j.user); toast(_authMode==='login'?'✅ 已登录':'✅ 注册成功，已登录');
   }catch(e){ err.textContent='网络错误：'+errText(e); }
 }
-/* v6.4：根据输入自动切换 邮箱/手机号 模式（邮箱免验证码，手机号注册显示验证码框） */
+/* v6.4：根据输入自动切换 邮箱/手机号 模式（邮箱免验证码，手机号注册/重置显示验证码框） */
 function authDetectMode(){
   const acc=document.getElementById('authPhone').value.trim();
+  const codeRow=document.getElementById('authCodeRow');
   const codeEl=document.getElementById('authCode');
   const pwdEl=document.getElementById('authPwd');
   const isEmail=/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(acc);
-  if(isEmail){ codeEl.style.display='none'; codeEl.value=''; pwdEl.placeholder=__t('密码（至少 8 位）'); }
-  else if(/^1[3-9]\d{9}$/.test(acc)){ codeEl.style.display=_authMode==='register'?'block':'none'; pwdEl.placeholder=__t('密码（至少 6 位）'); }
-  else { codeEl.style.display='none'; pwdEl.placeholder=__t('密码'); }
+  const isPhone=/^1[3-9]\d{9}$/.test(acc);
+  if(isEmail){ codeRow.style.display='none'; codeEl.value=''; pwdEl.placeholder=__t('密码（至少 8 位）'); }
+  else if(isPhone){ codeRow.style.display=(_authMode==='register'||_authMode==='reset')?'flex':'none'; pwdEl.placeholder=__t('密码（至少 6 位）'); }
+  else { codeRow.style.display='none'; pwdEl.placeholder=__t('密码'); }
+}
+/* 发送短信验证码：注册/重置按当前模式选模板，60s 冷却 */
+let _smsCooldown=0, _smsTimer=null;
+async function authSendCode(){
+  const acc=document.getElementById('authPhone').value.trim();
+  const err=document.getElementById('authErr');
+  const btn=document.getElementById('authSendCode');
+  if(!/^1[3-9]\d{9}$/.test(acc)){ err.textContent='请先输入正确的 11 位手机号'; return; }
+  const purpose = _authMode==='reset' ? 'reset' : 'register';
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/auth/send-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:acc,purpose})});
+    const j=await r.json();
+    if(!j.ok){ err.textContent=j.error||'发送失败'; btn.disabled=false; return; }
+    toast('✅ 验证码已发送（5 分钟内有效）');
+    _smsCooldown=60;
+    btn.textContent=_smsCooldown+'s 后重发';
+    _smsTimer=setInterval(()=>{
+      _smsCooldown--;
+      if(_smsCooldown<=0){ clearInterval(_smsTimer); btn.textContent=__t('获取验证码'); btn.disabled=false; }
+      else btn.textContent=_smsCooldown+'s 后重发';
+    },1000);
+  }catch(e){ err.textContent='网络错误：'+errText(e); btn.disabled=false; }
 }
 async function doLogout(){
   try{ await fetch('/api/auth/logout',{method:'POST',headers:sessHeaders()}); }catch(e){}
