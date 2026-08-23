@@ -449,6 +449,7 @@
         <span id="authForgot" data-i18n="忘记密码？" onclick="authSwitch('reset')">忘记密码？</span>
       </div>
       <div class="auth-skip" data-i18n="暂不登录（本地模式）" onclick="hideAuthModal()">暂不登录（本地模式）</div>
+      <div class="auth-legal">注册即代表同意 <a href="http://39.105.6.135/privacy.html" target="_blank" rel="noopener">隐私政策</a> 与 <a href="http://39.105.6.135/terms.html" target="_blank" rel="noopener">用户协议</a></div>
     </div>
   </div>
   <style>
@@ -469,6 +470,10 @@
   .auth-send-btn:disabled{opacity:.5;cursor:not-allowed;border-color:#c9c9d6;color:#9aa0b4}
   .auth-links{text-align:right;font-size:11px;color:#4f46e5;margin-top:-2px;margin-bottom:10px;cursor:pointer}
   .auth-skip{text-align:center;font-size:11px;color:#9aa0b4;margin-top:10px;cursor:pointer}
+  .auth-legal{text-align:center;font-size:10px;color:#9aa0b4;margin-top:8px;line-height:1.6}
+  .auth-legal a{color:#7c74c9;text-decoration:none}
+  .legal-box{margin-top:8px}
+  .legal-box a{color:var(--accent);text-decoration:none;margin-right:4px}
   .user-chip{font-size:11px;color:#3C3489;background:var(--meta-50);border:.5px solid #cfc9ef;padding:3px 9px;border-radius:10px;cursor:pointer}
   .user-chip:hover{background:#e9e4fb}
   </style>
@@ -1571,6 +1576,24 @@ async function apiJson(url, opts){
   if(!r.ok) throw new Error('接口 '+r.status+' '+(r.statusText||''));
   return await r.json();
 }
+/* 监控埋点（v6.4 推广就绪度补齐）：仅上报本机引擎，绝不外传第三方 */
+let _lastMetaChat=0;
+function trackMetaChat(){ const n=Date.now(); if(n-_lastMetaChat>10000){_lastMetaChat=n; track('meta_chat');} }
+function track(event, props){
+  try{
+    if(localStorage.getItem('fs_analytics')==='0') return; // 用户已关闭匿名统计
+    fetch('/api/analytics/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event:event,props:props||{}})}).catch(()=>{});
+  }catch(e){}
+}
+function manualBackup(){ fetch('/api/system/backup',{method:'POST',headers:sessHeaders()}).then(r=>r.json()).then(j=>{ if(j.ok) toast('已备份：'+String(j.path).split('/').pop()); else toast('备份失败'); }).catch(()=>toast('备份失败')); }
+function viewStats(){
+  fetch('/api/analytics/stats',{headers:sessHeaders()}).then(r=>r.json()).then(j=>{
+    if(!j.ok){ toast('需登录后查看'); return; }
+    const by=(j.events_last_7d_by_type||[]).map(x=>x.event+': '+x.c).join('\n');
+    const daily=(j.events_daily_last_7d||[]).map(x=>x.d+': '+x.c).join('\n');
+    alert('分身运营数据（本机）\n版本 '+j.version+'\n累计事件 '+j.events_total+'\n注册用户 '+j.users_total+' · 项目 '+j.projects_total+'\n\n近7日事件\n'+by+'\n\n每日事件\n'+daily);
+  }).catch(()=>toast('读取失败'));
+}
 
 /* ── 账号体系（v5.7：手机号+密码，本地持久登录）── */
 let _authMode='login';
@@ -1630,6 +1653,7 @@ async function authSubmit(){
     const j=await r.json();
     if(!j.ok){ err.textContent=j.error||'操作失败'; return; }
     SESSION=j.token; localStorage.setItem('fs_session',SESSION);
+    track(_authMode==='login'?'login':'register');
     hideAuthModal(); renderUserBar(j.user); toast(_authMode==='login'?'✅ 已登录':'✅ 注册成功，已登录');
   }catch(e){ err.textContent='网络错误：'+errText(e); }
 }
@@ -1671,6 +1695,7 @@ async function authSendCode(){
 async function doLogout(){
   try{ await fetch('/api/auth/logout',{method:'POST',headers:sessHeaders()}); }catch(e){}
   SESSION=''; localStorage.removeItem('fs_session');
+  track('logout');
   const el=document.getElementById('userChip'); if(el){ el.style.display='none'; el.innerHTML=''; }
   toast('已退出登录'); showAuthModal();
 }
@@ -2237,7 +2262,7 @@ function openRole(){ document.getElementById('rId').value=''; document.getElemen
 function closeRole(){ document.getElementById('roleMask').classList.remove('show'); }
 async function saveRole(){ const id=document.getElementById('rId').value.trim()||('role'+Date.now()); const name=document.getElementById('rName').value.trim()||'未命名';
   const payload={id,name,mandate:document.getElementById('rMandate').value.trim()||'待定义',skills:document.getElementById('rSkills').value.trim(),gate:document.getElementById('rGate').value.trim()||'待定义'};
-  await fetch('/api/roles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); closeRole(); renderRoles(); }
+  await fetch('/api/roles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); track('create_role'); closeRole(); renderRoles(); }
 
 /* ── 元神专属窗口 ── */
 async function loadMeta(){ const b=document.getElementById('metaChat'); b.innerHTML='加载中…';
@@ -2261,6 +2286,7 @@ async function sendMeta(){
   activeChatAbort=new AbortController();
   await withBusy('btnSendMeta','…',async()=>{
     try{
+      trackMetaChat();
       await apiJson('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({text:v}), signal:activeChatAbort.signal});
     } finally { activeChatAbort=null; }
@@ -2274,6 +2300,7 @@ function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.val
   const material_type=mtMap[choice]||'document';
   const reader=new FileReader();
   reader.onload=async ()=>{ const text=String(reader.result||'').slice(0,8000);
+    track('interview_ingest');
     const r=await fetch('/api/meta/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,text,subject:'self',target_type:'self',material_type})});
     const j=await r.json().catch(()=>({}));
     const facts=j.extracted||0, q=j.quality_score||0;
@@ -3095,6 +3122,18 @@ function showAbout(){ document.querySelectorAll('.navitem').forEach(x=>x.classLi
       </div>
       <div class="help-main" id="helpMain"></div>
     </div>`;
+  document.getElementById('aboutBody').insertAdjacentHTML('beforeend', `
+    <div class='legal-box'>
+      <div style='font-weight:700;font-size:13px;margin:14px 0 6px'>法律与隐私</div>
+      <div style='font-size:12px;line-height:1.8'>
+        <a href='http://39.105.6.135/privacy.html' target='_blank' rel='noopener'>📄 隐私政策</a> · 
+        <a href='http://39.105.6.135/terms.html' target='_blank' rel='noopener'>📄 用户协议</a> · 
+        <a href='javascript:void(0)' onclick='viewStats()'>📊 本机运营数据</a> · 
+        <a href='javascript:void(0)' onclick='manualBackup()'>💾 立即备份</a>
+      </div>
+      <label style='display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-500);margin-top:10px;cursor:pointer'>
+        <input type='checkbox' id='analyticsToggle' ${localStorage.getItem('fs_analytics')!=='0'?'checked':''} onchange='localStorage.setItem("fs_analytics",this.checked?"1":"0")'> 发送匿名使用统计（仅存本机，用于改进产品，可随时关闭）</label>
+    </div>`);
   showHelpModule(_helpCur);
 }
 function showHelpModule(k){
@@ -4609,6 +4648,8 @@ async function loadContextBadge(){
 
 /* init */
 loadRooms().then(()=>{ if(window.innerWidth>768){ setView('meta'); } else { curView='project'; updateChatHead(); } });
+if(localStorage.getItem('fs_analytics')===null) localStorage.setItem('fs_analytics','1');
+track('app_open');
 renderRoles(); renderResources(); loadMeta(); renderModels(); checkAuth();
 loadCleanupPreview(); loadMemory(); loadContextBadge(); loadSkills(); renderGrindAgg();
 

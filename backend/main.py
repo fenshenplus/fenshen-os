@@ -1351,6 +1351,17 @@ def init_db():
             updated_at TEXT DEFAULT ''
         )"""
     )
+    # v6.4 推广就绪度补齐：监控埋点事件表（仅存本机，绝不外传）
+    cur.execute(
+        'CREATE TABLE IF NOT EXISTS analytics_events ('
+        ' id INTEGER PRIMARY KEY AUTOINCREMENT,'
+        ' ts TEXT,'
+        ' event TEXT,'
+        ' uid TEXT DEFAULT \'anon\','
+        ' version TEXT DEFAULT \'\','
+        ' props TEXT DEFAULT \'{}\''
+        ')'
+    )
     conn.commit()
     conn.close()
 
@@ -2202,6 +2213,96 @@ def health():
 def api_version():
     """结构化版本信息（单一真源 backend/version.py）。"""
     return {"ok": True, **as_dict()}
+
+# ── 监控埋点（v6.4 推广就绪度补齐）：事件仅存本机 DB，绝不外传 ──
+@app.post("/api/analytics/event")
+async def analytics_event(req: Request):
+    """记录一条匿名使用事件（本地存储，不外发）。需本机令牌。"""
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    event = (data.get("event") or "").strip()
+    if not event or len(event) > 64:
+        return JSONResponse({"ok": False, "error": "event 非法"}, status_code=400)
+    if not _rate_ok("analytics:" + _client_ip(req), 60, 60):
+        return JSONResponse({"ok": False, "error": "上报过于频繁"}, status_code=429)
+    uid = _current_user_id(req) or "anon"
+    props = data.get("props") or {}
+    if not isinstance(props, dict):
+        props = {}
+    try:
+        import json as _json
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO analytics_events (ts,event,uid,version,props) VALUES (?,?,?,?,?)",
+            (datetime.now().isoformat(), event, uid, SEMVER, _json.dumps(props, ensure_ascii=False)[:2000]),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"写入失败：{e}"}, status_code=500)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/analytics/stats")
+async def analytics_stats(req: Request):
+    """运营统计（仅本机 owner）。返回累计与近 7 日事件、注册/项目数。"""
+    conn = get_db()
+    try:
+        total = conn.execute("SELECT COUNT(*) c FROM analytics_events").fetchone()["c"]
+        since = (datetime.now() - timedelta(days=7)).isoformat()
+        recent = conn.execute(
+            "SELECT event, COUNT(*) c FROM analytics_events WHERE ts>=? GROUP BY event ORDER BY c DESC",
+            (since,),
+        ).fetchall()
+        daily = conn.execute(
+            "SELECT substr(ts,1,10) d, COUNT(*) c FROM analytics_events WHERE ts>=? GROUP BY d ORDER BY d",
+            (since,),
+        ).fetchall()
+        users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
+        projects = conn.execute("SELECT COUNT(*) c FROM projects").fetchone()["c"]
+        res = {
+            "ok": True,
+            "version": SEMVER,
+            "events_total": total,
+            "events_last_7d_by_type": [dict(r) for r in recent],
+            "events_daily_last_7d": [dict(r) for r in daily],
+            "users_total": users,
+            "projects_total": projects,
+        }
+    except Exception as e:
+        res = {"ok": False, "error": str(e)}
+    finally:
+        conn.close()
+    return res
+
+
+# ── 数据备份（v6.4 推广就绪度补齐）：手动触发 + 状态查询 ──
+@app.post("/api/system/backup")
+async def system_backup(req: Request):
+    """立即备份数据库（sqlite3 一致快照），返回备份路径。需本机令牌。"""
+    path = backup_db("manual")
+    if not path:
+        return JSONResponse({"ok": False, "error": "备份失败"}, status_code=500)
+    return JSONResponse({"ok": True, "path": path, "size": os.path.getsize(path)})
+
+
+@app.get("/api/system/backups")
+async def system_backups(req: Request):
+    """列出最近备份文件（最多 20）。需本机令牌。"""
+    try:
+        d = os.path.dirname(os.path.abspath(DB))
+        baks = sorted(
+            (os.path.join(d, f) for f in os.listdir(d) if f.startswith("fenshen.db.bak-")),
+            key=os.path.getmtime, reverse=True,
+        )[:20]
+        out = [{"name": os.path.basename(p), "size": os.path.getsize(p),
+                "mtime": datetime.fromtimestamp(os.path.getmtime(p)).isoformat()} for p in baks]
+    except Exception:
+        out = []
+    return {"ok": True, "backups": out}
+
 
 
 # ── 移动端中转 WebSocket：手机 App ↔ 引擎（同源同端口 8002）──
