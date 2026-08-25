@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.64.29] — 2026-08-25
+### Added
+- 修复短信服务：launchd 托管进程从 ~/.fenshen/.env 加载阿里云 AK/SK，补全 urllib import，注册/重置验证码按用途分流模板
+
 ## [v0.64.28] — 2026-08-23
 ### Added
 - 推广就绪度补齐：隐私政策/用户协议(官网+应用内)、监控埋点(analytics_events+stats)、数据库自动备份(launchd每日+手动)

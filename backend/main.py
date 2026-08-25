@@ -24,7 +24,7 @@ import base64
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote, urlencode
 
 import requests
 from fastapi import FastAPI, Request, WebSocket
@@ -42,6 +42,26 @@ if _MEI:
     BASE = os.path.join(_MEI, "backend") if os.path.isdir(os.path.join(_MEI, "backend")) else _MEI
 FRONTEND = os.path.abspath(os.path.join(BASE, "..", "frontend"))
 DB = os.path.join(BASE, "..", "data", "fenshen.db")
+
+# ── v6.4 配置加载：从 .env 文件补充环境变量（凭证等不写进 plist / 代码仓库）──
+def _load_dotenv(path):
+    """极简 dotenv：逐行解析 KEY=VALUE（支持 # 注释、引号），仅补充尚未存在的变量。"""
+    try:
+        with open(path, "r", encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if not _line or _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _v = _line.split("=", 1)
+                _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+                if _k and _k not in os.environ:
+                    os.environ[_k] = _v
+    except FileNotFoundError:
+        pass
+
+# 安装版主路径 ~/.fenshen/.env；源码版可放项目 data/.env。两者均不强制存在。
+_load_dotenv(os.path.expanduser("~/.fenshen/.env"))
+_load_dotenv(os.path.join(BASE, "..", "data", ".env"))
 # v5.4 打包版（PyInstaller）数据目录：临时目录会丢数据 → 落用户目录 ~/.fenshen
 if _MEI:
     DB_DIR = os.path.join(os.path.expanduser("~"), ".fenshen")
@@ -443,7 +463,7 @@ _ALIYUN_SMS_TPL_RESET = os.environ.get("ALIYUN_SMS_TPL_RESET", "SMS_511935313")
 
 
 def _aliyun_percent_encode(s: str) -> str:
-    return urllib.parse.quote(str(s), safe="-_.~")
+    return quote(str(s), safe="-_.~")
 
 
 def _aliyun_sms_sign(params: dict, secret: str) -> str:
@@ -481,7 +501,7 @@ def send_sms_code(phone: str, code: str, purpose: str = "register") -> dict:
         "Version": "2017-05-25",
     }
     params["Signature"] = _aliyun_sms_sign(params, _ALIYUN_SMS_SK)
-    url = "https://dysmsapi.aliyuncs.com/?" + urllib.parse.urlencode(params)
+    url = "https://dysmsapi.aliyuncs.com/?" + urlencode(params)
     try:
         resp = requests.get(url, timeout=10)
         return resp.json()
