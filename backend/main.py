@@ -44,22 +44,39 @@ FRONTEND = os.path.abspath(os.path.join(BASE, "..", "frontend"))
 DB = os.path.join(BASE, "..", "data", "fenshen.db")
 
 # ── v6.4 配置加载：从 .env 文件补充环境变量（凭证等不写进 plist / 代码仓库）──
+_DOTENV_KV = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
+
 def _load_dotenv(path):
-    """极简 dotenv：逐行解析 KEY=VALUE（支持 # 注释、引号），仅补充尚未存在的变量。"""
+    """极简 dotenv：逐行解析 KEY=VALUE。
+    - 支持 `export KEY=val` 前缀（M1）
+    - 剥离行内 ` # 注释`：仅当 # 前有空白才视为注释，避免误伤值内的 #（M2）
+    - 去引号（' 或 "）
+    - 仅补充尚未存在的变量（M3 覆盖语义见下方调用顺序）
+    """
     try:
         with open(path, "r", encoding="utf-8") as _f:
-            for _line in _f:
-                _line = _line.strip()
-                if not _line or _line.startswith("#") or "=" not in _line:
+            for _raw in _f:
+                _line = _raw.strip()
+                if not _line or _line.startswith("#"):
                     continue
-                _k, _v = _line.split("=", 1)
-                _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+                # 剥离行内注释：空白后的 # 才当注释
+                _hash = _line.find(" #")
+                if _hash != -1:
+                    _line = _line[:_hash].rstrip()
+                _m = _DOTENV_KV.match(_line)
+                if not _m:
+                    continue
+                _k, _v = _m.group(1), _m.group(2)
+                if len(_v) >= 2 and _v[0] == _v[-1] and _v[0] in ("'", '"'):
+                    _v = _v[1:-1]
                 if _k and _k not in os.environ:
                     os.environ[_k] = _v
     except FileNotFoundError:
         pass
 
-# 安装版主路径 ~/.fenshen/.env；源码版可放项目 data/.env。两者均不强制存在。
+# 覆盖语义（M3）：先加载安装版 ~/.fenshen/.env，再尝试源码版 data/.env；
+# 两者都"仅补充不覆盖"——因此 data/.env 无法覆盖安装版的同名变量。
+# 源码开发者若想本地覆盖安装版配置，应直接改 ~/.fenshen/.env，而非 data/.env。
 _load_dotenv(os.path.expanduser("~/.fenshen/.env"))
 _load_dotenv(os.path.join(BASE, "..", "data", ".env"))
 # v5.4 打包版（PyInstaller）数据目录：临时目录会丢数据 → 落用户目录 ~/.fenshen
@@ -539,7 +556,9 @@ async def auth_send_code(req: Request):
             conn.close()
             return JSONResponse({"ok": False, "error": "今日验证码发送次数已达上限"}, status_code=429)
     code = _gen_sms_code()
-    r = send_sms_code(phone, code, purpose)
+    # M4 修复：send_sms_code 内部用同步 requests.get(timeout=10)，
+    # 必须丢到线程池，否则会阻塞整个事件循环（发码时元神对话/看板全卡）。
+    r = await asyncio.to_thread(send_sms_code, phone, code, purpose)
     if r.get("Code") != "OK":
         conn.close()
         return JSONResponse({"ok": False, "error": f"短信发送失败：{r.get('Message', '未知错误')}"}, status_code=502)

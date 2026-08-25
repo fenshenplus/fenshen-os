@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.64.30] — 2026-08-25
+### Added
+- 0.64.30 加固：M4 发短信改 asyncio.to_thread 非阻塞(消除事件循环卡顿) + M1/M2/M3 _load_dotenv 识别 export 前缀/剥离行内#注释/明示覆盖语义
+
 ## [v0.64.29] — 2026-08-25
 ### Added
 - 修复短信服务：launchd 托管进程从 ~/.fenshen/.env 加载阿里云 AK/SK，补全 urllib import，注册/重置验证码按用途分流模板
