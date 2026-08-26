@@ -840,7 +840,7 @@
               <div id="ivProgress" style="font-size:12px;color:var(--gray-400);margin-bottom:10px"></div>
               <div id="ivQuestion" style="font-size:14px;line-height:1.6;margin-bottom:8px"></div>
               <div id="ivProbes" style="font-size:12px;color:var(--gray-400);margin-bottom:10px;line-height:1.7"></div>
-              <textarea id="ivAnswer" rows="3" placeholder="写下你的回答…（回车换行，Ctrl+Enter 提交）" style="width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px"></textarea>
+              <textarea id="ivAnswer" rows="3" placeholder="写下你的回答…（回车换行，Ctrl/⌘+Enter 提交）" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();submitInterview(this);}" style="width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px"></textarea>
               <div style="margin-top:8px;display:flex;gap:8px">
                 <button class="btn primary sm" onclick="submitInterview(this)">提交并继续了解我</button>
                 <button class="btn sm ghost" onclick="loadInterview(this)">跳过这题</button>
@@ -1597,11 +1597,18 @@ function viewStats(){
 
 /* ── 账号体系（v5.7：手机号+密码，本地持久登录）── */
 let _authMode='login';
+let _authCheckTries = 0;
 function checkAuth(){
   if(!SESSION){ showAuthModal(); return; }
   fetch('/api/auth/status', {headers: sessHeaders()}).then(r=>r.json()).then(j=>{
-    if(j.logged_in){ renderUserBar(j.user); } else { SESSION=''; localStorage.removeItem('fs_session'); showAuthModal(); }
-  }).catch(()=>{ showAuthModal(); });
+    if(j.logged_in){ renderUserBar(j.user); localStorage.setItem('fs_guide_toured','1'); }
+    else { SESSION=''; localStorage.removeItem('fs_session'); showAuthModal(); }
+  }).catch(()=>{
+    // 服务可能尚未就绪（窗口已加载、后端仍在初始化）：重试，而非直接弹登录框
+    _authCheckTries++;
+    if(_authCheckTries < 6){ setTimeout(checkAuth, 800); }
+    else { showAuthModal(); }
+  });
 }
 function renderUserBar(u){
   const el=document.getElementById('userChip');
@@ -1653,6 +1660,7 @@ async function authSubmit(){
     const j=await r.json();
     if(!j.ok){ err.textContent=j.error||'操作失败'; return; }
     SESSION=j.token; localStorage.setItem('fs_session',SESSION);
+    localStorage.setItem('fs_guide_toured','1'); // 已登录/注册用户不再自动弹教学引导
     track(_authMode==='login'?'login':'register');
     hideAuthModal(); renderUserBar(j.user); toast(_authMode==='login'?'✅ 已登录':'✅ 注册成功，已登录');
   }catch(e){ err.textContent='网络错误：'+errText(e); }
@@ -2357,7 +2365,7 @@ function mpInterviewHTML(){
     </div>
     <div class="mp-q" id="mpQ"></div>
     <div class="mp-probes" id="mpProbes"></div>
-    <textarea id="mpAns" class="mp-ans" rows="2" placeholder="写下你的回答…（元神会越聊越懂你）"></textarea>
+    <textarea id="mpAns" class="mp-ans" rows="2" placeholder="写下你的回答…（元神会越聊越懂你 · Ctrl/⌘+Enter 提交）" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();mpSubmitInterview(this);}"></textarea>
     <div class="mp-iv-actions">
       <button class="btn primary sm" onclick="mpSubmitInterview(this)">提交并继续</button>
       <button class="btn sm ghost" onclick="mpLoadInterview(this)">跳过</button>
@@ -2385,12 +2393,21 @@ function mpRenderInterview(d){
   const cnt=document.getElementById('mpIvCnt'); if(cnt) cnt.textContent=(d.progress||0)+'/'+(d.total||0);
   const pr=document.getElementById('mpProbes'), an=document.getElementById('mpAns'), rf=document.getElementById('mpReflect');
   if(d.phase==='complete'||!d.question){ q.textContent='🎉 元神已经比较了解你了！也可以随时补充，或上传资料让它更懂你。'; if(pr)pr.textContent=''; if(an)an.style.display='none'; }
-  else { q.textContent=d.question; if(pr)pr.innerHTML=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>'); if(an){an.style.display='';an.value='';an.dataset.qid=d.qid;} }
+  else { q.textContent=d.question; if(pr)pr.innerHTML=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>'); if(an){an.style.display=''; if(an.dataset.qid!==d.qid){ an.value=''; } an.dataset.qid=d.qid;} }
   if(rf) rf.innerHTML = d.reflection ? '<div class="mp-reflect">'+escapeBr(d.reflection)+'</div>' : '';
 }
 async function mpSubmitInterview(btn){
   const a=document.getElementById('mpAns'); const qid=a.dataset.qid; const v=a.value.trim();
-  if(!v||!qid){ toast('先写点什么再提交'); return; } a.value='';
+  const rf=document.getElementById('mpReflect');
+  const hasReflection = rf && rf.innerHTML && rf.innerHTML.trim().length>0;
+  if(!v){
+    if(!qid) return;
+    if(hasReflection){ await mpLoadInterview(btn); return; } // 元神已有理解 → 视为「继续了解」，刷新最新状态
+    toast('在下方输入框写下你的回答，再点「提交并继续」（或按 Ctrl/⌘+Enter）');
+    try{ a.focus(); }catch(e){}
+    return;
+  }
+  a.value='';
   await withBusy(btn,'元神消化中…',async()=>{ const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v})}); mpRenderInterview(d.next||d); });
   fillMetaPinStats();
 }
@@ -2448,12 +2465,20 @@ function renderInterview(d){
   document.getElementById('ivProgress').textContent='进度 '+d.progress+' / '+d.total+' · '+(d.phase==='complete'?'已完成 🎉':'持续了解中');
   const q=document.getElementById('ivQuestion'), pr=document.getElementById('ivProbes'), an=document.getElementById('ivAnswer');
   if(d.phase==='complete' || !d.question){ q.textContent='🎉 元神已经比较了解你了！也可以随时补充，或直接上传聊天记录/笔记让它更懂你。'; pr.textContent=''; an.style.display='none'; }
-  else { q.textContent=d.question; pr.innerHTML=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>'); an.style.display=''; an.value=''; an.dataset.qid=d.qid; }
+  else { q.textContent=d.question; pr.innerHTML=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>'); an.style.display=''; if(an.dataset.qid!==d.qid){ an.value=''; } an.dataset.qid=d.qid; }
   document.getElementById('ivReflection').innerHTML = d.reflection
     ? '<div style="padding:10px;background:var(--bg-2);border-left:3px solid var(--meta-700);border-radius:6px;font-size:13px;line-height:1.7;color:var(--fg)">'+escapeBr(d.reflection)+'</div>' : '';
 }
 async function submitInterview(btn){ const a=document.getElementById('ivAnswer'); const qid=a.dataset.qid; const v=a.value.trim();
-  if(!v||!qid){ toast('先写点什么再提交'); return; }
+  const rf=document.getElementById('ivReflection');
+  const hasReflection = rf && rf.innerHTML && rf.innerHTML.trim().length>0;
+  if(!v){
+    if(!qid) return;
+    if(hasReflection){ await loadInterview(btn); return; } // 元神已有理解 → 视为「继续了解」，刷新最新状态
+    toast('在下方输入框写下你的回答，再点「提交并继续了解我」（或按 Ctrl/⌘+Enter）');
+    try{ a.focus(); }catch(e){}
+    return;
+  }
   a.value='';
   await withBusy(btn,'元神消化中…',async()=>{
     const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v})});

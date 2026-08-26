@@ -94,19 +94,60 @@ class _Api:
         return "ok"
 
     def quit(self):
-        for w in _windows():
-            try:
-                w.destroy()
-            except Exception:
-                pass
+        _menu_quit()
         return "ok"
 
 
 _windows_ref = []
 
+# 退出意图标记：菜单「退出」置 True；其他关闭/终止事件按「隐藏到后台」处理。
+quit_requested = False
+
 
 def _windows():
     return list(_windows_ref)
+
+
+def _on_closing():
+    """窗口关闭/退出事件钩子。
+    - 正常关闭（红钮/Cmd+Q）：不真正退出，隐藏到后台（仿微信/WorkBuddy 静默驻留）。
+    - 菜单「退出」已置 quit_requested：放行，真正退出进程。
+    返回 False 取消关闭（由 pywebview should_close 解读），True 允许关闭。
+    """
+    global quit_requested
+    if quit_requested:
+        return True
+    for w in _windows():
+        try:
+            w.minimize()  # 收进 Dock 后台（仿微信/WorkBuddy，最小化而非退出）
+        except Exception:
+            pass
+    return False
+
+
+def _menu_show():
+    for w in _windows():
+        try:
+            w.restore()
+        except Exception:
+            pass
+        try:
+            w.show()
+        except Exception:
+            pass
+
+
+def _menu_quit():
+    """真正退出：标记意图 → 销毁窗口 → 兜底强制退出。"""
+    global quit_requested
+    quit_requested = True
+    for w in _windows():
+        try:
+            w.destroy()
+        except Exception:
+            pass
+    # 兜底：确保进程退出（webview 事件循环未必自然返回）
+    threading.Timer(1.5, lambda: os._exit(0)).start()
 
 
 def _start_server() -> threading.Thread:
@@ -128,6 +169,7 @@ def _start_server() -> threading.Thread:
 
 def main():
     import webview  # 延迟导入：源码模式（python run_app.py）无 GUI 时仍可跑服务
+    from webview.menu import MenuAction  # 菜单项构造器位于 webview.menu 子模块
 
     _start_server()
     api = _Api()
@@ -138,6 +180,14 @@ def main():
     else:
         base = os.path.dirname(os.path.abspath(__file__))
         url = "file://" + os.path.join(base, "permission_guide.html")
+    # 系统菜单：放入「分身」App 菜单（标题 __app__ 表示挂到应用菜单内）
+    menu = webview.Menu(
+        "__app__",
+        [
+            MenuAction("显示分身", _menu_show),
+            MenuAction("退出", _menu_quit),
+        ],
+    )
     window = webview.create_window(
         "分身 · AI 助手",
         url,
@@ -146,9 +196,11 @@ def main():
         height=860,
         min_size=(980, 660),
         background_color="#0f0c28",
+        menu=[menu],
     )
     _windows_ref.append(window)
-    window.events.closed += lambda: os._exit(0)
+    # 关闭窗口 → 隐藏到后台（不再退出进程，避免 launchd 重启导致反复弹出）
+    window.events.closing += _on_closing
     webview.start()
 
 
