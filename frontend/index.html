@@ -228,8 +228,18 @@
   /* 群聊↔看板联动：系统动态里的可跳转看板卡片标记 */
   .task-jump { display:inline-block; margin-left:6px; padding:1px 8px; border-radius:10px; background:var(--accent-weak); color:var(--accent-strong); font-size:10px; cursor:pointer; vertical-align:middle; }
   .task-jump:hover { background:var(--accent); color:var(--on-accent); }
-  .chat-input { display:flex; gap:8px; padding:12px 16px 14px; border-top:0.5px solid var(--gray-200); background:var(--bg); flex-shrink:0; align-items:flex-end; }
-  .chat-input textarea, .chat-input input { flex:1; padding:10px 14px; border-radius:14px; border:0.5px solid var(--gray-300); background:var(--gray-100); font-size:14px; line-height:1.5; outline:none; resize:none; min-height:44px; max-height:160px; font-family:inherit; box-sizing:border-box; }
+  .chat-input { display:flex; gap:8px; padding:12px 16px 14px; border-top:0.5px solid var(--gray-200); background:var(--bg); flex-shrink:0; align-items:flex-end; flex-wrap:wrap; }
+  .chat-input.drag { background:var(--blue-50); outline:2px dashed var(--blue-400); outline-offset:-6px; border-radius:14px; }
+  .ico-btn { width:36px; height:36px; border-radius:50%; border:0.5px solid var(--gray-300); background:var(--bg); cursor:pointer; flex-shrink:0; font-size:16px; display:flex; align-items:center; justify-content:center; }
+  .ico-btn:hover { background:var(--gray-100); }
+  .img-prev { flex-basis:100%; display:none; gap:8px; flex-wrap:wrap; }
+  .img-thumb { position:relative; width:64px; height:64px; border-radius:10px; overflow:hidden; border:0.5px solid var(--gray-300); background:var(--gray-100); }
+  .img-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .img-thumb .nm { position:absolute; left:0; right:0; bottom:0; font-size:9px; color:#fff; background:rgba(0,0,0,.45); padding:1px 3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .img-thumb .rm { position:absolute; top:1px; right:1px; width:16px; height:16px; border-radius:50%; border:none; background:rgba(0,0,0,.55); color:#fff; font-size:11px; line-height:14px; cursor:pointer; padding:0; }
+  .msg-imgs { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .msg-img { width:120px; height:120px; object-fit:cover; border-radius:8px; cursor:pointer; border:0.5px solid var(--gray-300); }
+  .chat-input textarea, .chat-input input { flex:1; padding:10px 14px; border-radius:14px; border:0.5px solid var(--gray-300); background:var(--gray-100); font-size:14px; line-height:1.5; outline:none; resize:none; min-height:84px; max-height:200px; font-family:inherit; box-sizing:border-box; }
   .chat-input textarea:focus, .chat-input input:focus { border-color:var(--blue-400); background:var(--bg); box-shadow:0 0 0 3px var(--blue-50); }
   .chat-input .send { width:40px; height:40px; border-radius:50%; border:none; background:var(--blue-500); color:var(--on-accent); cursor:pointer; flex-shrink:0; font-size:16px; }
   .chat-input .send:hover { background:var(--blue-600); }
@@ -711,9 +721,14 @@
           <div id="chatGoalBar" style="font-size:12px;color:var(--gray-600);padding:4px 14px;border-bottom:.5px solid var(--gray-200);display:none"></div>
           <div class="chat-body" id="chatBody"></div>
           <div class="chat-input">
+            <div class="img-prev" id="msgPrev" style="display:none"></div>
+            <button class="ico-btn" title="插入图片" onclick="document.getElementById('msgFile').click()">🖼️</button>
+            <button class="ico-btn" title="截图并粘贴到输入框" onclick="takeScreenshot('msgInput')">✂️</button>
+            <button class="ico-btn" title="@ 指定某成员处理本条" onclick="insertAt('msgInput')">@</button>
             <button class="send" id="btnVoice" onpointerdown="voiceHoldStart('msgInput','btnVoice')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" title="按住说话" style="background:#1D9E75;touch-action:none">🎙</button>
-            <textarea id="msgInput" placeholder="发消息给团队…（Enter 发送 · Shift+Enter 换行）" rows="1" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
+            <textarea id="msgInput" placeholder="发消息给团队…（Enter 发送 · Shift+Enter 换行）" rows="3" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
             <button class="send" id="btnSendMsg" onclick="sendMsg()">↑</button>
+            <input type="file" id="msgFile" accept="image/*" multiple hidden onchange="onImgPick('msgInput',this)">
           </div>
         </div>
       <!-- v6 分栏：进程轨迹 + 看板（右侧拉出） -->
@@ -883,10 +898,14 @@
             </div>
           </div>
           <div class="chat-input" id="metaInputBar">
+            <div class="img-prev" id="metaPrev" style="display:none"></div>
+            <button class="ico-btn" title="插入图片" onclick="document.getElementById('metaFile').click()">🖼️</button>
+            <button class="ico-btn" title="截图并粘贴到输入框" onclick="takeScreenshot('metaInput')">✂️</button>
             <button class="send" id="btnVoiceMeta" onpointerdown="voiceHoldStart('metaInput','btnVoiceMeta')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" title="按住说话" style="background:#1D9E75;touch-action:none">🎙</button>
-            <input id="metaInput" placeholder="和元神说点什么…（回车发送）" onkeydown="if(event.key==='Enter')sendMeta()">
+            <textarea id="metaInput" placeholder="和元神说点什么…（Enter 发送 · Shift+Enter 换行）" rows="3" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMeta();}"></textarea>
             <button class="send" id="btnSendMeta" onclick="sendMeta()">↑</button>
             <button class="btn ghost sm" id="btnMetaStop2" onclick="metaStop()">中止</button>
+            <input type="file" id="metaFile" accept="image/*" multiple hidden onchange="onImgPick('metaInput',this)">
           </div>
         </div>
         <div class="rooms" style="width:240px">
@@ -1906,6 +1925,9 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
     else { row.className='msg '+(m.kind==='self'?'right':'left');
       const cls=escapeHtml(m.kind==='meta'?'meta':m.kind); const tag=m.tag?`<span class="tag ${escapeHtml(m.tag)}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
       let acts=''; if(m.kind==='meta') acts=`<div class="acts"><button class="btn sm" onclick="metaCheck(this)">检查产出</button><button class="btn sm ghost" onclick="metaStop()">中止</button><button class="btn sm" onclick="metaReassign(this)">重派</button></div>`;
+      // 图片附件（v6.5 多模态）
+      let imgs='';
+      if(m.images){ try{ const arr=JSON.parse(m.images); if(Array.isArray(arr)&&arr.length){ imgs='<div class="msg-imgs">'+arr.map(im=>`<img class="msg-img" src="data:${im.mime};base64,${im.data}" onclick="openImg(this.src)" alt="${escapeHtml(im.name||'图片')}">`).join('')+'</div>'; } }catch(e){} }
       // 左侧消息（agent / 元神）加可点头像
       let avHtml='';
       if(m.kind!=='self'){
@@ -1915,7 +1937,7 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
         const avClick = mem ? `onclick="openMemberDrawer('${jsStr(mem.id)}')"` : '';
         avHtml = `<div class="msg-av" ${avClick} style="background:${avBg}" title="${escapeHtml(mem?mem.name:m.sender||'未知')}">${escapeHtml(avText)}</div>`;
       }
-      row.innerHTML=`${avHtml}<div class="bubble ${cls}"><div class="sender">${escapeHtml(m.sender||'')}</div>${tag}<span class="btext">${escapeHtml(m.text)}</span>${acts}</div>`; }
+      row.innerHTML=`${avHtml}<div class="bubble ${cls}"><div class="sender">${escapeHtml(m.sender||'')}</div>${tag}<span class="btext">${escapeHtml(m.text)}</span>${imgs}${acts}</div>`; }
     b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; });
   b.scrollTop=b.scrollHeight;
   if(window.__DEMO_STREAM__ && window.__LAST_SENT__ && lastRow){ streamText(lastRow); window.__LAST_SENT__=false; } }
@@ -1995,8 +2017,58 @@ async function attachThinking(){
   }catch(e){ /* 思考过程为增强展示，失败静默 */ }
 }
 function autoResizeInput(el){
-  el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px';
+  el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,200)+'px';
 }
+/* v6.5 多模态输入：图片附件（选择/拖拽/粘贴/截图）+ 待发送预览 */
+const _pendingImages = { metaInput: [], msgInput: [] };
+function openImg(src){ if(window.pywebview && window.pywebview.api && window.pywebview.api.open_url){ window.pywebview.api.open_url(src); } else { window.open(src,'_blank'); } }
+function addPendingImage(inpId, file){
+  if(!file || !file.type || file.type.indexOf('image/')!==0) return;
+  const reader=new FileReader();
+  reader.onload=()=>{ const img=new Image();
+    img.onload=()=>{ const max=1400; let w=img.width,h=img.height;
+      if(Math.max(w,h)>max){ const r=max/Math.max(w,h); w=Math.round(w*r); h=Math.round(h*r); }
+      const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h);
+      const mime=(file.type==='image/png')?'image/png':'image/jpeg';
+      const data=c.toDataURL(mime,0.85).split(',')[1];
+      _pendingImages[inpId].push({name:file.name||'image', mime, data});
+      renderImgPreview(inpId); };
+    img.src=reader.result; };
+  reader.readAsDataURL(file);
+}
+function renderImgPreview(inpId){
+  const el=document.getElementById(inpId==='metaInput'?'metaPrev':'msgPrev'); if(!el) return;
+  const arr=_pendingImages[inpId];
+  if(!arr.length){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display='flex';
+  el.innerHTML=arr.map((im,i)=>`<div class="img-thumb"><img src="data:${im.mime};base64,${im.data}" alt=""><button class="rm" onclick="removePendingImage('${inpId}',${i})">×</button><span class="nm">${escapeHtml(im.name||'图片')}</span></div>`).join('');
+}
+function removePendingImage(inpId, i){ _pendingImages[inpId].splice(i,1); renderImgPreview(inpId); }
+function onImgPick(inpId, input){ const files=input.files||[]; for(const f of files) addPendingImage(inpId, f); input.value=''; }
+function takeScreenshot(inpId){
+  if(!(window.pywebview && window.pywebview.api && window.pywebview.api.screenshot)){ toast('截图仅支持已安装的 macOS 桌面端（分身.app）'); return; }
+  toast('请框选要截取的区域…','ok');
+  window.pywebview.api.screenshot('region').then(r=>{ try{
+    const j=JSON.parse(typeof r==='string'?r:JSON.stringify(r));
+    if(!j.ok){ if(j.error && j.error!=='已取消截图') toast('截图失败：'+j.error,'err'); return; }
+    _pendingImages[inpId].push({name:j.name||'screenshot.png', mime:j.mime||'image/png', data:j.data});
+    renderImgPreview(inpId); toast('截图已放入输入框，发送即附带','ok');
+  }catch(e){ toast('截图解析失败','err'); } }).catch(e=>toast('截图失败：'+e,'err'));
+}
+function bindImgInput(inpId){
+  const ta=document.getElementById(inpId); if(!ta||ta.dataset.imgBound) return; ta.dataset.imgBound='1';
+  ta.addEventListener('paste', e=>{ const items=(e.clipboardData||{}).items||[]; let got=false;
+    for(const it of items){ if(it.type&&it.type.indexOf('image/')===0){ addPendingImage(inpId, it.getAsFile()); got=true; } }
+    if(got) e.preventDefault(); });
+  const bar=ta.closest('.chat-input'); if(bar){
+    bar.addEventListener('dragover', e=>{ e.preventDefault(); bar.classList.add('drag'); });
+    bar.addEventListener('dragleave', e=>{ bar.classList.remove('drag'); });
+    bar.addEventListener('drop', e=>{ e.preventDefault(); bar.classList.remove('drag');
+      const files=(e.dataTransfer||{}).files||[]; for(const f of files) addPendingImage(inpId, f); });
+  }
+}
+bindImgInput('metaInput'); bindImgInput('msgInput');
+function insertAt(inpId){ const ta=document.getElementById(inpId); if(!ta) return; ta.value += (ta.value && !ta.value.endsWith(' ')?' ':'') + '@'; ta.focus(); }
 function toggleMoreMenu(e){
   if(e){ e.stopPropagation(); }
   const m=document.getElementById('moreMenu'); if(!m) return;
@@ -2009,13 +2081,15 @@ document.addEventListener('click',function(e){
 async function sendMsg(){
   if(curView==='meta'){ await sendMetaInChat(); return; }
   const inp=document.getElementById('msgInput');
-  const v=inp.value.trim(); if(!v||!curRoom)return; inp.value=''; autoResizeInput(inp); window.__LAST_SENT__=true;
+  const v=inp.value.trim(); const imgs=_pendingImages['msgInput'];
+  if(!v && !imgs.length || !curRoom)return;
+  inp.value=''; autoResizeInput(inp); _pendingImages['msgInput']=[]; renderImgPreview('msgInput'); window.__LAST_SENT__=true;
   // v4.2：异步派单——后端立即返回 job_id，这里轮询进度，不再阻塞等 100-200s
   inp.placeholder='元神分析中…'; inp.disabled=true;
   let jobId=null;
   try{
     const j=await apiJson('/api/projects/'+curRoom+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({text:v})});
+      body:JSON.stringify({text:v, images:imgs})});
     if(!j.ok && j.error){ toast('元神没能处理这条消息：'+j.error,'err'); inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false; return; }
     if(j.job_id) jobId=j.job_id;
   }catch(e){ toast('发送失败：'+errText(e),'err'); inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false; return; }
@@ -2289,17 +2363,19 @@ async function loadMeta(){ const b=document.getElementById('metaChat'); b.innerH
     d.innerHTML=`<span class="s" style="background:var(--meta-700)"></span><div class="info"><div class="nm">${escapeHtml(x.name)}</div><div class="ds">资料库 · 已学习</div></div>`; f.appendChild(d); }); window.metaFileCount=(files||[]).length; }
 async function sendMeta(){
   const inp=document.getElementById('metaInput');
-  const v=inp.value.trim(); if(!v)return; inp.value=''; window.__LAST_SENT__=true;
+  const v=inp.value.trim(); const imgs=_pendingImages['metaInput'];
+  if(!v && !imgs.length)return;
+  inp.value=''; autoResizeInput(inp); _pendingImages['metaInput']=[]; renderImgPreview('metaInput'); window.__LAST_SENT__=true;
   inp.placeholder='元神思考中…（可能十几秒）'; inp.disabled=true;
   activeChatAbort=new AbortController();
   await withBusy('btnSendMeta','…',async()=>{
     try{
       trackMetaChat();
       await apiJson('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({text:v}), signal:activeChatAbort.signal});
+        body:JSON.stringify({text:v, images:imgs}), signal:activeChatAbort.signal});
     } finally { activeChatAbort=null; }
   });
-  inp.placeholder='和元神说点什么…（回车发送）'; inp.disabled=false;
+  inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false;
   await loadMeta(); }
 function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.value='';
   const mtMap={'1':'resume','2':'experience','3':'chat','4':'document','5':'creation','6':'feedback'};
@@ -2342,9 +2418,10 @@ async function loadMetaView(){
   const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='和元神说点什么…（Enter 发送）';
 }
 async function sendMetaInChat(){
-  const inp=document.getElementById('msgInput'); const v=inp.value.trim(); if(!v)return; inp.value=''; autoResizeInput(inp); window.__LAST_SENT__=true;
+  const inp=document.getElementById('msgInput'); const v=inp.value.trim(); const imgs=_pendingImages['msgInput'];
+  if(!v && !imgs.length)return; inp.value=''; autoResizeInput(inp); _pendingImages['msgInput']=[]; renderImgPreview('msgInput'); window.__LAST_SENT__=true;
   inp.placeholder='元神思考中…'; inp.disabled=true; activeChatAbort=new AbortController();
-  try{ await withBusy('btnSendMsg','…',async()=>{ await apiJson('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v}),signal:activeChatAbort.signal}); }); }
+  try{ await withBusy('btnSendMsg','…',async()=>{ await apiJson('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v, images:imgs}),signal:activeChatAbort.signal}); }); }
   finally{ activeChatAbort=null; inp.placeholder='和元神说点什么…（Enter 发送）'; inp.disabled=false; }
   await loadMetaView();
 }

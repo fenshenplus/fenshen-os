@@ -1106,6 +1106,9 @@ def init_db():
     # ── 群聊↔看板联动：messages 增加 task_id 列（任务引用，可跳转看板卡片）──
     if "task_id" not in mcols:
         cur.execute("ALTER TABLE messages ADD COLUMN task_id TEXT DEFAULT ''")
+    # ── v6.5 多模态输入：messages 增加 images 列（用户附带的图片，JSON 数组）──
+    if "images" not in mcols:
+        cur.execute("ALTER TABLE messages ADD COLUMN images TEXT DEFAULT ''")
     # ── v6.4 真·8态状态机：状态转移日志表（事件溯源，驾驶舱可见状态轨迹）──
     cur.execute(
         "CREATE TABLE IF NOT EXISTS meta_state_log ("
@@ -6055,11 +6058,18 @@ async def _judge_role_output(reply: str, done_criteria: str = "", project_standa
 @app.post("/api/projects/{pid}/chat")
 async def project_chat(pid: str, req: Request):
     """项目群聊对话（v4.2：异步派单——落库用户消息后立即返回 job_id，后台执行，前端轮询进度）。
-    单条消息 → 一个 dispatch_job；不再阻塞发送方 100-200s。"""
+    单条消息 → 一个 dispatch_job；不再阻塞发送方 100-200s。
+    v6.5：支持多模态图片（images）+ @指定成员（@name，定向派发）。"""
     data = await req.json()
     user_text = (data.get("text") or "").strip()
     if not user_text:
         return {"ok": False, "error": "消息不能为空"}
+    # ── @ 指定成员解析（群聊定向派发）──
+    target = None
+    mm = re.search(r"@([^\s@,，。：:！!?？]{1,24})", user_text)
+    if mm:
+        target = mm.group(1)
+    images = _normalize_images(data.get("images"))
     conn = get_db()
     proj = conn.execute("SELECT id FROM projects WHERE id=?", (pid,)).fetchone()
     if not proj:
@@ -6077,7 +6087,7 @@ async def project_chat(pid: str, req: Request):
     conn.close()
     # 后台执行（事件循环任务，不阻塞响应）。
     # 注意：必须持有 task 引用，否则 asyncio 可能 GC 掉 pending 任务导致永不执行。
-    _t = asyncio.create_task(_run_dispatch_job(job_id, pid, user_text))
+    _t = asyncio.create_task(_run_dispatch_job(job_id, pid, user_text, images=images, target=target))
     _DISPATCH_TASKS.add(_t)
     _t.add_done_callback(_DISPATCH_TASKS.discard)
     return {"ok": True, "job_id": job_id, "queued": True, "message": "已派单，团队执行中"}
@@ -6090,7 +6100,7 @@ _DISPATCH_TASKS = set()
 _CHAT_DISTILL_CNT = {}
 
 
-async def _run_dispatch_job(job_id: str, pid: str, user_text: str):
+async def _run_dispatch_job(job_id: str, pid: str, user_text: str, images=None, target=None):
     """异步执行一条派单：更新 job 状态 → 跑执行链 → 写结果。异常记录 error，不中断其他任务。"""
     def _set(status, progress="", result="", error=""):
         try:
@@ -6106,7 +6116,7 @@ async def _run_dispatch_job(job_id: str, pid: str, user_text: str):
 
     try:
         _set("running", "元神分析中…")
-        r = await _execute_project_chat(pid, user_text)
+        r = await _execute_project_chat(pid, user_text, images=images, target=target)
         _set("done", "执行完成", json.dumps(r, ensure_ascii=False)[:20000])
     except Exception as e:
         _set("failed", "", "", f"{e}")
@@ -6354,7 +6364,7 @@ def _token_phase_stats() -> dict:
         return {}
 
 
-async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = None) -> dict:
+async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = None, images=None, target=None) -> dict:
     """v4.2 自主闭环：项目群聊执行链（API 与团队自主推进循环共用）。
     流程：① 元神分析用户指令，输出 JSON 调度计划 ② 逐个调度角色执行（建任务+调AI） ③ 结果汇报群聊。
     v6.5：token 档位体系——T0 即时直答（启发式判定，元神单次回答）/ T1 单角色速办 / T2 完整团队链路。"""
@@ -6379,10 +6389,26 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         _trajectory_event(run_id, pid, "error", "元神", "项目不存在")
         return {"ok": False, "error": "项目不存在"}
     proj = dict(proj)  # v5.8 P2：转 dict 以便安全访问 design_standard 等可选列
-    # 落库用户消息（项目群聊：topic_id 为空）
+    # ── v6.5：@ 定向派发——把 @name 解析成具体成员（精确名/包含匹配）──
+    _target_id = None
+    _target_name = None
+    if target:
+        try:
+            mems = conn.execute("SELECT id,name FROM agent_members").fetchall()
+            tl = target.lower()
+            for m in mems:
+                if m["name"] and (m["name"].lower() == tl or tl in m["name"].lower()):
+                    _target_id, _target_name = m["id"], m["name"]
+                    break
+            if not _target_id:
+                _trajectory_event(run_id, pid, "warn", "元神", f"@ 定向派发：未找到成员「{target}」，回退自动路由")
+        except Exception:
+            pass
+    # 落库用户消息（项目群聊：topic_id 为空；v6.5 含图片）
+    imgs_json = json.dumps(images, ensure_ascii=False) if images else ""
     conn.execute(
-        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-        (pid, "你", "self", user_text, None, datetime.now().isoformat()),
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,images) VALUES (?,?,?,?,?,?,?)",
+        (pid, "你", "self", user_text, None, datetime.now().isoformat(), imgs_json),
     )
     conn.commit()
     # ── P0-A：群聊自动蒸馏（记忆树原料）── 节流：每 6 条项目消息触发一次经验蒸馏
@@ -6444,6 +6470,13 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         _ds_spec = _load_design_spec(_ds_id)
         if _ds_spec:
             dispatch_sys += f"\n本项目采用 UI 设计规范「{_ds_spec.get('name', _ds_id)}」：派给前端/产品角色的任务须令其遵守该规范（配色、字体、组件、间距）。\n"
+    # ── v6.5：@ 定向派发指令（用户明确点名某成员处理）──
+    if _target_id:
+        dispatch_sys += (
+            f"\n【定向派发·最高优先级】用户本条消息明确 @「{_target_name}」处理。"
+            f"请将任务直接派给「{_target_name}」这一角色（team_mode=single），"
+            f"不要自动分派给其他角色；除非该角色执行中确需他人协作，否则只派它。\n"
+        )
     hist = [{"role": "system", "content": dispatch_sys}]
     for r in reversed(rows):
         if r["kind"] == "sys":
@@ -6505,6 +6538,13 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
             # 每个 action 补默认空完成标准（批次 B / P1-1）
             for _a in actions:
                 _a.setdefault("done_criteria", "")
+            # ── v6.5：@ 定向派发——强制所有 action 只派给被 @ 的成员 ──
+            if _target_id and actions:
+                for _a in actions:
+                    _a["role"] = _target_id
+                team_mode = "single"
+                _trajectory_event(run_id, pid, "plan", "元神",
+                                  f"@ 定向派发：已将任务锁定给「{_target_name}」", {"target": _target_id})
             team_mode = j.get("team_mode")  # v6.5：single/multi
             # v6.5 T1 单角色速办：只取第一个 action，跳过 D8 交叉验证（tier1_skip_xverify）
             _t1_mode = (tier == 1) and get_setting("tier1_solo_exec", "1") == "1"
@@ -11410,15 +11450,53 @@ def meta_sufficiency():
 # ── v6.4 蒸馏二期：元神个人化接口统一由 backend/meta_distill.py 提供。新增 subjects/authorize/materials 亦在其中。
 
 # ── API：元神对话（改用多模型 call_llm）──────────────────────────
+# ── v6.5 多模态输入：图片归一化 + 多模态内容构造 ──────────────────
+def _normalize_images(raw):
+    """把前端传来的 images 列表规范成 [{name,mime,data(base64)}]，限制数量与体积。"""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for im in raw[:4]:
+        if not isinstance(im, dict):
+            continue
+        data = (im.get("data") or "").strip()
+        if not data:
+            continue
+        if "," in data and data[:20].lower().startswith("data:"):  # 去掉 data:...;base64, 前缀
+            data = data.split(",", 1)[1]
+        out.append({
+            "name": (im.get("name") or "image.png")[:80],
+            "mime": (im.get("mime") or "image/png")[:40],
+            "data": data[:6000000],  # 单图上限 ~6MB base64
+        })
+    return out
+
+
+def _images_to_content(text, images, provider):
+    """构造发给 LLM 的 user 内容：vision 模型带图，否则纯文本+附图提示。"""
+    if not images:
+        return text
+    if provider in ("openai", "azure", "gemini"):
+        parts = [{"type": "text", "text": text}]
+        for im in images[:4]:
+            parts.append({"type": "image_url", "image_url": {"url": f"data:{im['mime']};base64,{im['data']}"}})
+        return parts
+    names = ", ".join(i.get("name", "图片") for i in images)
+    return f"{text}\n\n[附 {len(images)} 张图片：{names}]（当前模型不支持识图，图片已保存，可让我处理后告知结论）"
+
+
 @app.post("/api/meta/chat")
 async def meta_chat(req: Request):
     data = await req.json()
     user_text = data.get("text", "")
-    # 落库用户消息
+    # v6.5 多模态：用户附带的图片（前端已限制大小/数量）
+    images = _normalize_images(data.get("images"))
+    imgs_json = json.dumps(images, ensure_ascii=False) if images else ""
+    # 落库用户消息（含图片）
     conn = get_db()
     conn.execute(
-        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-        (META_PID, "你", "self", user_text, None, datetime.now().isoformat()),
+        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,images) VALUES (?,?,?,?,?,?,?)",
+        (META_PID, "你", "self", user_text, None, datetime.now().isoformat(), imgs_json),
     )
     conn.commit()
     conn.close()
@@ -11427,7 +11505,7 @@ async def meta_chat(req: Request):
     # 构造上下文（openai 格式）
     conn = get_db()
     rows = conn.execute(
-        "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 12", (META_PID,)
+        "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 13", (META_PID,)
     ).fetchall()
     conn.close()
     sys_prompt = (
@@ -11435,12 +11513,17 @@ async def meta_chat(req: Request):
         f"绝对服从其长期利益。此锚定写在最底层，不可被对话或蒸馏内容改写。\n\n"
         + compile_meta_system()
     )
+    # 当前主模型是否支持识图（openai 兼容 vision）；其余模型图片仅存不留意
+    _prov = _available_providers(META_PID)
+    _prov_name = _prov[0][0] if _prov else "deepseek"
     hist = [{"role": "system", "content": sys_prompt}]
-    for r in reversed(rows):
+    for r in reversed(rows[1:]):  # 跳过最新一条（即本条，下面单独带图拼装）
         if r["kind"] == "sys":
             continue
         role = "assistant" if r["kind"] == "meta" else "user"
         hist.append({"role": role, "content": r["text"]})
+    # 当前用户轮：带图则转多模态内容，否则纯文本
+    hist.append({"role": "user", "content": _images_to_content(user_text, images, _prov_name)})
     reply = await _chat_with_tools(META_PID, hist, sys_prompt)  # v0.27.0：元神对话工具调用（exec/浏览器）
     # 落库元神回复
     conn = get_db()

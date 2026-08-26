@@ -3,11 +3,13 @@
 # 原生桌面窗口（PyWebview 内嵌前端），不再是浏览器标签页。
 # 启动 uvicorn 服务（127.0.0.1 或 LAN 0.0.0.0）→ 权限引导（首次/未授权时）→ 桌面窗口加载主界面。
 # 移动端照常可经 /ws 中继连接（引擎仍在 8002 监听）。
+import base64
 import ctypes
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -96,6 +98,42 @@ class _Api:
     def quit(self):
         _menu_quit()
         return "ok"
+
+    def screenshot(self, mode: str = "region"):
+        """原生截图（仅桌面端）：mode=region 交互选区，full 全屏。返回 base64 JSON。"""
+        if sys.platform != "darwin":
+            return json.dumps({"ok": False, "error": "截图仅支持 macOS 桌面端"})
+        fd, path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        try:
+            if mode == "full":
+                subprocess.run(["screencapture", "-x", path], check=True, timeout=20)
+            else:
+                # 交互选区：用户框选区域；取消则 screencapture 退出非 0 且不写文件
+                r = subprocess.run(["screencapture", "-i", "-r", path], capture_output=True, timeout=30)
+                if r.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) == 0:
+                    return json.dumps({"ok": False, "error": "已取消截图"})
+            # 适度压缩，避免 base64 过大撑爆消息体
+            try:
+                from PIL import Image
+                im = Image.open(path)
+                if max(im.size) > 2400:
+                    im.thumbnail((2400, 2400))
+                buf = tempfile.mkstemp(suffix=".png")[1]
+                im.save(buf, "PNG", optimize=True)
+                os.replace(buf, path)
+            except Exception:
+                pass
+            with open(path, "rb") as f:
+                data = base64.b64encode(f.read()).decode("ascii")
+            return json.dumps({"ok": True, "name": "screenshot.png", "mime": "image/png", "data": data})
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)})
+        finally:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
 
 
 _windows_ref = []
