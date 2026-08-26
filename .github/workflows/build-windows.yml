@@ -25,7 +25,7 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller fastapi "uvicorn[standard]" requests
+          pip install pyinstaller fastapi "uvicorn[standard]" requests paramiko
 
       - name: PyInstaller 构建 exe（onedir → 单文件自解压，数据落 ~/.fenshen 持久化）
         # 用 Windows 专用 spec（入口 packaging/windows/run.py，端口 8002，自动开浏览器）
