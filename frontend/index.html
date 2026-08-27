@@ -463,22 +463,15 @@
     </div>
   </div>
 
-  <!-- v0.64.33 首次登录模型配置引导 -->
+  <!-- 模型配置（必须：分身不内置任何大模型） -->
   <div id="modelSetupMask" class="auth-mask" style="display:none;z-index:10000">
     <div class="auth-card" style="width:380px">
-      <div class="auth-title">🧠 配置分身对话模型</div>
-      <div class="auth-sub">元神需要大模型才能与你对话。你可以选择使用内置模型，或填写自己的 API Key。</div>
-      <div id="modelSetupBuiltin" style="display:none">
-        <div style="background:var(--success-weak);border:.5px solid var(--line-2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;line-height:1.6;color:var(--fg)">
-          <b>已为你内置 DeepSeek 模型</b><br>
-          当前可用：deepseek-v4-flash<br>
-          <span style="color:var(--gray-500)">可直接开始使用；也可在下方更换为其他模型。</span>
-        </div>
-      </div>
-      <div id="modelSetupEmpty" style="display:none">
+      <div class="auth-title">🧠 为元神配置大模型</div>
+      <div class="auth-sub">分身不内置任何大模型，必须由你提供 API Key，否则元神无法对话。</div>
+      <div id="modelSetupEmpty">
         <div style="background:var(--warning-weak);border:.5px solid var(--line-2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;line-height:1.6;color:var(--fg)">
-          <b>尚未配置大模型 API</b><br>
-          <span style="color:var(--gray-500)">请先填写一个模型 Key，否则元神无法回复。</span>
+          <b>请填写你的模型 API Key</b><br>
+          <span style="color:var(--gray-500)">支持 DeepSeek / OpenAI / Claude / 通义千问 / Moonshot / 智谱；本机已装 Ollama 也可免 Key 使用。</span>
         </div>
       </div>
       <div class="field" style="margin-bottom:8px">
@@ -490,7 +483,7 @@
           <option value="qwen">通义千问</option>
           <option value="moonshot">Moonshot</option>
           <option value="zhipu">智谱 GLM</option>
-          <option value="ollama">Ollama（本地）</option>
+          <option value="ollama">Ollama（本地免 Key）</option>
         </select>
       </div>
       <div class="field" style="margin-bottom:8px">
@@ -498,16 +491,15 @@
         <input id="setupModelBase" class="auth-input" style="margin-bottom:0" placeholder="留空使用官方默认">
       </div>
       <div class="field" style="margin-bottom:8px">
-        <label style="font-size:12px;color:var(--gray-500)">API Key</label>
-        <input id="setupModelKey" class="auth-input" type="password" style="margin-bottom:0" placeholder="使用内置模型可留空；或填写你自己的 Key">
+        <label style="font-size:12px;color:var(--gray-500)">API Key（必填）</label>
+        <input id="setupModelKey" class="auth-input" type="password" style="margin-bottom:0" placeholder="填写你自己的 Key，如 sk-...">
       </div>
       <div class="field" style="margin-bottom:12px">
         <label style="font-size:12px;color:var(--gray-500)">模型名</label>
         <input id="setupModelName" class="auth-input" style="margin-bottom:0" placeholder="如 deepseek-v4-flash / gpt-4o-mini">
       </div>
       <div class="auth-err" id="modelSetupErr"></div>
-      <button class="btn meta auth-btn" id="btnModelSetupUse" onclick="submitModelSetup()">开始使用</button>
-      <button class="btn ghost auth-btn" style="margin-top:8px;border-color:var(--gray-300);color:var(--gray-500)" onclick="closeModelSetup()">跳过（稍后设置）</button>
+      <button class="btn meta auth-btn" id="btnModelSetupUse" onclick="submitModelSetup()">保存并进入</button>
     </div>
   </div>
 
@@ -1690,9 +1682,9 @@ function maybeShowModelSetup(model){
   if(!model) return;
   if(localStorage.getItem('fs_model_setup_seen')) return;
   const mask=document.getElementById('modelSetupMask'); if(!mask) return;
-  document.getElementById('modelSetupBuiltin').style.display = (model.ready && model.builtin) ? 'block' : 'none';
-  document.getElementById('modelSetupEmpty').style.display = model.ready ? 'none' : 'block';
-  // 预填默认值
+  // 已配置模型则不再弹出；否则强制要求配置（分身不内置模型）
+  if(model.ready){ localStorage.setItem('fs_model_setup_seen','1'); return; }
+  document.getElementById('modelSetupEmpty').style.display = 'block';
   const pSel=document.getElementById('setupModelProvider');
   const baseEl=document.getElementById('setupModelBase');
   const nameEl=document.getElementById('setupModelName');
@@ -1712,10 +1704,9 @@ async function submitModelSetup(){
   const key=document.getElementById('setupModelKey').value.trim();
   const model_name=document.getElementById('setupModelName').value.trim();
   const errEl=document.getElementById('modelSetupErr');
-  // 如果没有填 key，且后端有内置 key，允许继续用内置
-  if(!key){
-    closeModelSetup();
-    toast('✅ 已使用内置 DeepSeek 模型开始对话');
+  // 分身不内置模型：除本地 Ollama 外，必须填写 API Key
+  if(provider!=='ollama' && !key){
+    errEl.textContent='必须填写 API Key 才能使用（分身不内置任何模型）。如本机已装 Ollama，可选「Ollama（本地免 Key）」。';
     return;
   }
   try{
@@ -1726,7 +1717,7 @@ async function submitModelSetup(){
     });
     if(!r.ok){ errEl.textContent=r.error||'保存失败'; return; }
     closeModelSetup();
-    toast('✅ 模型配置已保存');
+    toast('✅ 模型已配置，元神可以开始对话了');
   }catch(e){ errEl.textContent='保存失败：'+errText(e); }
 }
 function showAuthModal(){ const m=document.getElementById('authMask'); if(m) m.style.display='flex'; const e=document.getElementById('authErr'); if(e) e.textContent=''; }

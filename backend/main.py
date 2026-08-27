@@ -87,11 +87,7 @@ if _MEI:
 META_PID = "__meta__"  # 元神私聊在消息表中使用的 project_id
 
 # ── 元神人格 grounding ─────────────────────────────────────────────
-SECRET = os.path.expanduser("~/.workbuddy/config/secrets/deepseek.key")
-DEEPSEEK_KEY = None
-if os.path.exists(SECRET):
-    with open(SECRET) as f:
-        DEEPSEEK_KEY = f.read().strip()
+DEEPSEEK_KEY = None  # 分身不内置任何大模型；必须由用户登录后自行配置 API Key
 
 # 命名锚定：启动即绑定本机用户，不可被对话或蒸馏内容改写（宪法层：元神即某人的元神）
 OWNER_NAME = (os.environ.get("FENSHEN_OWNER")
@@ -133,6 +129,13 @@ META_SYSTEM = """你是「元神」——一个运行在用户本机的数字克
 - exec_command：在用户电脑上执行命令（危险操作先确认）。
 - browser_action：无头浏览器（打开网页 / 截图 / 抓取 / 填表 / 点击）。
 - 需要真实结果时，必须调用工具获取后再回答，不得凭空编造；失败时如实说明。
+
+【对话纪律：禁止让用户悬空】
+每次回复结束时，必须满足以下一条：
+1) 简要汇报当前进展（已完成什么、下一步计划、当前卡在哪）；
+2) 向用户提出一个明确、可执行的问题（如"是否继续？"、"选 A 还是 B？"、"请补充哪条信息？"）；
+3) 给出用户下一步该做的具体动作。
+禁止以泛泛的开放式陈述结尾，让用户不知道下一步该做什么。
 """
 
 # 支持的模型供应商预设（base_url 可空，由代码补默认）
@@ -469,13 +472,12 @@ async def auth_status(request: Request):
     if not row:
         return JSONResponse({"ok": True, "logged_in": False})
     has_user_cfg = bool(cfg_row and cfg_row["api_key"])
-    has_builtin = bool(DEEPSEEK_KEY)
-    model_ready = has_user_cfg or has_builtin
-    provider = (cfg_row["provider"] if cfg_row and cfg_row["provider"] else "deepseek") if has_user_cfg else ("deepseek" if has_builtin else "")
-    model = (cfg_row["model_name"] if cfg_row and cfg_row["model_name"] else "deepseek-v4-flash") if has_user_cfg else ("deepseek-v4-flash" if has_builtin else "")
+    model_ready = has_user_cfg  # 分身不内置模型，必须由用户配置
+    provider = (cfg_row["provider"] if cfg_row and cfg_row["provider"] else "deepseek") if has_user_cfg else ""
+    model = (cfg_row["model_name"] if cfg_row and cfg_row["model_name"] else "deepseek-v4-flash") if has_user_cfg else ""
     return JSONResponse({"ok": True, "logged_in": True,
                          "user": {"id": row["id"], "phone": row["phone"], "nickname": row["nickname"] or ""},
-                         "model": {"ready": model_ready, "builtin": has_builtin and not has_user_cfg,
+                         "model": {"ready": model_ready, "builtin": False,
                                    "provider": provider, "model": model}})
 
 
@@ -1420,10 +1422,7 @@ def resolve_provider_cfg(agent_id: str):
         base = cfg.get("base_url") or preset["base"]
         model = cfg.get("model_name") or preset["default_model"]
         return provider, base, cfg["api_key"], model
-    # 元神回退：沿用 DeepSeek secret 文件（向后兼容）
-    if agent_id == META_PID and DEEPSEEK_KEY:
-        return "deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-v4-flash"
-    return None
+    return None  # 无用户配置则离线，绝不回退内置 key
 
 
 # ── v6.5 模型注册与路由层（真·多模型 vs 角色扮演）──────────────────
@@ -1623,8 +1622,7 @@ def _available_providers(agent_id: str, member_override: tuple = None):
     候选链已真正建起（审查 #12 的修复）：
       ① 角色自有 key 永远第一；
       ② 全库其他角色已配 Key 按 FALLBACK_ORDER 依次顶上（多模型自动降级真实可用）；
-      ③ 本地 Ollama 作最后兜底；
-      ④ DeepSeek secret 文件向后兼容兜底。
+      ③ 本地 Ollama 作最后兜底（需本机已安装）。
     cross-check 交叉验证不再 deepseek 验 deepseek。
     """
     cands = []
@@ -1675,8 +1673,6 @@ def _available_providers(agent_id: str, member_override: tuple = None):
         _add("ollama", PROVIDER_PRESETS["ollama"]["base"], "local",
              PROVIDER_PRESETS["ollama"]["default_model"])
 
-    # 4) DeepSeek secret 文件兜底（向后兼容）
-    _add("deepseek", PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-v4-flash")
     return cands
 
 
@@ -2219,7 +2215,7 @@ def needs_file_approval() -> bool:
 @app.get("/api/health")
 def health():
     meta_cfg = get_model_config(META_PID)
-    llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) or DEEPSEEK_KEY else "offline"
+    llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) else "offline"
     return {"status": "ok", "version": SEMVER, "release": RELEASE, "schema_version": SCHEMA_VERSION,
             "build_date": BUILD_DATE, "git_commit": COMMIT, "port": PORT, "llm": llm,
             "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
@@ -3728,8 +3724,6 @@ async def test_model(agent_id: str, req: Request):
     # 临时构造配置测试（不落库）
     provider = data.get("provider", "deepseek")
     key = data.get("api_key", "").strip()
-    if not key and agent_id == META_PID and DEEPSEEK_KEY:
-        key = DEEPSEEK_KEY
     base = data.get("base_url", "").strip() or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"]
     model = data.get("model_name", "").strip() or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["default_model"]
     if not key and provider != "ollama":
@@ -4672,7 +4666,7 @@ def _key_for_provider(provider: str, role: str = "backend"):
         if p == provider:
             return b, k, m
     if provider == "deepseek":
-        return PROVIDER_PRESETS["deepseek"]["base"], DEEPSEEK_KEY, "deepseek-v4-flash"
+        return PROVIDER_PRESETS["deepseek"]["base"], "", "deepseek-v4-flash"
     return PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"], "", ""
 
 

@@ -9,6 +9,7 @@
 import asyncio
 import json
 import re
+import time
 from datetime import datetime
 from fastapi import Request
 
@@ -20,6 +21,11 @@ except Exception:
 # ── 维度定义（v5.8 重定位：蒸馏的首要目的是"绑定用户"，不是增强能力）──
 # 五维绑定：把"通用工具人"炼成"用户自己的数字克隆体"，靠利益+情感锁死。
 META_DIMS = ["interest", "decision", "emotion", "value", "comm"]
+
+# 闲聊自动抽取节流：避免用户简单对话频繁调用 LLM
+_LAST_CHAT_EXTRACT_TS = 0.0
+_CHAT_EXTRACT_COOLDOWN = 60  # 同一用户两次闲聊抽取至少间隔 60 秒
+_CHAT_EXTRACT_MIN_LEN = 30  # 太短的句子不触发抽取
 DIM_LABEL = {
     "interest": "【利益关切】", "decision": "【决策倾向】", "emotion": "【情感信号】",
     "value": "【价值观锚点】", "comm": "【沟通风格】",
@@ -669,9 +675,17 @@ async def mirror_judge(req: Request):
     return {"ok": True, "result": "已记录纠正并更新画像", "stored": n}
 
 
-# ── 被动蒸馏：元神每次闲聊自动抽取人格事实 ───────────────────────
+# ── 被动蒸馏：元神闲聊时自动抽取人格事实（已节流，降低 LLM 调用）
 async def _auto_distill_user(user_text: str):
-    if not user_text or len(user_text) < 12 or "?" in user_text:
+    if not user_text:
+        return
+    if "?" in user_text or "？" in user_text:
+        return
+    if len(user_text) < _CHAT_EXTRACT_MIN_LEN:
+        return
+    global _LAST_CHAT_EXTRACT_TS
+    now = time.time()
+    if now - _LAST_CHAT_EXTRACT_TS < _CHAT_EXTRACT_COOLDOWN:
         return
     try:
         facts = await _extract_async(
@@ -679,6 +693,7 @@ async def _auto_distill_user(user_text: str):
             f"用户说：{user_text}")
         if facts:
             _store_facts(facts, "chat")
+            _LAST_CHAT_EXTRACT_TS = now
     except Exception:
         pass
 
