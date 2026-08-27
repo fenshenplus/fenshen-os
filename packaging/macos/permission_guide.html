@@ -31,6 +31,12 @@
   <h1>分身 · 桌面助手授权</h1>
   <div class="sub">分身是你的桌面 AI 助手，需要控制这台电脑才能真正帮你干活。请授权以下权限，之后不会再打扰你。</div>
 
+  <div class="hint" id="hintBox" style="margin-bottom:14px;text-align:left;background:rgba(255,255,255,.05);border-radius:10px;padding:10px 12px">
+    💡 未授权权限会限制分身能力：<br>
+    · 辅助功能：控制电脑、执行脚本、操作应用<br>
+    · 完全磁盘访问：读写文件、扫描项目工作区
+  </div>
+
   <div class="warn" id="warnBox" style="display:none">⚠️ 系统设置里已授权，但这里仍检测不到？<br>① 请<b>完全退出分身再重新打开</b>（Cmd+Q 后重开）——macOS 对未签名应用授权绑定应用文件，重装后需重启生效；<br>② 仍未通过则在下方对应权限里点「−」移除「分身」条目，再「＋」重新添加 <b>/Applications/分身.app</b> 并勾选。</div>
 
   <div class="perm" id="permAx" onclick="openSettings('accessibility')">
@@ -57,12 +63,15 @@
   <div class="hint">点击权限条会打开<b>对应</b>的系统设置面板；授权后回到本窗口自动检测进入。<br>如列表里没有「分身」，先点「＋」添加 <b>/Applications/分身.app</b>，再勾选开启。</div>
 </div>
 <script>
-  function render(state){
+  var _recheckCount=0;
+  function render(state, fromRecheck){
     var ax=state.accessibility, disk=state.disk;
     set('stAx', ax, ax?'已授权':'未授权');
     set('stDisk', disk, disk?'已授权':'未授权');
-    // 有未授权 → 显示失配处理指引（系统里已授权但检测不到）
-    document.getElementById('warnBox').style.display = (!ax || !disk) ? 'block' : 'none';
+    // 仅在用户主动重新检测后仍然失败，才显示失配处理指引
+    if(fromRecheck && (!ax || !disk)){
+      document.getElementById('warnBox').style.display='block';
+    }
     if(ax && disk){ document.getElementById('btnOpen').textContent='✅ 授权完成，进入分身…'; gotoMain(); }
   }
   function set(id, ok, txt){
@@ -81,8 +90,9 @@
       : 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
   }
   function recheck(){
+    _recheckCount++;
     if(window.pywebview && window.pywebview.api){
-      window.pywebview.api.check_permissions().then(function(s){ render(JSON.parse(s)); });
+      window.pywebview.api.check_permissions().then(function(s){ render(JSON.parse(s), true); });
     }
   }
   function gotoMain(){
@@ -91,7 +101,7 @@
   }
   function poll(){
     if(window.pywebview && window.pywebview.api){
-      window.pywebview.api.check_permissions().then(function(s){ render(JSON.parse(s)); });
+      window.pywebview.api.check_permissions().then(function(s){ render(JSON.parse(s), false); });
     }
     setTimeout(poll, 1500);
   }

@@ -461,11 +461,22 @@ async def auth_status(request: Request):
         return JSONResponse({"ok": True, "logged_in": False})
     conn = get_db()
     row = conn.execute("SELECT id,phone,nickname FROM users WHERE id=?", (uid,)).fetchone()
+    # v0.64.33：首次登录模型配置引导
+    cfg_row = conn.execute(
+        "SELECT provider, model_name, api_key FROM model_configs WHERE agent_id=?", (META_PID,)
+    ).fetchone()
     conn.close()
     if not row:
         return JSONResponse({"ok": True, "logged_in": False})
+    has_user_cfg = bool(cfg_row and cfg_row["api_key"])
+    has_builtin = bool(DEEPSEEK_KEY)
+    model_ready = has_user_cfg or has_builtin
+    provider = (cfg_row["provider"] if cfg_row and cfg_row["provider"] else "deepseek") if has_user_cfg else ("deepseek" if has_builtin else "")
+    model = (cfg_row["model_name"] if cfg_row and cfg_row["model_name"] else "deepseek-v4-flash") if has_user_cfg else ("deepseek-v4-flash" if has_builtin else "")
     return JSONResponse({"ok": True, "logged_in": True,
-                         "user": {"id": row["id"], "phone": row["phone"], "nickname": row["nickname"] or ""}})
+                         "user": {"id": row["id"], "phone": row["phone"], "nickname": row["nickname"] or ""},
+                         "model": {"ready": model_ready, "builtin": has_builtin and not has_user_cfg,
+                                   "provider": provider, "model": model}})
 
 
 # ── v6.2 短信验证码（阿里云 DysmsAPI，自包含 HMAC 签名，无第三方 SDK 依赖）──
@@ -1284,45 +1295,8 @@ def init_db():
             ("deepseek", "DeepSeek API Key", "credential", 1),
         ]
         cur.executemany("INSERT OR IGNORE INTO resources VALUES (?,?,?,?)", sample_res)
-    # 项目种子数据
-    cur.execute("SELECT COUNT(*) FROM projects")
-    if cur.fetchone()[0] == 0:
-        now = datetime.now().isoformat()
-        sample_proj = [
-            ("p1", "选择大于努力", "完成 · 首页已上线", "green", now),
-            ("p2", "Fenshen-OS 开源", "运行中 · 60%", "green", now),
-            ("p3", "9percent Token网关", "阻塞 · API 超配额", "red", now),
-            ("p4", "应用市场设计", "暂停 · 等待评审", "amber", now),
-        ]
-        # v5.4 修复：projects 表列数增长后种子 INSERT 必须显式列名（新库/打包版会崩）
-        cur.executemany(
-            "INSERT OR IGNORE INTO projects (id,name,status,created_at) VALUES (?,?,?,?)",
-            [(p[0], p[1], p[2], p[4]) for p in sample_proj])
-        seed_msgs_p1 = [
-            ("分身 · 元神", "meta", "项目已成立，已拉起团队：架构师、前端、后端、测试。", None),
-            ("分身 · 前端", "agent", "首页 section 重构完成，使用了栅格系统。", "done"),
-            ("你", "self", "导航颜色太深，改成浅灰背景。", None),
-            ("分身 · 前端", "agent", "收到，正在修改…", None),
-            ("system", "sys", "导航已更新为浅灰背景。", None),
-            ("分身 · 后端", "agent", "正在部署到服务器，预计 5 分钟。", "progress"),
-        ]
-        cur.executemany(
-            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES ('p1',?,?,?,?,?)",
-            [(s, k, t, g, now) for (s, k, t, g) in seed_msgs_p1],
-        )
-        seed_meta = [
-            ("分身 · 元神", "meta", "我是你的个人分身，完全代表你的利益与风格。你可以随时在这里跟我说私话、定偏好、上传资料让我更懂你。", None),
-            ("你", "self", "记住：分身 v1 只做 coding 这一件事，砍掉所有臃肿功能。", None),
-            ("分身 · 元神", "meta", "已记下。我会用这个标准去组织团队、监督进度。", None),
-        ]
-        cur.executemany(
-            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-            [(META_PID, s, k, t, g, now) for (s, k, t, g) in seed_meta],
-        )
-        cur.executemany(
-            "INSERT INTO meta_files (name,ts) VALUES (?,?)",
-            [("我的工程规范.md", now), ("写作风格样例.txt", now)],
-        )
+    # v0.64.33 移除首次安装自动种子项目：用户要求重装后项目库空白，
+    # 种子数据会误导新用户，改为登录后由用户主动创建项目。
     # 迁移：旧库 project_templates 补列（幂等，v0.27.0+）
     try:
         tcols = [r[1] for r in cur.execute("PRAGMA table_info(project_templates)").fetchall()]
