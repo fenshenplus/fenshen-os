@@ -326,6 +326,19 @@
   .annot-tip { display:none; position:fixed; top:54px; left:50%; transform:translateX(-50%); background:var(--amber); color:var(--on-accent); font-size:11px; padding:4px 12px; border-radius:20px; z-index:60; }
   .annot-panel { position:fixed; top:0; right:0; width:300px; height:100vh; background:var(--bg); border-left:0.5px solid var(--gray-200); box-shadow:-4px 0 16px rgba(0,0,0,.06); display:none; flex-direction:column; z-index:55; }
   .annot-panel.show { display:flex; }
+  /* 元神产出展示区：最右侧滑出面板（可开合） */
+  .out-panel{position:fixed;top:0;right:0;width:340px;height:100vh;background:var(--bg);border-left:.5px solid var(--gray-200);box-shadow:-4px 0 16px rgba(0,0,0,.06);display:none;flex-direction:column;z-index:56}
+  .out-panel.show{display:flex}
+  .out-panel .op-h{padding:12px 14px;font-size:13px;font-weight:500;border-bottom:.5px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center}
+  .out-body{flex:1;overflow-y:auto;padding:10px 12px}
+  .out-item{border:.5px solid var(--gray-200);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--bg)}
+  .out-item .oi-proj{font-size:13px;font-weight:600;color:var(--meta-700)}
+  .out-item .oi-path{font-size:11px;color:var(--gray-400);margin:2px 0 6px;word-break:break-all}
+  .out-item .oi-kinds{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+  .out-k{padding:1px 8px;border-radius:99px;background:var(--meta-50);color:var(--meta-700);font-size:10px}
+  .out-item .oi-acts{display:flex;gap:6px}
+  .out-empty{font-size:12px;color:var(--gray-400);padding:20px 4px;text-align:center;line-height:1.7}
+  @media(max-width:768px){ .out-panel{width:100%} }
   .annot-panel .ap-h { padding:12px 14px; font-size:13px; font-weight:500; border-bottom:0.5px solid var(--gray-200); display:flex; justify-content:space-between; align-items:center; }
   .annot-list { flex:1; overflow-y:auto; padding:10px 14px; }
   .annot-item { border:0.5px solid var(--gray-200); border-radius:var(--r-sm); padding:8px 10px; margin-bottom:8px; font-size:11px; }
@@ -877,6 +890,7 @@
           <div class="chat-head">
             <div><div class="t">元神 · 我的个人分身</div><div class="sub">完全代表你的利益与风格</div></div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <button class="btn sm meta" id="btnMetaOutput" onclick="toggleMetaOutput()" title="展开/收起元神产出展示区">产出展示区</button>
               <button class="btn sm meta" id="metaViewToggle" onclick="toggleMetaView()">总看板</button>
               <button class="btn sm meta" onclick="toggleInterview()">了解我</button>
               <button class="btn sm meta" onclick="toggleProfile()">画像</button>
@@ -953,6 +967,15 @@
           <div class="rooms-head"><span class="t">我的资料库</span><button class="room-add" onclick="document.getElementById('fileInput').click()" title="上传资料">↑</button></div>
           <div class="room-list" id="metaFiles"></div>
         </div>
+      </div>
+
+      <!-- 元神产出展示区（最右侧滑出，可开合） -->
+      <div class="out-panel" id="metaOutputPanel">
+        <div class="op-h">
+          <span>📦 元神产出展示区</span>
+          <button class="split-close" onclick="toggleMetaOutput()" title="收起">✕</button>
+        </div>
+        <div class="out-body" id="metaOutputBody"><div class="out-empty">点击顶部「产出展示区」按钮加载元神在各项目中的产出物…</div></div>
       </div>
 
       <!-- 精选角色库 -->
@@ -2448,6 +2471,31 @@ async function loadMeta(){ const b=document.getElementById('metaChat'); b.innerH
   let files=[]; try{ const res=await fetch('/api/meta/files'); files=await res.json(); }catch(e){ console.error(e); }
   f.innerHTML=''; files.forEach(x=>{ const d=document.createElement('div'); d.className='room';
     d.innerHTML=`<span class="s" style="background:var(--meta-700)"></span><div class="info"><div class="nm">${escapeHtml(x.name)}</div><div class="ds">资料库 · 已学习</div></div>`; f.appendChild(d); }); window.metaFileCount=(files||[]).length; }
+
+/* 元神产出展示区：最右侧滑出面板（开合） */
+function toggleMetaOutput(){ const p=document.getElementById('metaOutputPanel'); if(!p)return; const open=p.classList.toggle('show'); const b=document.getElementById('btnMetaOutput'); if(b) b.classList.toggle('active', open); if(open) loadMetaOutputs(); }
+async function loadMetaOutputs(){
+  const body=document.getElementById('metaOutputBody'); if(!body)return;
+  body.innerHTML='<div class="out-empty">加载中…</div>';
+  let outs=[]; try{ const res=await fetch('/api/meta/outputs'); outs=await res.json(); }catch(e){ console.error(e); }
+  if(!outs||!outs.length){ body.innerHTML='<div class="out-empty">元神暂未识别出产出物。<br>当项目产出 site / dist / build / out（含 index.html · .app · .apk · 小程序）后，会在这里汇总展示。</div>'; return; }
+  body.innerHTML='';
+  outs.forEach(o=>{
+    const d=document.createElement('div'); d.className='out-item';
+    const kinds=(o.kinds||[]).map(k=>`<span class="out-k">${escapeHtml(k)}</span>`).join('');
+    const isWeb=(o.kinds||[]).includes('web');
+    const openUrl=isWeb?('file://'+o.path+'/index.html'):('file://'+o.path);
+    d.innerHTML=`<div class="oi-proj">${escapeHtml(o.project||'未命名项目')}</div>`+
+      `<div class="oi-path">${escapeHtml(o.path)}</div>`+
+      `<div class="oi-kinds">${kinds}</div>`+
+      `<div class="oi-acts">`+
+        `<button class="btn sm" onclick="openLocal('${encodeURIComponent(openUrl)}')">打开</button>`+
+        `<button class="btn sm ghost" onclick="openLocal('${encodeURIComponent('file://'+o.path)}')">打开目录</button>`+
+      `</div>`;
+    body.appendChild(d);
+  });
+}
+function openLocal(enc){ const url=decodeURIComponent(enc); if(window.pywebview&&window.pywebview.api&&window.pywebview.api.open_url){ window.pywebview.api.open_url(url); } else { window.open(url,'_blank'); } }
 async function sendMeta(){
   const inp=document.getElementById('metaInput');
   const v=inp.value.trim(); const imgs=_pendingImages['metaInput'];

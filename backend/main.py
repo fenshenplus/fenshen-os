@@ -3567,6 +3567,24 @@ async def add_meta_file(req: Request):
     return {"ok": True}
 
 
+@app.get("/api/meta/outputs")
+def list_meta_outputs():
+    """元神产出展示区：聚合所有项目的可识别产物（site/dist/build/out 目录）。"""
+    conn = get_db()
+    rows = conn.execute("SELECT id,name FROM projects ORDER BY id DESC").fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            arts = _detect_artifacts(r["id"])
+        except Exception:
+            arts = []
+        for a in arts:
+            out.append({"project": r["name"], "project_id": r["id"],
+                        "path": a["path"], "kinds": a["kinds"]})
+    return out
+
+
 # ── API：模型配置（元神 + 角色级）─────────────────────────────────
 @app.get("/api/models")
 def list_models():
