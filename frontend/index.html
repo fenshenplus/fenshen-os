@@ -200,7 +200,7 @@
   .rs-role { font-size:11px; color:var(--gray-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
   .rs-arrow { font-size:18px; color:var(--gray-300); }
 
-  .chat { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .chat { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
   .chat-head { padding:11px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:0.5px solid var(--gray-200); }
   .chat-head .t { font-size:14px; font-weight:500; }
   .chat-head .sub { font-size:11px; color:var(--green); }
@@ -228,7 +228,7 @@
   /* 群聊↔看板联动：系统动态里的可跳转看板卡片标记 */
   .task-jump { display:inline-block; margin-left:6px; padding:1px 8px; border-radius:10px; background:var(--accent-weak); color:var(--accent-strong); font-size:10px; cursor:pointer; vertical-align:middle; }
   .task-jump:hover { background:var(--accent); color:var(--on-accent); }
-  .chat-input { display:flex; gap:8px; padding:12px 16px 14px; border-top:0.5px solid var(--gray-200); background:var(--bg); flex-shrink:0; align-items:flex-end; flex-wrap:wrap; }
+  .chat-input { display:flex; gap:8px; padding:12px 16px 14px; border-top:0.5px solid var(--gray-200); background:var(--bg); flex-shrink:0; align-items:flex-end; flex-wrap:wrap; min-height:110px; }
   .chat-input.drag { background:var(--blue-50); outline:2px dashed var(--blue-400); outline-offset:-6px; border-radius:14px; }
   .ico-btn { width:36px; height:36px; border-radius:50%; border:0.5px solid var(--gray-300); background:var(--bg); cursor:pointer; flex-shrink:0; font-size:16px; display:flex; align-items:center; justify-content:center; }
   .ico-btn:hover { background:var(--gray-100); }
@@ -462,6 +462,55 @@
       <div class="auth-legal">注册即代表同意 <a href="http://39.105.6.135/privacy.html" target="_blank" rel="noopener">隐私政策</a> 与 <a href="http://39.105.6.135/terms.html" target="_blank" rel="noopener">用户协议</a></div>
     </div>
   </div>
+
+  <!-- v0.64.33 首次登录模型配置引导 -->
+  <div id="modelSetupMask" class="auth-mask" style="display:none;z-index:10000">
+    <div class="auth-card" style="width:380px">
+      <div class="auth-title">🧠 配置分身对话模型</div>
+      <div class="auth-sub">元神需要大模型才能与你对话。你可以选择使用内置模型，或填写自己的 API Key。</div>
+      <div id="modelSetupBuiltin" style="display:none">
+        <div style="background:var(--success-weak);border:.5px solid var(--line-2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;line-height:1.6;color:var(--fg)">
+          <b>已为你内置 DeepSeek 模型</b><br>
+          当前可用：deepseek-v4-flash<br>
+          <span style="color:var(--gray-500)">可直接开始使用；也可在下方更换为其他模型。</span>
+        </div>
+      </div>
+      <div id="modelSetupEmpty" style="display:none">
+        <div style="background:var(--warning-weak);border:.5px solid var(--line-2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;line-height:1.6;color:var(--fg)">
+          <b>尚未配置大模型 API</b><br>
+          <span style="color:var(--gray-500)">请先填写一个模型 Key，否则元神无法回复。</span>
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:8px">
+        <label style="font-size:12px;color:var(--gray-500)">模型供方</label>
+        <select id="setupModelProvider" style="width:100%;padding:9px 10px;border:.5px solid #e3e3ec;border-radius:9px;font-size:13px;background:#fff">
+          <option value="deepseek">DeepSeek（推荐，高性价比）</option>
+          <option value="openai">OpenAI</option>
+          <option value="claude">Claude</option>
+          <option value="qwen">通义千问</option>
+          <option value="moonshot">Moonshot</option>
+          <option value="zhipu">智谱 GLM</option>
+          <option value="ollama">Ollama（本地）</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:8px">
+        <label style="font-size:12px;color:var(--gray-500)">接口 Base URL（可选）</label>
+        <input id="setupModelBase" class="auth-input" style="margin-bottom:0" placeholder="留空使用官方默认">
+      </div>
+      <div class="field" style="margin-bottom:8px">
+        <label style="font-size:12px;color:var(--gray-500)">API Key</label>
+        <input id="setupModelKey" class="auth-input" type="password" style="margin-bottom:0" placeholder="使用内置模型可留空；或填写你自己的 Key">
+      </div>
+      <div class="field" style="margin-bottom:12px">
+        <label style="font-size:12px;color:var(--gray-500)">模型名</label>
+        <input id="setupModelName" class="auth-input" style="margin-bottom:0" placeholder="如 deepseek-v4-flash / gpt-4o-mini">
+      </div>
+      <div class="auth-err" id="modelSetupErr"></div>
+      <button class="btn meta auth-btn" id="btnModelSetupUse" onclick="submitModelSetup()">开始使用</button>
+      <button class="btn ghost auth-btn" style="margin-top:8px;border-color:var(--gray-300);color:var(--gray-500)" onclick="closeModelSetup()">跳过（稍后设置）</button>
+    </div>
+  </div>
+
   <style>
   .auth-mask{position:fixed;inset:0;background:rgba(15,12,40,.55);display:flex;align-items:center;justify-content:center;z-index:9999}
   .auth-card{width:320px;max-width:90vw;background:#fff;border-radius:16px;padding:22px 22px 18px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
@@ -1620,7 +1669,7 @@ let _authCheckTries = 0;
 function checkAuth(){
   if(!SESSION){ showAuthModal(); return; }
   fetch('/api/auth/status', {headers: sessHeaders()}).then(r=>r.json()).then(j=>{
-    if(j.logged_in){ renderUserBar(j.user); localStorage.setItem('fs_guide_toured','1'); }
+    if(j.logged_in){ hideAuthModal(); renderUserBar(j.user); localStorage.setItem('fs_guide_toured','1'); maybeShowModelSetup(j.model); }
     else { SESSION=''; localStorage.removeItem('fs_session'); showAuthModal(); }
   }).catch(()=>{
     // 服务可能尚未就绪（窗口已加载、后端仍在初始化）：重试，而非直接弹登录框
@@ -1635,6 +1684,50 @@ function renderUserBar(u){
   const phone=(u.phone||'').replace(/(\d{3})\d{4}(\d{4})/,'$1****$2');
   el.innerHTML='👤 '+phone+' · <span style="color:#7c74c9">退出</span>';
   el.onclick=doLogout;
+}
+/* v0.64.33：首次登录模型配置引导 */
+function maybeShowModelSetup(model){
+  if(!model) return;
+  if(localStorage.getItem('fs_model_setup_seen')) return;
+  const mask=document.getElementById('modelSetupMask'); if(!mask) return;
+  document.getElementById('modelSetupBuiltin').style.display = (model.ready && model.builtin) ? 'block' : 'none';
+  document.getElementById('modelSetupEmpty').style.display = model.ready ? 'none' : 'block';
+  // 预填默认值
+  const pSel=document.getElementById('setupModelProvider');
+  const baseEl=document.getElementById('setupModelBase');
+  const nameEl=document.getElementById('setupModelName');
+  pSel.value = model.provider || 'deepseek';
+  nameEl.value = model.model || '';
+  baseEl.value = '';
+  document.getElementById('modelSetupErr').textContent='';
+  mask.style.display='flex';
+}
+function closeModelSetup(){
+  const mask=document.getElementById('modelSetupMask'); if(mask) mask.style.display='none';
+  localStorage.setItem('fs_model_setup_seen','1');
+}
+async function submitModelSetup(){
+  const provider=document.getElementById('setupModelProvider').value;
+  const base_url=document.getElementById('setupModelBase').value.trim();
+  const key=document.getElementById('setupModelKey').value.trim();
+  const model_name=document.getElementById('setupModelName').value.trim();
+  const errEl=document.getElementById('modelSetupErr');
+  // 如果没有填 key，且后端有内置 key，允许继续用内置
+  if(!key){
+    closeModelSetup();
+    toast('✅ 已使用内置 DeepSeek 模型开始对话');
+    return;
+  }
+  try{
+    const r=await apiJson('/api/models/'+META_PID, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({provider, base_url, api_key:key, model_name})
+    });
+    if(!r.ok){ errEl.textContent=r.error||'保存失败'; return; }
+    closeModelSetup();
+    toast('✅ 模型配置已保存');
+  }catch(e){ errEl.textContent='保存失败：'+errText(e); }
 }
 function showAuthModal(){ const m=document.getElementById('authMask'); if(m) m.style.display='flex'; const e=document.getElementById('authErr'); if(e) e.textContent=''; }
 function hideAuthModal(){ const m=document.getElementById('authMask'); if(m) m.style.display='none'; }
@@ -1681,7 +1774,8 @@ async function authSubmit(){
     SESSION=j.token; localStorage.setItem('fs_session',SESSION);
     localStorage.setItem('fs_guide_toured','1'); // 已登录/注册用户不再自动弹教学引导
     track(_authMode==='login'?'login':'register');
-    hideAuthModal(); renderUserBar(j.user); toast(_authMode==='login'?'✅ 已登录':'✅ 注册成功，已登录');
+    renderUserBar(j.user); toast(_authMode==='login'?'✅ 已登录':'✅ 注册成功，已登录');
+    checkAuth(); // 刷新状态并触发模型配置引导
   }catch(e){ err.textContent='网络错误：'+errText(e); }
 }
 /* v6.4：根据输入自动切换 邮箱/手机号 模式（邮箱免验证码，手机号注册/重置显示验证码框） */
@@ -1858,7 +1952,9 @@ async function loadChat(pid){ const b=document.getElementById('chatBody'); b.inn
   let msgs=[]; try{ const res=await fetch('/api/messages/'+pid); msgs=await res.json(); }catch(e){ console.error(e); }
   renderChat(msgs); attachThinking(); if(window.__splitOpen) loadTrajPanel();
   if(window.innerWidth>768 && window.__splitOpen===undefined){ window.__splitOpen=false; }
-  updateSplitBtn(); }
+  updateSplitBtn();
+  const inp=document.getElementById('msgInput'); if(inp){ inp.style.height='auto'; autoResizeInput(inp); }
+}
 function refreshPhaseUI(r){
   if(!r) return;
   document.getElementById('phaseBadge').textContent=PHASE_NAMES[r.phase]||r.phase||'需求澄清';
@@ -2415,7 +2511,7 @@ async function loadMetaView(){
   const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
   let msgs=[]; try{ const res=await fetch('/api/messages/'+META_PID); msgs=await res.json(); }catch(e){ console.error(e); }
   renderChat(msgs);
-  const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='和元神说点什么…（Enter 发送）';
+  const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder='和元神说点什么…（Enter 发送）'; inp.style.height='auto'; autoResizeInput(inp); }
 }
 async function sendMetaInChat(){
   const inp=document.getElementById('msgInput'); const v=inp.value.trim(); const imgs=_pendingImages['msgInput'];
