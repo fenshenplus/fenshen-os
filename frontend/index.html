@@ -938,34 +938,6 @@
           </div>
           <div class="chat-body" id="metaChat"></div>
           <div class="meta-board hidden" id="metaBoard"></div>
-          <!-- 元神持续访谈面板 -->
-          <div class="meta-board hidden" id="interviewPanel">
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600">
-              <span>了解你 · 元神持续访谈</span><button class="btn sm ghost" onclick="toggleInterview()">收起</button>
-            </div>
-            <div style="padding:14px;overflow:auto;height:calc(100% - 44px)">
-              <div id="ivProgress" style="font-size:12px;color:var(--gray-400);margin-bottom:10px"></div>
-              <div id="ivQuestion" style="font-size:14px;line-height:1.6;margin-bottom:8px"></div>
-              <div id="ivProbes" style="font-size:12px;color:var(--gray-400);margin-bottom:10px;line-height:1.7"></div>
-              <div class="chat-input" id="ivInputBar">
-                <div class="ci-bar">
-                  <button class="ci-ico" id="ivBtnVoice" title="按住说话（元神会记住你的声音与语气）" onpointerdown="voiceHoldStart('ivAnswer','ivBtnVoice')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" style="color:#1D9E75;touch-action:none">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v2.5M9 21h6"/></svg>
-                  </button>
-                </div>
-                <div class="ci-row">
-                  <textarea id="ivAnswer" rows="2" placeholder="回答这道访谈…（语音或打字均可 · Ctrl/⌘+Enter 提交）" oninput="autoResizeInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();submitInterview(this);}"></textarea>
-                  <button class="ci-send" onclick="submitInterview(this)" title="提交并继续了解我">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-                  </button>
-                </div>
-              </div>
-              <div style="margin-top:8px;display:flex;gap:8px">
-                <button class="btn sm ghost" onclick="loadInterview(this)">跳过这题</button>
-              </div>
-              <div id="ivReflection" style="margin-top:14px"></div>
-            </div>
-          </div>
           <!-- 元神画像仪表盘 -->
           <div class="meta-board hidden" id="profilePanel">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600">
@@ -2601,7 +2573,9 @@ async function loadMeta(){ const b=document.getElementById('metaChat'); b.innerH
     if(m.kind==='sys'){ row.className='sysmsg'; row.innerHTML=`<span>${escapeHtml(m.text)}</span>`; }
     else { row.className='msg '+(m.kind==='self'?'right':'left'); const cls=escapeHtml(m.kind==='meta'?'meta':m.kind);
       row.innerHTML=`<div class="bubble ${cls}"><div class="sender">${escapeHtml(m.sender||'')}</div><span class="btext">${escapeHtml(m.text)}</span></div>`; }
-    b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; }); b.scrollTop=b.scrollHeight;
+    b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; });
+  if(metaInterviewActive && metaInterviewState) renderInterviewBubble(metaInterviewState);
+  b.scrollTop=b.scrollHeight;
   if(window.__DEMO_STREAM__ && window.__LAST_SENT__ && lastRow){ streamText(lastRow); window.__LAST_SENT__=false; }
   const f=document.getElementById('metaFiles'); f.innerHTML='加载中…';
   let files=[]; try{ const res=await fetch('/api/meta/files'); files=await res.json(); }catch(e){ console.error(e); }
@@ -2636,6 +2610,12 @@ async function sendMeta(){
   const inp=document.getElementById('metaInput');
   const v=inp.value.trim(); const imgs=_pendingImages['metaInput'];
   if(!v && !imgs.length)return;
+  /* 访谈模式：用户在主对话框回复访谈题 */
+  if(metaInterviewActive && metaInterviewState && metaInterviewState.qid && metaInterviewState.phase!=='complete' && !imgs.length){
+    inp.value=''; autoResizeInput(inp); _pendingImages['metaInput']=[]; renderImgPreview('metaInput'); window.__LAST_SENT__=true;
+    await submitInterviewFromChat(v);
+    return;
+  }
   inp.value=''; autoResizeInput(inp); _pendingImages['metaInput']=[]; renderImgPreview('metaInput'); window.__LAST_SENT__=true;
   inp.placeholder='元神思考中…（可能十几秒）'; inp.disabled=true;
   activeChatAbort=new AbortController();
@@ -2806,11 +2786,14 @@ async function openProjBoard(){
 function closeProjBoard(){ const m=document.getElementById('projBoardMask'); if(m) m.style.display='none'; }
 
 /* ── 元神持续访谈 / 画像 ──
-   元神窗一共四种视图：对话 / 总看板 / 了解你 / 我的画像，任一时刻只显示一种。
-   统一由 showMetaPane 控制，避免三个面板同时堆叠。 */
+   元神窗三种视图：对话 / 总看板 / 我的画像。
+   「了解我」不再打开独立面板，而是把访谈题以元神消息形式融入主对话框，
+   用户在底部主输入框回复即可推进炼化。 */
 let curMetaPane='chat';
+let metaInterviewState=null; // {qid,question,probes,progress,total,phase,reflection}
+let metaInterviewActive=false;
 function showMetaPane(pane){
-  const panes={ board:'metaBoard', interview:'interviewPanel', profile:'profilePanel' };
+  const panes={ board:'metaBoard', profile:'profilePanel' };
   for(const k in panes) document.getElementById(panes[k]).classList.toggle('hidden', k!==pane);
   const isChat = (pane==='chat');
   document.getElementById('metaChat').classList.toggle('hidden', !isChat);
@@ -2819,37 +2802,65 @@ function showMetaPane(pane){
   metaBoardVisible=(pane==='board');
   document.getElementById('metaViewToggle').textContent = metaBoardVisible?'← 回对话':'总看板';
 }
-function toggleInterview(){ const next=(curMetaPane==='interview')?'chat':'interview'; showMetaPane(next); if(next==='interview') loadInterview(); }
-function toggleProfile(){ const next=(curMetaPane==='profile')?'chat':'profile'; showMetaPane(next); if(next==='profile') showProfile(); }
+function toggleInterview(){
+  if(curMetaPane!=='chat') showMetaPane('chat');
+  startMetaInterview();
+}
+async function startMetaInterview(){
+  metaInterviewActive=true;
+  showMetaPane('chat');
+  const inp=document.getElementById('metaInput');
+  if(inp){ inp.placeholder='回答元神访谈题…（Enter 提交 · Shift+Enter 换行）'; inp.focus(); }
+  await loadInterview();
+}
+async function stopMetaInterview(){
+  metaInterviewActive=false; metaInterviewState=null;
+  const b=document.getElementById('metaChat');
+  if(b) b.querySelectorAll('.meta-interview-bubble').forEach(el=>el.remove());
+  const inp=document.getElementById('metaInput');
+  if(inp) inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）';
+}
 async function loadInterview(btn){
   await withBusy(btn,'加载中…',async()=>{
     const d=await apiJson('/api/meta/interview/next');
-    renderInterview(d);
+    metaInterviewState=d;
+    await loadMeta();
   });
 }
-function renderInterview(d){
-  document.getElementById('ivProgress').textContent='进度 '+d.progress+' / '+d.total+' · '+(d.phase==='complete'?'已完成 🎉':'持续了解中');
-  const q=document.getElementById('ivQuestion'), pr=document.getElementById('ivProbes'), an=document.getElementById('ivAnswer');
-  if(d.phase==='complete' || !d.question){ q.textContent='🎉 元神已经比较了解你了！也可以随时补充，或直接上传聊天记录/笔记让它更懂你。'; pr.textContent=''; an.style.display='none'; }
-  else { q.textContent=d.question; pr.innerHTML=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>'); an.style.display=''; if(an.dataset.qid!==d.qid){ an.value=''; } an.dataset.qid=d.qid; }
-  document.getElementById('ivReflection').innerHTML = d.reflection
-    ? '<div style="padding:10px;background:var(--bg-2);border-left:3px solid var(--meta-700);border-radius:6px;font-size:13px;line-height:1.7;color:var(--fg)">'+escapeBr(d.reflection)+'</div>' : '';
-}
-async function submitInterview(btn){ const a=document.getElementById('ivAnswer'); const qid=a.dataset.qid; const v=a.value.trim();
-  const rf=document.getElementById('ivReflection');
-  const hasReflection = rf && rf.innerHTML && rf.innerHTML.trim().length>0;
-  if(!v){
-    if(!qid) return;
-    if(hasReflection){ await loadInterview(btn); return; } // 元神已有理解 → 视为「继续了解」，刷新最新状态
-    toast('在下方输入框写下你的回答，再点「提交并继续了解我」（或按 Ctrl/⌘+Enter）');
-    try{ a.focus(); }catch(e){}
+function renderInterviewBubble(d){
+  const b=document.getElementById('metaChat'); if(!b) return;
+  b.querySelectorAll('.meta-interview-bubble').forEach(el=>el.remove());
+  if(!d || d.phase==='complete' || !d.question){
+    if(d && d.reflection){
+      const row=document.createElement('div'); row.className='msg left meta-interview-bubble';
+      row.innerHTML=`<div class="bubble meta"><div class="sender">分身 · 元神 · 访谈总结</div><span class="btext">${escapeBr(d.reflection)}</span></div>`;
+      b.appendChild(row); b.scrollTop=b.scrollHeight;
+    }
     return;
   }
-  a.value='';
-  await withBusy(btn,'元神消化中…',async()=>{
-    const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v, audio_clip_id: window.__pendingVoiceClip||null})});
-    renderInterview(d.next||d);
+  const row=document.createElement('div'); row.className='msg left meta-interview-bubble';
+  const probes=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>');
+  row.innerHTML=`<div class="bubble meta"><div class="sender">分身 · 元神 · 访谈</div>
+    <div style="font-size:11px;color:var(--gray-400);margin-bottom:6px">炼化进度 ${d.progress||0} / ${d.total||0}</div>
+    <span class="btext">${escapeHtml(d.question)}</span>
+    ${probes?'<div style="margin-top:8px;font-size:12px;color:var(--gray-400);line-height:1.6">'+probes+'</div>':''}
+    <div class="acts" style="margin-top:10px"><button class="btn sm ghost" onclick="skipInterview()">跳过这题</button><button class="btn sm ghost" onclick="stopMetaInterview()">结束访谈</button></div>
+    </div>`;
+  b.appendChild(row); b.scrollTop=b.scrollHeight;
+}
+async function skipInterview(){ await loadInterview(); }
+async function submitInterviewFromChat(v){
+  if(!metaInterviewState || !metaInterviewState.qid || metaInterviewState.phase==='complete') return;
+  const b=document.getElementById('metaChat');
+  const userRow=document.createElement('div'); userRow.className='msg right';
+  userRow.innerHTML=`<div class="bubble"><div class="sender">你</div><span class="btext">${escapeHtml(v)}</span></div>`;
+  b.appendChild(userRow); b.scrollTop=b.scrollHeight;
+  await withBusy('btnSendMeta','元神消化中…',async()=>{
+    const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid:metaInterviewState.qid, answer:v, audio_clip_id: window.__pendingVoiceClip||null})});
+    metaInterviewState=d.next||d;
+    renderInterviewBubble(metaInterviewState);
   });
+  fillMetaPinStats(); updateDistillProgress();
 }
 let curProfileSubject='self';
 async function loadSubjectsIntoSelect(){
@@ -5100,8 +5111,7 @@ async function skipOnboarding(){
 function onbGo(target){
   // 跳转到对应功能区（访谈/上传/元神对话）
   document.getElementById('onboardMask').style.display='none';
-  if(target==='interview'){ showMetaPane('interview'); }
-  else if(target==='ingest'){ showMetaPane('chat'); }
+  if(target==='interview'){ startMetaInterview(); }
   else { showMetaPane('chat'); }
   toast('培养元神中…（完成后回来点「完成引导」即可解锁）');
 }
@@ -5161,8 +5171,11 @@ async function voiceHoldEnd(){
   const text=(window.__voiceTranscript||'').trim() || (inp?inp.value.trim():'');
   if(text){
     if(inpId==='msgInput') await sendMsg();
-    else if(inpId==='metaInput') await sendMeta();
-    else if(inpId==='ivAnswer') await submitInterview(document.querySelector('#ivInputBar .ci-send'));
+    else if(inpId==='metaInput'){
+      if(metaInterviewActive && metaInterviewState && metaInterviewState.qid && metaInterviewState.phase!=='complete')
+        await submitInterviewFromChat(text);
+      else await sendMeta();
+    }
     else if(inpId==='mpAns') await mpSubmitInterview(document.querySelector('#mpInputBar .ci-send'));
   } else if(clipId){
     toast('已保留语音片段，但没识别出文字（可重试或打字回答）');
