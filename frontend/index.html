@@ -947,9 +947,20 @@
               <div id="ivProgress" style="font-size:12px;color:var(--gray-400);margin-bottom:10px"></div>
               <div id="ivQuestion" style="font-size:14px;line-height:1.6;margin-bottom:8px"></div>
               <div id="ivProbes" style="font-size:12px;color:var(--gray-400);margin-bottom:10px;line-height:1.7"></div>
-              <textarea id="ivAnswer" rows="3" placeholder="写下你的回答…（回车换行，Ctrl/⌘+Enter 提交）" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();submitInterview(this);}" style="width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px"></textarea>
+              <div class="chat-input" id="ivInputBar">
+                <div class="ci-bar">
+                  <button class="ci-ico" id="ivBtnVoice" title="按住说话（元神会记住你的声音与语气）" onpointerdown="voiceHoldStart('ivAnswer','ivBtnVoice')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" style="color:#1D9E75;touch-action:none">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v2.5M9 21h6"/></svg>
+                  </button>
+                </div>
+                <div class="ci-row">
+                  <textarea id="ivAnswer" rows="2" placeholder="回答这道访谈…（语音或打字均可 · Ctrl/⌘+Enter 提交）" oninput="autoResizeInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();submitInterview(this);}"></textarea>
+                  <button class="ci-send" onclick="submitInterview(this)" title="提交并继续了解我">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                  </button>
+                </div>
+              </div>
               <div style="margin-top:8px;display:flex;gap:8px">
-                <button class="btn primary sm" onclick="submitInterview(this)">提交并继续了解我</button>
                 <button class="btn sm ghost" onclick="loadInterview(this)">跳过这题</button>
               </div>
               <div id="ivReflection" style="margin-top:14px"></div>
@@ -2324,7 +2335,7 @@ async function sendMsg(){
   let jobId=null;
   try{
     const j=await apiJson('/api/projects/'+curRoom+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({text:v, images:imgs})});
+      body:JSON.stringify({text:v, images:imgs, audio_clip_id: window.__pendingVoiceClip||null})});
     if(!j.ok && j.error){ toast('元神没能处理这条消息：'+j.error,'err'); inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false; return; }
     if(j.job_id) jobId=j.job_id;
   }catch(e){ toast('发送失败：'+errText(e),'err'); inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false; return; }
@@ -2632,7 +2643,7 @@ async function sendMeta(){
     try{
       trackMetaChat();
       await apiJson('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({text:v, images:imgs}), signal:activeChatAbort.signal});
+        body:JSON.stringify({text:v, images:imgs, audio_clip_id: window.__pendingVoiceClip||null}), signal:activeChatAbort.signal});
     } finally { activeChatAbort=null; }
   });
   inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false;
@@ -2703,9 +2714,20 @@ function mpInterviewHTML(){
     </div>
     <div class="mp-q" id="mpQ"></div>
     <div class="mp-probes" id="mpProbes"></div>
-    <textarea id="mpAns" class="mp-ans" rows="2" placeholder="写下你的回答…（元神会越聊越懂你 · Ctrl/⌘+Enter 提交）" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();mpSubmitInterview(this);}"></textarea>
-    <div class="mp-iv-actions">
-      <button class="btn primary sm" onclick="mpSubmitInterview(this)">提交并继续</button>
+    <div class="chat-input" id="mpInputBar">
+      <div class="ci-bar">
+        <button class="ci-ico" id="mpBtnVoice" title="按住说话（元神会记住你的声音与语气）" onpointerdown="voiceHoldStart('mpAns','mpBtnVoice')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" style="color:#1D9E75;touch-action:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v2.5M9 21h6"/></svg>
+        </button>
+      </div>
+      <div class="ci-row">
+        <textarea id="mpAns" class="mp-ans" rows="2" placeholder="回答这道访谈…（语音或打字 · Ctrl/⌘+Enter 提交）" oninput="autoResizeInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();mpSubmitInterview(this);}"></textarea>
+        <button class="ci-send" onclick="mpSubmitInterview(this)" title="提交并继续">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="mp-iv-actions" style="margin-top:8px">
       <button class="btn sm ghost" onclick="mpLoadInterview(this)">跳过</button>
     </div>
     <div id="mpReflect"></div>
@@ -2746,7 +2768,7 @@ async function mpSubmitInterview(btn){
     return;
   }
   a.value='';
-  await withBusy(btn,'元神消化中…',async()=>{ const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v})}); mpRenderInterview(d.next||d); });
+  await withBusy(btn,'元神消化中…',async()=>{ const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v, audio_clip_id: window.__pendingVoiceClip||null})}); mpRenderInterview(d.next||d); });
   fillMetaPinStats(); updateDistillProgress();
 }
 function fillMetaPinStats(){ const fc=document.getElementById('mpFileCnt'); if(fc) fc.textContent=window.metaFileCount||0; }
@@ -2825,7 +2847,7 @@ async function submitInterview(btn){ const a=document.getElementById('ivAnswer')
   }
   a.value='';
   await withBusy(btn,'元神消化中…',async()=>{
-    const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v})});
+    const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v, audio_clip_id: window.__pendingVoiceClip||null})});
     renderInterview(d.next||d);
   });
 }
@@ -5096,23 +5118,65 @@ async function bootGuide(){
 setTimeout(bootGuide, 1600);
 
 /* v5.1 移动端信息架构：语音输入（Web Speech → 文字 → 与打字同链路；移动端「按住说话」） */
-function voiceHoldStart(inpId, btnId){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){ toast('当前浏览器不支持语音识别（需 Safari/Chrome，且页面须为 https 或 localhost）'); return; }
+async function voiceHoldStart(inpId, btnId){
   const inp=document.getElementById(inpId), btn=document.getElementById(btnId); if(!inp||!btn) return;
-  if(window.__listening__){ if(window.__recog__) window.__recog__.stop(); return; }
+  if(window.__voiceActive){ voiceHoldEnd(); return; }
+  window.__voiceActive=true; window.__voiceInp=inpId; window.__voiceBtn=btnId; window.__voiceTranscript='';
+  window.__voiceOldPh=inp.placeholder; btn.classList.add('voice-on');
+  // 录音（MediaRecorder）：保留音频，供炼化分析语气/声纹，未来用于元神同声发声
   try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    window.__voiceStream=stream;
+    const chunks=[]; const mr=new MediaRecorder(stream); window.__voiceMR=mr;
+    mr.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+    mr.start(); window.__voiceChunks=chunks;
+  }catch(e){ /* 无麦克风权限也可仅用听写 */ }
+  // 实时听写（浏览器内置 STT，可选）
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(SR){ try{
     const rec=new SR(); rec.lang='zh-CN'; rec.interimResults=false; rec.maxAlternatives=1;
-    window.__recog__=rec; window.__listening__=true; btn.classList.add('voice-on');
-    rec.onresult=(e)=>{ inp.value=e.results[0][0].transcript; };
-    rec.onerror=()=>{ window.__listening__=false; btn.classList.remove('voice-on'); };
-    rec.onend=()=>{ window.__listening__=false; btn.classList.remove('voice-on');
-      const v=inp.value.trim(); if(v){ if(inpId==='msgInput') sendMsg(); else if(inpId==='metaInput') sendMeta(); } };
+    window.__recog__=rec;
+    rec.onresult=(e)=>{ window.__voiceTranscript=e.results[0][0].transcript; inp.value=window.__voiceTranscript; };
+    rec.onerror=()=>{}; rec.onend=()=>{};
     rec.start();
-    inp.placeholder='🎙 按住说话中…（松开自动发送）';
-  }catch(e){ toast('语音识别启动失败：'+e.message); window.__listening__=false; btn.classList.remove('voice-on'); }
+  }catch(e){} }
+  inp.placeholder='🎙 按住说话中…（松开结束，元神会记住你的声音与语气）';
 }
-function voiceHoldEnd(){ if(window.__recog__ && window.__listening__){ try{ window.__recog__.stop(); }catch(e){} } }
+async function voiceHoldEnd(){
+  if(!window.__voiceActive) return; window.__voiceActive=false;
+  const btn=document.getElementById(window.__voiceBtn); if(btn) btn.classList.remove('voice-on');
+  const inp=document.getElementById(window.__voiceInp); const inpId=window.__voiceInp;
+  try{ if(window.__recog__){ window.__recog__.stop(); window.__recog__=null; } }catch(e){}
+  let clipId=null;
+  try{
+    if(window.__voiceMR && window.__voiceMR.state!=='inactive'){
+      const stopped=new Promise(res=>{ window.__voiceMR.onstop=res; try{window.__voiceMR.stop();}catch(e){res();} });
+      await stopped;
+      const blob=new Blob(window.__voiceChunks||[], {type:(window.__voiceMR.mimeType||'audio/webm')});
+      if(blob.size>0) clipId=await _uploadVoiceClip(blob);
+    }
+  }catch(e){}
+  try{ if(window.__voiceStream){ window.__voiceStream.getTracks().forEach(t=>t.stop()); } }catch(e){}
+  window.__pendingVoiceClip=clipId;
+  const text=(window.__voiceTranscript||'').trim() || (inp?inp.value.trim():'');
+  if(text){
+    if(inpId==='msgInput') await sendMsg();
+    else if(inpId==='metaInput') await sendMeta();
+    else if(inpId==='ivAnswer') await submitInterview(document.querySelector('#ivInputBar .ci-send'));
+    else if(inpId==='mpAns') await mpSubmitInterview(document.querySelector('#mpInputBar .ci-send'));
+  } else if(clipId){
+    toast('已保留语音片段，但没识别出文字（可重试或打字回答）');
+  }
+  if(inp) inp.placeholder=window.__voiceOldPh||inp.placeholder;
+  window.__pendingVoiceClip=null;
+}
+async function _uploadVoiceClip(blob){
+  try{
+    const r=await fetch('/api/voice/upload',{method:'POST',body:blob,headers:{'Content-Type':'audio/webm'}});
+    if(r.ok){ const j=await r.json(); return j.clipId||null; }
+  }catch(e){ toast('语音上传失败：'+errText(e)); }
+  return null;
+}
 function toggleVoiceInput(){ voiceHoldStart('msgInput','btnVoice'); }   /* 桌面点按兜底 */
 function toggleMetaVoice(){ voiceHoldStart('metaInput','btnVoiceMeta'); }
 

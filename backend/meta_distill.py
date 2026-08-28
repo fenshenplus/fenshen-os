@@ -780,25 +780,50 @@ async def interview_answer(req: Request):
     if target_type == "other" and authorization_status not in ("authorized", "owner"):
         return {"ok": False, "error": "蒸馏他人需先获得被蒸馏人明示授权（authorized）"}
     conn = get_db()
+    try:
+        conn.execute("ALTER TABLE meta_interview ADD COLUMN audio_clips JSON DEFAULT '{}'")
+        conn.commit()
+    except Exception:
+        pass
     st = conn.execute(
         "SELECT * FROM meta_interview WHERE subject=? ORDER BY id DESC LIMIT 1",
         (subject_id,)).fetchone()
     asked = json.loads(st["asked"]) if st and st["asked"] else []
     answers = json.loads(st["answers"]) if st and st["answers"] else {}
+    audio_clips = {}
+    if st and st.get("audio_clips"):
+        try:
+            audio_clips = json.loads(st["audio_clips"])
+        except Exception:
+            audio_clips = {}
     if qid not in asked:
         asked.append(qid)
     answers[qid] = answer
+    ac = (data.get("audio_clip_id") or "").strip()
+    if ac:
+        audio_clips[qid] = ac
     askedj = json.dumps(asked, ensure_ascii=False)
     ansj = json.dumps(answers, ensure_ascii=False)
+    acj = json.dumps(audio_clips, ensure_ascii=False)
     now = datetime.now().isoformat()
     if st:
-        conn.execute(
-            "UPDATE meta_interview SET asked=?,answers=?,last_ask_at=?,updated_at=? WHERE id=?",
-            (askedj, ansj, now, now, st["id"]))
+        try:
+            conn.execute(
+                "UPDATE meta_interview SET asked=?,answers=?,audio_clips=?,last_ask_at=?,updated_at=? WHERE id=?",
+                (askedj, ansj, acj, now, now, st["id"]))
+        except Exception:
+            conn.execute(
+                "UPDATE meta_interview SET asked=?,answers=?,last_ask_at=?,updated_at=? WHERE id=?",
+                (askedj, ansj, now, now, st["id"]))
     else:
-        conn.execute(
-            "INSERT INTO meta_interview (subject,asked,answers,last_ask_at,updated_at) VALUES (?,?,?,?,?)",
-            (subject_id, askedj, ansj, now, now))
+        try:
+            conn.execute(
+                "INSERT INTO meta_interview (subject,asked,answers,audio_clips,last_ask_at,updated_at) VALUES (?,?,?,?,?,?)",
+                (subject_id, askedj, ansj, acj, now, now))
+        except Exception:
+            conn.execute(
+                "INSERT INTO meta_interview (subject,asked,answers,last_ask_at,updated_at) VALUES (?,?,?,?,?)",
+                (subject_id, askedj, ansj, now, now))
     conn.commit()
     conn.close()
     # 确保 subject 记录存在

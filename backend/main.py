@@ -11569,5 +11569,57 @@ class NoCacheStaticFiles(StaticFiles):
         return resp
 
 
+# ── 语音片段存储（v0.64.40 语音优先基础能力：本地优先、隐私护栏）──
+VOICE_DIR = os.path.join(BASE, "..", "data", "voice_clips")
+
+def _init_voice():
+    try:
+        os.makedirs(VOICE_DIR, exist_ok=True)
+        conn = get_db()
+        conn.execute("""CREATE TABLE IF NOT EXISTS voice_clips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_id TEXT UNIQUE,
+            size INTEGER DEFAULT 0,
+            mime TEXT DEFAULT 'audio/webm',
+            created_at TEXT
+        )""")
+        try:
+            conn.execute("ALTER TABLE meta_interview ADD COLUMN audio_clips JSON DEFAULT '{}'")
+        except Exception:
+            pass
+        conn.commit(); conn.close()
+    except Exception as e:
+        print("voice init warn:", e)
+
+@app.post("/api/voice/upload")
+async def voice_upload(req: Request):
+    _init_voice()
+    data = await req.body()
+    if not data:
+        return JSONResponse({"ok": False, "error": "no data"}, status_code=400)
+    clip_id = "vc_" + uuid.uuid4().hex[:20]
+    path = os.path.join(VOICE_DIR, clip_id + ".webm")
+    with open(path, "wb") as fp:
+        fp.write(data)
+    try:
+        conn = get_db()
+        conn.execute("INSERT INTO voice_clips (clip_id,size,mime,created_at) VALUES (?,?,?,?)",
+                     (clip_id, len(data), "audio/webm", datetime.now().isoformat()))
+        conn.commit(); conn.close()
+    except Exception as e:
+        print("voice insert warn:", e)
+    return {"ok": True, "clipId": clip_id, "size": len(data)}
+
+@app.get("/api/voice/{clip_id}")
+async def voice_get(clip_id: str):
+    _init_voice()
+    if "/" in clip_id or ".." in clip_id or not clip_id.startswith("vc_"):
+        return JSONResponse({"ok": False}, status_code=400)
+    path = os.path.join(VOICE_DIR, clip_id + ".webm")
+    if not os.path.exists(path):
+        return JSONResponse({"ok": False}, status_code=404)
+    return FileResponse(path, media_type="audio/webm", filename=clip_id + ".webm")
+
+
 # 静态托管前端（放最后，"/" 兜底）
 app.mount("/", NoCacheStaticFiles(directory=FRONTEND, html=True), name="frontend")

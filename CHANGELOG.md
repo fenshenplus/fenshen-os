@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.64.40] — 2026-08-28
+### Added
+- 统一输入组件（4 输入框合并为同一 .chat-input 风格：群聊/元神对话/访谈面板/元神置顶卡）+ 语音优先基础能力（所有输入框按住说话，MediaRecorder 录音上传 /api/voice，访谈/聊天均携带 audio_clip_id，为炼化声纹分析奠基）
+
 ## [v0.64.39] — 2026-08-28
 ### Added
 - 修复前端致命 SyntaxError（maybeShowModelSetup 缺 async 致整段主脚本崩溃，引发发不出/看不到元神入口/不弹 API 配置三症）+ 输入框 WorkBuddy 风格美化（圆角卡片/SVG 图标工具栏/模型状态芯片）
