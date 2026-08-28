@@ -35,6 +35,14 @@ from fastapi.staticfiles import StaticFiles
 # 版本单一真源：所有版本号从这里读，禁止在别处硬编码
 from backend.version import SEMVER, RELEASE, SCHEMA_VERSION, BUILD_DATE, COMMIT, as_dict
 
+# 原生标准库（Native Stdlib）：所有产品通用的标准流程走原生代码，确定性、可单测、可离线。
+# 账号/验证码模块已提升为原生一等公民；后续基本库（看板/导入/产出…）同样登记于此。
+from backend.native.auth import (
+    hash_password as _hash_password, gen_salt as _gen_salt,
+    CN_MOBILE_RE as _CN_MOBILE_RE, EMAIL_RE as _EMAIL_RE,
+    send_sms_code, register_user, verify_login, reset_password, issue_code, check_rate_limit,
+)
+
 # v5.4 PyInstaller 兼容：打包后静态资源在 sys._MEIPASS 下
 _MEI = getattr(sys, "_MEIPASS", None)
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -136,6 +144,41 @@ META_SYSTEM = """你是「元神」——一个运行在用户本机的数字克
 2) 向用户提出一个明确、可执行的问题（如"是否继续？"、"选 A 还是 B？"、"请补充哪条信息？"）；
 3) 给出用户下一步该做的具体动作。
 禁止以泛泛的开放式陈述结尾，让用户不知道下一步该做什么。
+
+【工程纪律：极简优先（Ponytail 法则）】
+元神做任何工程产出（写代码、重构、修 bug、设计系统、写脚本、定方案）时，默认奉行极简主义：
+"最好的代码是从没写过的代码"。简洁是目的本身——成本下降、延迟降低、推理 token 预算的节省，
+都只是遵循这条法则的附带好处；省下来的思考预算应被重新投到更有价值的地方
+（如更强的推理、更多并行任务，GPT-5.5 即此思路）。宁可为简洁牺牲"看起来更完整 / 更周到"。
+
+动手前，先在第一个成立的横档停下（七级阶梯）：
+1. 这东西需要存在吗？臆测性需求→直接跳过并一句话说明（YAGNI）。
+2. 代码库里已有？→ 复用，不要重写（先搜再写，禁止几文件外重造轮子）。
+3. 标准库能实现？→ 用标准库。
+4. 平台有原生能力？→ 直接用（<input type="date"> 胜过日期库；CSS 胜过 JS；DB 约束胜过应用代码）。
+5. 已装依赖能解？→ 用已装的，绝不为了几行代码新增依赖。
+6. 能一行解决？→ 一行。
+7. 只有这时：用最少代码实现功能。
+
+这条阶梯在"理解问题之后"才行动，不是替代理解：先读被改的代码、端到端 trace 真实流程，
+再选横档。对"解法"懒惰，对"读代码"积极。
+- 修 bug = 修根因不是症状：改之前先 grep 该函数全部调用方，在共享处修一次（一道守卫 < 每个调用方各一道）。
+- 刻意简化处用 `// 分身:` 注释标出天花板与升级路径（如 `// 分身: 全局锁，若吞吐吃紧改每账户锁`），让"简单"读作有意为之、可审计。
+- 输出纪律：代码 / 方案优先，然后至多三行说明"跳过了什么、何时再加"。禁止未经请求的设计散文。
+- 不懒边界（绝不简化）：信任边界的输入校验、防数据丢失的错误处理、安全措施、可访问性、用户显式要求的任何东西。
+- 元神调度编码角色（架构师 / 后端 / 前端 / 测试）时，须把上述阶梯作为硬约束下发给它们，不得以"方便"或"更完整"为由放行过度设计。
+
+【原生标准库（Native Stdlib）：分身的结构性优势】
+分身的核心定位是「原生基础能力强大」。所有产品通用的标准流程，优先由分身自带的基本库（代码）
+确定性完成，不靠 LLM 现场生成——这保证直接、高效、快速、准确，且与其他 agent 拉开结构性差距：
+即便用户未做个性化蒸馏，元神 + 分身原生能力也应优于纯推理型 agent。安装包可以更大，
+标准库与依赖一并打进分身，离线即可确定性执行。
+- 已登记的原生模块（backend/native/，NATIVE_CAPABILITIES 注册表）：
+  · auth —— 注册 / 登录 / 登出 / 找回密码 / 短信验证码（阿里云 HMAC 自签，零第三方 SDK）。
+- 接到标准流程需求时，先查原生标准库注册表：命中则直接复用（快路径），不要重新发明；
+  仅在原生库覆盖不到时，才允许按「极简优先」阶梯写新代码，并优先把可复用的沉淀回 backend/native/。
+- 判断「该不该写代码」：凡注册 / 鉴权 / 找回密码 / 看板 / 导入 / 产出这类通用能力，默认已存在或应入标准库，
+  而不是每次现写。用户的差异化价值在「人格化蒸馏 + 调度」，不在重造通用轮子。
 """
 
 # 支持的模型供应商预设（base_url 可空，由代码补默认）
@@ -295,18 +338,8 @@ async def _unhandled_handler(request: Request, exc):
 
 
 # ── 账号体系（v5.7：手机号+密码，本地 SQLite，为商业化/大模型 API 账户打基础）──
-_CN_MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")  # v6.4 国际化：邮箱注册/登录
 _SESSION_DAYS = 365  # 长效会话：满足"登录后一直保持登录"
-
-
-def _hash_password(password: str, salt: str) -> str:
-    """PBKDF2-HMAC-SHA256 + 每用户随机盐，stdlib 实现、零依赖。"""
-    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100000).hex()
-
-
-def _gen_salt() -> str:
-    return secrets.token_hex(16)
+# 注：_CN_MOBILE_RE / _EMAIL_RE / _hash_password / _gen_salt 已迁至 backend.native.auth（原生标准库）
 
 
 def _create_session(user_id: str) -> str:
@@ -345,66 +378,21 @@ async def auth_register(req: Request):
         data = await req.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
-    # v6.4 国际化：邮箱注册（免验证码，国际通道）或手机号注册（短信验证码，国内通道）
-    email = (data.get("email") or "").strip().lower()
-    phone = (data.get("phone") or "").strip()
+    # v6.4 国际化：邮箱注册（免验证码）或手机号注册（短信验证码）。标准流程下沉到原生标准库 backend.native.auth。
+    email = (data.get("email") or "").strip().lower() or None
+    phone = (data.get("phone") or "").strip() or None
     password = data.get("password") or ""
-    code = (data.get("code") or "").strip()
-    is_email = bool(email)
-    if is_email:
-        if not _EMAIL_RE.match(email):
-            return JSONResponse({"ok": False, "error": "邮箱格式不正确"}, status_code=400)
-        if len(password) < 8:
-            return JSONResponse({"ok": False, "error": "密码至少 8 位"}, status_code=400)
-    else:
-        if not _CN_MOBILE_RE.match(phone):
-            return JSONResponse({"ok": False, "error": "手机号格式不正确（应为 11 位中国大陆手机号）"}, status_code=400)
-        if len(password) < 6:
-            return JSONResponse({"ok": False, "error": "密码至少 6 位"}, status_code=400)
+    code = (data.get("code") or "").strip() or None
     conn = get_db()
-    # 手机号注册需短信验证码（防撞库）；邮箱注册为本地单用户场景免验证码
-    if not is_email:
-        srow = conn.execute("SELECT code,expires_at,attempts FROM sms_codes WHERE phone=?", (phone,)).fetchone()
-        if not srow or srow["code"] != code or datetime.now().isoformat() > srow["expires_at"]:
-            conn.close()
-            return JSONResponse({"ok": False, "error": "验证码无效或已过期，请先获取短信验证码"}, status_code=400)
-        if (srow["attempts"] or 0) >= 5:
-            conn.close()
-            return JSONResponse({"ok": False, "error": "验证码尝试次数过多，请重新获取"}, status_code=429)
-        if conn.execute("SELECT 1 FROM users WHERE phone=?", (phone,)).fetchone():
-            conn.close()
-            return JSONResponse({"ok": False, "error": "该手机号已注册，请直接登录"}, status_code=409)
-    else:
-        if conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
-            conn.close()
-            return JSONResponse({"ok": False, "error": "该邮箱已注册，请直接登录"}, status_code=409)
-    if not is_email:
-        conn.execute("UPDATE sms_codes SET attempts=attempts+1 WHERE phone=?", (phone,))
-    uid = "u" + secrets.token_hex(8)
-    salt = _gen_salt()
-    phash = _hash_password(password, salt)
-    now = datetime.now().isoformat()
-    if is_email:
-        conn.execute(
-            "INSERT INTO users (id,email,phone,password_hash,salt,created_at,last_login) VALUES (?,?,?,?,?,?,?)",
-            (uid, email, "", phash, salt, now, now),
-        )
-    else:
-        conn.execute(
-            "INSERT INTO users (id,phone,password_hash,salt,created_at,last_login) VALUES (?,?,?,?,?,?)",
-            (uid, phone, phash, salt, now, now),
-        )
-        conn.execute("DELETE FROM sms_codes WHERE phone=?", (phone,))  # 验证码一次性消费
-    # 生成恢复密钥（脱离手机号的所有权证明，明文随注册返回一次）
-    _rc = secrets.token_hex(16).upper()
-    _rc_key = "-".join(_rc[i:i + 4] for i in range(0, 32, 4))
-    conn.execute("UPDATE users SET recovery_key_hash=? WHERE id=?", (hashlib.sha256(_rc_key.encode()).hexdigest(), uid))
-    conn.commit()
+    res = register_user(conn, email=email, phone=phone, password=password, code=code)
     conn.close()
+    if not res["ok"]:
+        return JSONResponse({"ok": False, "error": res["error"]}, status_code=res.get("status", 400))
+    uid = res["user_id"]
     token = _create_session(uid)
     return JSONResponse({"ok": True, "token": token,
-                         "user": {"id": uid, "phone": phone if not is_email else "", "email": email if is_email else "", "nickname": ""},
-                         "recovery_key": _rc_key})
+                         "user": {"id": uid, "phone": phone or "", "email": email or "", "nickname": ""},
+                         "recovery_key": res["recovery_key"]})
 
 
 @app.post("/api/auth/login")
@@ -413,27 +401,21 @@ async def auth_login(req: Request):
         data = await req.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
-    # v6.4：支持邮箱或手机号登录（双轨）
-    email = (data.get("email") or "").strip().lower()
-    phone = (data.get("phone") or "").strip()
+    # v6.4：双轨登录（邮箱/手机号）。校验下沉到原生标准库 backend.native.auth。
+    email = (data.get("email") or "").strip().lower() or None
+    phone = (data.get("phone") or "").strip() or None
     password = data.get("password") or ""
-    is_email = bool(email)
     conn = get_db()
-    if is_email:
-        row = conn.execute("SELECT id,password_hash,salt FROM users WHERE email=?", (email,)).fetchone()
-        err = "邮箱或密码错误"
-    else:
-        row = conn.execute("SELECT id,password_hash,salt FROM users WHERE phone=?", (phone,)).fetchone()
-        err = "手机号或密码错误"
+    res = verify_login(conn, email=email, phone=phone, password=password)
     conn.close()
-    if not row or _hash_password(password, row["salt"]) != row["password_hash"]:
-        return JSONResponse({"ok": False, "error": err}, status_code=401)
-    uid = row["id"]
+    if not res["ok"]:
+        return JSONResponse({"ok": False, "error": res["error"]}, status_code=res.get("status", 401))
+    uid = res["user_id"]
     now = datetime.now().isoformat()
     db_write("UPDATE users SET last_login=? WHERE id=?", (now, uid))
     token = _create_session(uid)
     return JSONResponse({"ok": True, "token": token,
-                         "user": {"id": uid, "phone": phone if not is_email else "", "email": email if is_email else "", "nickname": ""}})
+                         "user": {"id": uid, "phone": phone or "", "email": email or "", "nickname": ""}})
 
 
 @app.post("/api/auth/logout")
@@ -468,11 +450,16 @@ async def auth_status(request: Request):
     cfg_row = conn.execute(
         "SELECT provider, model_name, api_key FROM model_configs WHERE agent_id=?", (META_PID,)
     ).fetchone()
+    backup_rows = conn.execute(
+        "SELECT provider, model_name, api_key FROM model_backups WHERE agent_id=?", (META_PID,)
+    ).fetchall()
     conn.close()
     if not row:
         return JSONResponse({"ok": True, "logged_in": False})
     has_user_cfg = bool(cfg_row and cfg_row["api_key"])
-    model_ready = has_user_cfg  # 分身不内置模型，必须由用户配置
+    # 主模型 or 任一备用模型 有 key 即视为就绪（分身不内置模型，必须由用户配置）
+    has_backup = any(r["api_key"] for r in backup_rows)
+    model_ready = has_user_cfg or has_backup
     provider = (cfg_row["provider"] if cfg_row and cfg_row["provider"] else "deepseek") if has_user_cfg else ""
     model = (cfg_row["model_name"] if cfg_row and cfg_row["model_name"] else "deepseek-v4-flash") if has_user_cfg else ""
     return JSONResponse({"ok": True, "logged_in": True,
@@ -481,71 +468,14 @@ async def auth_status(request: Request):
                                    "provider": provider, "model": model}})
 
 
-# ── v6.2 短信验证码（阿里云 DysmsAPI，自包含 HMAC 签名，无第三方 SDK 依赖）──
-_ALIYUN_SMS_AK = os.environ.get("ALIYUN_SMS_AK", "")
-_ALIYUN_SMS_SK = os.environ.get("ALIYUN_SMS_SK", "")
-_ALIYUN_SMS_SIGN = os.environ.get("ALIYUN_SMS_SIGN", "安徽叒叕创业投资有限公司")
-_ALIYUN_SMS_TPL = os.environ.get("ALIYUN_SMS_TPL", "REDACTED_ALIYUN_SMS_TEMPLATE")
-_DEV_SMS = os.environ.get("FENSHEN_DEV_SMS", "") == "1"
-# v6.4 短信模板：注册 / 密码重置 分别使用独立模板（旧 ALIYUN_SMS_TPL 仍作为注册模板的兜底）
-_ALIYUN_SMS_TPL_REGISTER = os.environ.get("ALIYUN_SMS_TPL_REGISTER", os.environ.get("ALIYUN_SMS_TPL", "SMS_511885275"))
-_ALIYUN_SMS_TPL_RESET = os.environ.get("ALIYUN_SMS_TPL_RESET", "SMS_511935313")
-
-
-def _aliyun_percent_encode(s: str) -> str:
-    return quote(str(s), safe="-_.~")
-
-
-def _aliyun_sms_sign(params: dict, secret: str) -> str:
-    canonical = "&".join(
-        f"{_aliyun_percent_encode(k)}={_aliyun_percent_encode(params[k])}"
-        for k in sorted(params.keys())
-    )
-    string_to_sign = "GET&%2F&" + _aliyun_percent_encode(canonical)
-    return base64.b64encode(
-        hmac.new((secret + "&").encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1).digest()
-    ).decode("ascii")
-
-
-def send_sms_code(phone: str, code: str, purpose: str = "register") -> dict:
-    """调用阿里云短信发送验证码。purpose='register' 用注册模板，'reset' 用密码重置模板。
-    返回阿里云原始响应（Code=='OK' 为成功）。"""
-    if _DEV_SMS:
-        return {"Code": "OK", "Message": "dev-skip", "dev_code": code}
-    if not _ALIYUN_SMS_AK or not _ALIYUN_SMS_SK:
-        return {"Code": "ERR", "Message": "短信服务未配置（缺少 ALIYUN_SMS_AK / ALIYUN_SMS_SK 环境变量）"}
-    tpl = _ALIYUN_SMS_TPL_RESET if purpose == "reset" else _ALIYUN_SMS_TPL_REGISTER
-    params = {
-        "AccessKeyId": _ALIYUN_SMS_AK,
-        "Action": "SendSms",
-        "Format": "JSON",
-        "PhoneNumbers": phone,
-        "RegionId": "cn-hangzhou",
-        "SignName": _ALIYUN_SMS_SIGN,
-        "SignatureMethod": "HMAC-SHA1",
-        "SignatureNonce": str(uuid.uuid4()),
-        "SignatureVersion": "1.0",
-        "TemplateCode": tpl,
-        "TemplateParam": json.dumps({"code": code}, ensure_ascii=False),
-        "Timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "Version": "2017-05-25",
-    }
-    params["Signature"] = _aliyun_sms_sign(params, _ALIYUN_SMS_SK)
-    url = "https://dysmsapi.aliyuncs.com/?" + urlencode(params)
-    try:
-        resp = requests.get(url, timeout=10)
-        return resp.json()
-    except Exception as e:  # 网络/超时：返回错误，绝不泄露验证码
-        return {"Code": "ERR", "Message": str(e)[:200]}
-
-
-def _gen_sms_code() -> str:
-    return f"{secrets.randbelow(1000000):06d}"
+# ── 短信验证码（阿里云 DysmsAPI，纯 HMAC-SHA1 自签，零 SDK）──
+# 已整体迁至原生标准库 backend.native.auth（send_sms_code / issue_code / check_rate_limit）。
+# 下方端点仅负责「线程编排 + 网络发送」，逻辑全部复用原生库。
 
 
 @app.post("/api/auth/send-code")
 async def auth_send_code(req: Request):
-    """发送注册/重置验证码。频率限制：60s 冷却 + 单手机号每日上限 10 条。"""
+    """发送注册/重置验证码。频率限制（60s 冷却 + 每日 10 条）与生成落库复用原生标准库 backend.native.auth。"""
     try:
         data = await req.json()
     except Exception:
@@ -554,44 +484,22 @@ async def auth_send_code(req: Request):
     purpose = (data.get("purpose") or "register").strip()
     if purpose not in ("register", "reset"):
         purpose = "register"
-    if not _CN_MOBILE_RE.match(phone):
-        return JSONResponse({"ok": False, "error": "手机号格式不正确"}, status_code=400)
     conn = get_db()
-    row = conn.execute("SELECT * FROM sms_codes WHERE phone=?", (phone,)).fetchone()
-    now = datetime.now()
-    if row:
-        last = datetime.fromisoformat(row["last_sent_at"]) if row["last_sent_at"] else None
-        if last and (now - last).total_seconds() < 60:
-            conn.close()
-            return JSONResponse({"ok": False, "error": "发送过于频繁，请 60 秒后再试"}, status_code=429)
-        day = now.strftime("%Y-%m-%d")
-        if row["day"] == day and (row["send_count"] or 0) >= 10:
-            conn.close()
-            return JSONResponse({"ok": False, "error": "今日验证码发送次数已达上限"}, status_code=429)
-    code = _gen_sms_code()
-    # M4 修复：send_sms_code 内部用同步 requests.get(timeout=10)，
-    # 必须丢到线程池，否则会阻塞整个事件循环（发码时元神对话/看板全卡）。
+    res = issue_code(conn, phone=phone, purpose=purpose)
+    conn.close()
+    if not res["ok"]:
+        return JSONResponse({"ok": False, "error": res["error"]}, status_code=res.get("status", 400))
+    code = res["code"]
+    # 发短信走同步 requests，必须丢线程池，否则阻塞事件循环（发码时元神对话/看板全卡）。
     r = await asyncio.to_thread(send_sms_code, phone, code, purpose)
     if r.get("Code") != "OK":
-        conn.close()
         return JSONResponse({"ok": False, "error": f"短信发送失败：{r.get('Message', '未知错误')}"}, status_code=502)
-    day = now.strftime("%Y-%m-%d")
-    cur_day_count = row["send_count"] if (row and row["day"] == day) else 0
-    conn.execute(
-        "INSERT INTO sms_codes (phone,code,expires_at,attempts,last_sent_at,send_count,day) "
-        "VALUES (?,?,?,0,?,?,?) "
-        "ON CONFLICT(phone) DO UPDATE SET code=excluded.code,expires_at=excluded.expires_at,"
-        "attempts=0,last_sent_at=excluded.last_sent_at,day=excluded.day,send_count=excluded.send_count",
-        (phone, code, (now + timedelta(minutes=5)).isoformat(), now.isoformat(), cur_day_count + 1, day),
-    )
-    conn.commit()
-    conn.close()
     return JSONResponse({"ok": True, "message": "验证码已发送"})
 
 
 @app.post("/api/auth/reset-password")
 async def auth_reset_password(req: Request):
-    """凭短信验证码重置密码。"""
+    """凭短信验证码重置密码。逻辑复用原生标准库 backend.native.auth。"""
     try:
         data = await req.json()
     except Exception:
@@ -599,25 +507,11 @@ async def auth_reset_password(req: Request):
     phone = (data.get("phone") or "").strip()
     code = (data.get("code") or "").strip()
     new_pwd = data.get("password") or ""
-    if not _CN_MOBILE_RE.match(phone):
-        return JSONResponse({"ok": False, "error": "手机号格式不正确"}, status_code=400)
-    if len(new_pwd) < 6:
-        return JSONResponse({"ok": False, "error": "新密码至少 6 位"}, status_code=400)
     conn = get_db()
-    row = conn.execute("SELECT code,expires_at,attempts FROM sms_codes WHERE phone=?", (phone,)).fetchone()
-    if not row or row["code"] != code or datetime.now().isoformat() > row["expires_at"]:
-        conn.close()
-        return JSONResponse({"ok": False, "error": "验证码无效或已过期"}, status_code=400)
-    if (row["attempts"] or 0) >= 5:
-        conn.close()
-        return JSONResponse({"ok": False, "error": "验证码尝试次数过多，请重新获取"}, status_code=429)
-    salt = _gen_salt()
-    conn.execute("UPDATE sms_codes SET attempts=attempts+1 WHERE phone=?", (phone,))
-    conn.execute("UPDATE users SET password_hash=?, salt=? WHERE phone=?",
-                 (_hash_password(new_pwd, salt), salt, phone))
-    conn.execute("DELETE FROM sms_codes WHERE phone=?", (phone,))
-    conn.commit()
+    res = reset_password(conn, phone=phone, code=code, new_password=new_pwd)
     conn.close()
+    if not res["ok"]:
+        return JSONResponse({"ok": False, "error": res["error"]}, status_code=res.get("status", 400))
     return JSONResponse({"ok": True, "message": "密码已重置"})
 
 
@@ -834,6 +728,15 @@ def init_db():
             base_url TEXT,
             api_key TEXT,
             model_name TEXT
+        );
+        CREATE TABLE IF NOT EXISTS model_backups (
+            agent_id TEXT,
+            idx INTEGER,
+            provider TEXT DEFAULT 'deepseek',
+            base_url TEXT,
+            api_key TEXT,
+            model_name TEXT,
+            PRIMARY KEY (agent_id, idx)
         );
         CREATE TABLE IF NOT EXISTS exec_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1413,6 +1316,34 @@ def get_model_config(agent_id: str):
     return None
 
 
+def get_model_backups(agent_id: str):
+    """返回某 agent 的备用模型列表（按 idx 升序）。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT idx,provider,base_url,api_key,model_name FROM model_backups "
+        "WHERE agent_id=? ORDER BY idx", (agent_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def set_model_backups(agent_id: str, backups: list):
+    """整体替换某 agent 的备用模型列表（传入有序 list，每项含 provider/base_url/api_key/model_name）。"""
+    conn = get_db()
+    conn.execute("DELETE FROM model_backups WHERE agent_id=?", (agent_id,))
+    for i, b in enumerate(backups or []):
+        if not b or not b.get("api_key"):
+            continue
+        provider = (b.get("provider") or "deepseek").strip()
+        preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])
+        conn.execute(
+            "INSERT OR REPLACE INTO model_backups (agent_id,idx,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?,?)",
+            (agent_id, i, provider, (b.get("base_url") or "").strip() or None,
+             (b.get("api_key") or "").strip() or None,
+             (b.get("model_name") or "").strip() or preset["default_model"]))
+    conn.commit()
+    conn.close()
+
+
 def resolve_provider_cfg(agent_id: str):
     """返回 (provider, base_url, api_key, model_name) 或 None 表示离线。"""
     cfg = get_model_config(agent_id)
@@ -1617,38 +1548,56 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
 
 
 def _available_providers(agent_id: str, member_override: tuple = None):
-    """收集该角色可用的 provider 候选链：自己的配置优先，其余已配置 Key 的按 FALLBACK_ORDER 顶上。
+    """收集该角色可用的 provider 候选链（按优先级尝试，前者失败自动降级到后者）：
 
-    候选链已真正建起（审查 #12 的修复）：
-      ① 角色自有 key 永远第一；
-      ② 全库其他角色已配 Key 按 FALLBACK_ORDER 依次顶上（多模型自动降级真实可用）；
-      ③ 本地 Ollama 作最后兜底（需本机已安装）。
-    cross-check 交叉验证不再 deepseek 验 deepseek。
+      ① 成员级模型覆盖（最高优先级）：该成员在 model_cfg 显式绑定了 provider+key 时优先；
+      ② 元神主模型 + 备用模型：任何 agent 默认优先用元神的主模型，失败依次用其备用模型
+         （满足「元神配置 1 主模型 + 多备用模型，默认用主模型；任务 agent 优先匹配主模型→备用模型」）；
+      ③ 该角色自己的单一指定模型（若与元神不同）；
+      ④ 全库其他角色已配 Key 按 FALLBACK_ORDER 兜底（多模型自动降级）；
+      ⑤ 本地 Ollama 作最后兜底（需本机已安装）。
+    去重按 (provider, model)，故同 provider 的不同模型（如 deepseek-chat / deepseek-reasoner）可并存为备用。
     """
     cands = []
-    seen = set()
+    seen = set()  # 去重键：(provider, model)
 
     def _add(provider, base, key, model):
-        if not key or provider in seen:
+        if not key:
             return
-        seen.add(provider)
+        k = (provider, model)
+        if k in seen:
+            return
+        seen.add(k)
         cands.append((provider, base, key, model))
 
-    # 0) 成员级模型覆盖（最高优先级）：该成员在 model_cfg 显式绑定了 provider+key 时，优先用其专属模型
+    # 0) 成员级模型覆盖（最高优先级）
     if member_override:
         try:
             _add(*member_override)  # (provider, base, key, model)
         except Exception:
             pass
 
-    # 1) 该角色自己的配置——永远排第一
-    cfg = get_model_config(agent_id)
-    if cfg and cfg.get("api_key"):
-        preset = PROVIDER_PRESETS.get(cfg["provider"], PROVIDER_PRESETS["deepseek"])
-        _add(cfg["provider"], cfg.get("base_url") or preset["base"],
-             cfg["api_key"], cfg.get("model_name") or preset["default_model"])
+    # 1) 元神主模型 + 备用模型：作为所有 agent 的默认首选链
+    meta_cfg = get_model_config(META_PID)
+    if meta_cfg and meta_cfg.get("api_key"):
+        preset = PROVIDER_PRESETS.get(meta_cfg["provider"], PROVIDER_PRESETS["deepseek"])
+        _add(meta_cfg["provider"], meta_cfg.get("base_url") or preset["base"],
+             meta_cfg["api_key"], meta_cfg.get("model_name") or preset["default_model"])
+    for b in get_model_backups(META_PID):
+        if b.get("api_key"):
+            preset = PROVIDER_PRESETS.get(b["provider"], PROVIDER_PRESETS["deepseek"])
+            _add(b["provider"], b.get("base_url") or preset["base"],
+                 b["api_key"], b.get("model_name") or preset["default_model"])
 
-    # 2) 降级链：全库中其他角色已配置的 Key，按 FALLBACK_ORDER 依次顶上
+    # 2) 该角色自己的单一指定模型（任务 agent 显式绑定；元神自身已在第 1 步覆盖）
+    if agent_id != META_PID:
+        cfg = get_model_config(agent_id)
+        if cfg and cfg.get("api_key"):
+            preset = PROVIDER_PRESETS.get(cfg["provider"], PROVIDER_PRESETS["deepseek"])
+            _add(cfg["provider"], cfg.get("base_url") or preset["base"],
+                 cfg["api_key"], cfg.get("model_name") or preset["default_model"])
+
+    # 3) 降级链：全库中其他角色已配置的 Key，按 FALLBACK_ORDER 依次顶上
     try:
         conn = get_db()
         rows = conn.execute(
@@ -1668,12 +1617,13 @@ def _available_providers(agent_id: str, member_override: tuple = None):
     except Exception:
         pass
 
-    # 3) 本地 Ollama：无需 Key，装了就能当最后一道兜底
+    # 4) 本地 Ollama：无需 Key，装了就能当最后一道兜底
     if _ollama_alive():
         _add("ollama", PROVIDER_PRESETS["ollama"]["base"], "local",
              PROVIDER_PRESETS["ollama"]["default_model"])
 
     return cands
+
 
 
 _OLLAMA_CACHE = {"ts": 0.0, "alive": False}
@@ -3600,6 +3550,7 @@ def list_models():
     for a in agents:
         c = cfgs.get(a["agent_id"])
         rec = ROLE_MODEL_RECS.get(a["agent_id"], {})
+        backups = get_model_backups(a["agent_id"])
         out.append({
             "agent_id": a["agent_id"],
             "name": a["name"],
@@ -3607,6 +3558,7 @@ def list_models():
             "model_name": (c or {}).get("model_name", ""),
             "base_url": (c or {}).get("base_url", ""),
             "has_key": bool((c or {}).get("api_key")),
+            "backups": backups,
             "recommended": rec.get("provider", ""),
             "recommended_model": rec.get("model", ""),
             "recommend_why": rec.get("why", ""),
@@ -3734,6 +3686,21 @@ async def set_model(agent_id: str, req: Request):
     conn.commit()
     conn.close()
     return {"ok": True}
+
+
+@app.get("/api/models/{agent_id}/backups")
+async def get_model_backups_api(agent_id: str):
+    return {"ok": True, "backups": get_model_backups(agent_id)}
+
+
+@app.post("/api/models/{agent_id}/backups")
+async def set_model_backups_api(agent_id: str, req: Request):
+    data = await req.json()
+    backups = data.get("backups", []) if isinstance(data, dict) else data
+    if not isinstance(backups, list):
+        return {"ok": False, "error": "backups 必须是数组"}
+    set_model_backups(agent_id, backups)
+    return {"ok": True, "count": len(get_model_backups(agent_id))}
 
 
 @app.post("/api/models/{agent_id}/test")
@@ -11404,7 +11371,8 @@ def meta_sufficiency():
         for r in rows:
             per.setdefault(r["dim"], []).append(r["confidence"])
         labels = {"interest": "利益关切", "decision": "决策倾向", "emotion": "情感信号",
-                  "value": "价值观锚点", "comm": "沟通风格"}
+                  "value": "价值观锚点", "comm": "沟通风格", "knowledge": "知识领域",
+                  "workflow": "工作流习惯", "collab": "协作委托", "risk": "风险偏好"}
         dims = []
         for d in meta_distill.META_DIMS:
             confs = per.get(d, [])
@@ -11428,7 +11396,7 @@ def meta_sufficiency():
     except Exception as e:
         # 异常也降级为结构化默认，绝不返回 None（前端按 empty 渲染空态）
         return {"ok": False, "error": str(e), "dims": [], "overall": 0.0,
-                "sufficient_dims": 0, "total_dims": 5, "facts_total": 0,
+                "sufficient_dims": 0, "total_dims": 9, "facts_total": 0,
                 "interview_answered": 0, "interview_total": 0,
                 "empty": True, "message": "画像数据读取异常，已降级显示。"}
 

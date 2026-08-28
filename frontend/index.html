@@ -200,14 +200,14 @@
   .rs-role { font-size:11px; color:var(--gray-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
   .rs-arrow { font-size:18px; color:var(--gray-300); }
 
-  .chat { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
+  .chat { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
   .chat-head { padding:11px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:0.5px solid var(--gray-200); }
   .chat-head .t { font-size:14px; font-weight:500; }
   .chat-head .sub { font-size:11px; color:var(--green); }
   .more-menu { position:absolute; right:0; top:34px; background:var(--bg); border:.5px solid var(--gray-200); border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.14); padding:8px; z-index:60; min-width:190px; }
   .more-row { display:flex; align-items:center; gap:8px; padding:4px 2px; }
   .more-row label { font-size:11px; color:var(--gray-400); flex:none; }
-  .chat-body { flex:1; overflow-y:auto; padding:16px 20px; display:flex; flex-direction:column; gap:8px; }
+  .chat-body { flex:1; min-height:0; overflow-y:auto; padding:16px 20px; display:flex; flex-direction:column; gap:8px; }
   .meta-board { flex:1; overflow-y:auto; }
   .msg { display:flex; align-items:flex-end; gap:8px; }
   .msg.left { justify-content:flex-start; } .msg.right { justify-content:flex-end; }
@@ -511,6 +511,11 @@
         <label style="font-size:12px;color:var(--gray-500)">模型名</label>
         <input id="setupModelName" class="auth-input" style="margin-bottom:0" placeholder="如 deepseek-v4-flash / gpt-4o-mini">
       </div>
+      <div style="margin:10px 0 4px;display:flex;align-items:center;justify-content:space-between">
+        <label style="font-size:12px;color:var(--gray-600);font-weight:600">备用模型（可选，主模型失败自动切换）</label>
+        <button type="button" class="btn sm" onclick="addBackupRow()" style="font-size:11px;padding:3px 8px">+ 添加备用</button>
+      </div>
+      <div id="setupBackups" style="display:flex;flex-direction:column;gap:8px"></div>
       <div class="auth-err" id="modelSetupErr"></div>
       <button class="btn meta auth-btn" id="btnModelSetupUse" onclick="submitModelSetup()">保存并进入</button>
     </div>
@@ -690,7 +695,7 @@
       .split{width:100%;position:fixed;inset:0;z-index:70}
     }
     /* ── 群聊内元神置顶卡：双模式（访谈 / 工作）── */
-    .meta-pin{background:linear-gradient(135deg,var(--meta-50),#fff);border:.5px solid #cfc9ef;border-radius:12px;padding:10px 12px;margin:8px 10px 0;box-shadow:0 1px 4px rgba(80,70,160,.08)}
+    .meta-pin{background:linear-gradient(135deg,var(--meta-50),#fff);border:.5px solid #cfc9ef;border-radius:12px;padding:10px 12px;margin:8px 10px 0;box-shadow:0 1px 4px rgba(80,70,160,.08);max-height:46vh;overflow-y:auto}
     .meta-pin .mp-top{display:flex;align-items:center;gap:10px}
     .meta-pin .mp-av{width:36px;height:36px;border-radius:50%;background:var(--meta-700);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;flex-shrink:0}
     .meta-pin .mp-id{cursor:pointer;flex:1}
@@ -739,7 +744,7 @@
         </div>
         <div class="chat">
           <div class="chat-head">
-            <div><div class="t" id="chatTitle">选择大于努力</div><div class="sub" id="chatSub">运行中</div></div>
+            <div><div class="t" id="chatTitle">元神</div><div class="sub" id="chatSub">运行中</div></div>
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span id="phaseBadge" style="font-size:10px;background:var(--meta-50);color:var(--meta-700);padding:2px 8px;border-radius:10px;font-weight:500">需求澄清</span>
               <span id="freezeBadge" style="font-size:10px;background:var(--gray-100);color:var(--gray-400);padding:2px 8px;border-radius:10px">未冻结</span>
@@ -1700,12 +1705,12 @@ function renderUserBar(u){
   el.innerHTML='👤 '+phone+' · <span style="color:#7c74c9">退出</span>';
   el.onclick=doLogout;
 }
-/* v0.64.33：首次登录模型配置引导 */
+/* v0.64.33：首次登录模型配置引导（主模型 + 多备用模型） */
 function maybeShowModelSetup(model){
   if(!model) return;
   if(localStorage.getItem('fs_model_setup_seen')) return;
   const mask=document.getElementById('modelSetupMask'); if(!mask) return;
-  // 已配置模型则不再弹出；否则强制要求配置（分身不内置模型）
+  // 已配置模型（主或任一备用有 Key）则不再弹出；否则强制要求配置（分身不内置模型）
   if(model.ready){ localStorage.setItem('fs_model_setup_seen','1'); return; }
   document.getElementById('modelSetupEmpty').style.display = 'block';
   const pSel=document.getElementById('setupModelProvider');
@@ -1715,11 +1720,37 @@ function maybeShowModelSetup(model){
   nameEl.value = model.model || '';
   baseEl.value = '';
   document.getElementById('modelSetupErr').textContent='';
+  // 载入已有备用模型
+  const box=document.getElementById('setupBackups'); if(box) box.innerHTML='';
+  try{
+    const r=await apiJson('/api/models/'+META_PID+'/backups');
+    if(r && r.ok && Array.isArray(r.backups)){ r.backups.forEach(b=>addBackupRow(b)); }
+  }catch(e){}
   mask.style.display='flex';
 }
 function closeModelSetup(){
   const mask=document.getElementById('modelSetupMask'); if(mask) mask.style.display='none';
   localStorage.setItem('fs_model_setup_seen','1');
+}
+const _SETUP_PROVIDER_OPTS = '<option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="claude">Claude</option><option value="qwen">通义千问</option><option value="moonshot">Moonshot</option><option value="zhipu">智谱 GLM</option><option value="ollama">Ollama（本地免 Key）</option>';
+function addBackupRow(preset){
+  preset = preset || {};
+  const box=document.getElementById('setupBackups'); if(!box) return;
+  const row=document.createElement('div');
+  row.style.cssText='border:.5px solid var(--line-2);border-radius:10px;padding:8px;background:#fafafd';
+  row.innerHTML =
+    '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'+
+      '<select class="bk-provider" style="flex:1;padding:6px 8px;border:.5px solid #e3e3ec;border-radius:8px;font-size:12px">'+_SETUP_PROVIDER_OPTS+'</select>'+
+      '<button type="button" class="btn sm" style="font-size:11px;padding:3px 7px;color:#d33" onclick="this.parentNode.parentNode.remove()">删除</button>'+
+    '</div>'+
+    '<input class="bk-base" class="auth-input" style="width:100%;margin-bottom:5px;font-size:12px;padding:6px 8px;border:.5px solid #e3e3ec;border-radius:8px" placeholder="Base URL（可选）">'+
+    '<input class="bk-key" class="auth-input" type="password" style="width:100%;margin-bottom:5px;font-size:12px;padding:6px 8px;border:.5px solid #e3e3ec;border-radius:8px" placeholder="API Key">'+
+    '<input class="bk-name" class="auth-input" style="width:100%;font-size:12px;padding:6px 8px;border:.5px solid #e3e3ec;border-radius:8px" placeholder="模型名（如 deepseek-reasoner）">';
+  const sel=row.querySelector('.bk-provider'); sel.value = preset.provider || 'deepseek';
+  row.querySelector('.bk-base').value = preset.base_url || '';
+  row.querySelector('.bk-key').value = preset.api_key || '';
+  row.querySelector('.bk-name').value = preset.model_name || '';
+  box.appendChild(row);
 }
 async function submitModelSetup(){
   const provider=document.getElementById('setupModelProvider').value;
@@ -1727,11 +1758,20 @@ async function submitModelSetup(){
   const key=document.getElementById('setupModelKey').value.trim();
   const model_name=document.getElementById('setupModelName').value.trim();
   const errEl=document.getElementById('modelSetupErr');
-  // 分身不内置模型：除本地 Ollama 外，必须填写 API Key
+  // 主模型：分身不内置模型，除本地 Ollama 外必须填写 API Key
   if(provider!=='ollama' && !key){
-    errEl.textContent='必须填写 API Key 才能使用（分身不内置任何模型）。如本机已装 Ollama，可选「Ollama（本地免 Key）」。';
+    errEl.textContent='主模型必须填写 API Key 才能使用（分身不内置任何模型）。如本机已装 Ollama，可选「Ollama（本地免 Key）」。';
     return;
   }
+  // 收集备用模型
+  const backups=[];
+  document.querySelectorAll('#setupBackups > div').forEach(row=>{
+    const bk={provider:row.querySelector('.bk-provider').value,
+              base_url:(row.querySelector('.bk-base').value||'').trim(),
+              api_key:(row.querySelector('.bk-key').value||'').trim(),
+              model_name:(row.querySelector('.bk-name').value||'').trim()};
+    if(bk.api_key) backups.push(bk);
+  });
   try{
     const r=await apiJson('/api/models/'+META_PID, {
       method:'PUT',
@@ -1739,8 +1779,15 @@ async function submitModelSetup(){
       body:JSON.stringify({provider, base_url, api_key:key, model_name})
     });
     if(!r.ok){ errEl.textContent=r.error||'保存失败'; return; }
+    const rb=await apiJson('/api/models/'+META_PID+'/backups', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({backups})
+    });
+    if(!rb || !rb.ok){ errEl.textContent=(rb&&rb.error)||'备用模型保存失败'; return; }
     closeModelSetup();
-    toast('✅ 模型已配置，元神可以开始对话了');
+    const tip = backups.length ? ('（含 '+backups.length+' 个备用模型，主模型失败时自动切换）') : '';
+    toast('✅ 模型已配置，元神可以开始对话了'+tip);
   }catch(e){ errEl.textContent='保存失败：'+errText(e); }
 }
 function showAuthModal(){ const m=document.getElementById('authMask'); if(m) m.style.display='flex'; const e=document.getElementById('authErr'); if(e) e.textContent=''; }
@@ -2566,13 +2613,14 @@ function renderMetaPin(){
   const sub=document.getElementById('mpSub'); if(sub) sub.textContent=(metaMode==='interview'?'主动了解你 · 蒸馏成长':'驾驶 WorkBuddy · 默认单人任务，复杂才开群聊');
   const body=document.getElementById('mpBody'); if(!body) return;
   body.innerHTML = (metaMode==='interview') ? mpInterviewHTML() : mpWorkHTML();
-  if(metaMode==='interview'){ mpLoadInterview(); fillMetaPinStats(); }
+  if(metaMode==='interview'){ mpLoadInterview(); fillMetaPinStats(); updateDistillProgress(); }
 }
 function mpInterviewHTML(){
   return `<div class="mp-iv">
     <div class="mp-chips">
-      <span class="mp-chip">空白体 ✦</span>
-      <span class="mp-chip">导入资料 <b id="mpFileCnt">0</b></span>
+      <span class="mp-chip" id="mpDistillPct">炼化进度 --%</span>
+      <span class="mp-chip" style="cursor:pointer" onclick="openMetaImport()" title="上传资料让元神更懂你">导入资料 <b id="mpFileCnt">0</b></span>
+      <span class="mp-chip" style="cursor:pointer" onclick="toggleMetaOutput()" title="展开元神产出展示区">产出区</span>
       <span class="mp-chip">访谈 <b id="mpIvCnt">0/0</b></span>
     </div>
     <div class="mp-q" id="mpQ"></div>
@@ -2621,9 +2669,15 @@ async function mpSubmitInterview(btn){
   }
   a.value='';
   await withBusy(btn,'元神消化中…',async()=>{ const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v})}); mpRenderInterview(d.next||d); });
-  fillMetaPinStats();
+  fillMetaPinStats(); updateDistillProgress();
 }
 function fillMetaPinStats(){ const fc=document.getElementById('mpFileCnt'); if(fc) fc.textContent=window.metaFileCount||0; }
+function openMetaImport(){ setView('meta'); setTimeout(()=>{ const fi=document.getElementById('fileInput'); if(fi) fi.click(); }, 60); }
+async function updateDistillProgress(){
+  try{ const sf=await apiJson('/api/meta/sufficiency'); const el=document.getElementById('mpDistillPct');
+    if(el) el.textContent='炼化进度 '+Math.round((sf.overall||0)*100)+'%';
+  }catch(e){ const el=document.getElementById('mpDistillPct'); if(el) el.textContent='炼化进度 --%'; }
+}
 function mpToggleNewMenu(){ const m=document.getElementById('mpNewMenu'); if(m) m.style.display=(m.style.display==='none'?'':'none'); }
 async function createSoloProject(){
   const m=document.getElementById('mpNewMenu'); if(m)m.style.display='none';
