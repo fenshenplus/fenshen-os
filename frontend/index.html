@@ -228,21 +228,39 @@
   /* 群聊↔看板联动：系统动态里的可跳转看板卡片标记 */
   .task-jump { display:inline-block; margin-left:6px; padding:1px 8px; border-radius:10px; background:var(--accent-weak); color:var(--accent-strong); font-size:10px; cursor:pointer; vertical-align:middle; }
   .task-jump:hover { background:var(--accent); color:var(--on-accent); }
-  .chat-input { display:flex; gap:8px; padding:12px 16px 14px; border-top:0.5px solid var(--gray-200); background:var(--bg); flex-shrink:0; align-items:flex-end; flex-wrap:wrap; min-height:110px; }
-  .chat-input.drag { background:var(--blue-50); outline:2px dashed var(--blue-400); outline-offset:-6px; border-radius:14px; }
-  .ico-btn { width:36px; height:36px; border-radius:50%; border:0.5px solid var(--gray-300); background:var(--bg); cursor:pointer; flex-shrink:0; font-size:16px; display:flex; align-items:center; justify-content:center; }
-  .ico-btn:hover { background:var(--gray-100); }
-  .img-prev { flex-basis:100%; display:none; gap:8px; flex-wrap:wrap; }
+  /* ── 输入框（WorkBuddy 风格：圆角卡片 + 图标工具栏 + 发送）── */
+  .chat-input { display:flex; flex-direction:column; gap:8px; margin:10px 14px 12px; padding:10px 12px; border:.5px solid var(--gray-200); border-radius:16px; background:var(--bg); flex-shrink:0; box-shadow:0 1px 3px rgba(20,20,40,.04); }
+  .chat-input.drag { border-color:var(--blue-400); box-shadow:0 0 0 3px var(--blue-50); }
+  .ico-btn { width:32px; height:32px; border-radius:9px; border:none; background:transparent; cursor:pointer; flex-shrink:0; font-size:16px; display:flex; align-items:center; justify-content:center; }
+  .ci-bar { display:flex; align-items:center; gap:2px; }
+  .ci-ico { width:32px; height:32px; border-radius:9px; border:none; background:transparent; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:var(--gray-500); transition:background .15s,color .15s; }
+  .ci-ico:hover { background:var(--gray-100); color:var(--gray-900); }
+  .ci-ico svg { width:18px; height:18px; }
+  .ci-spacer { flex:1; }
+  .ci-model { display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 10px; border:.5px solid var(--gray-200); border-radius:9px; background:var(--gray-50); color:var(--gray-600); font-size:12px; cursor:pointer; max-width:180px; }
+  .ci-model:hover { background:var(--gray-100); }
+  .ci-model .dot { width:7px; height:7px; border-radius:50%; background:var(--gray-300); flex-shrink:0; }
+  .ci-model .dot.ok { background:var(--success-strong); }
+  .ci-model .lbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .img-prev { display:none; gap:8px; flex-wrap:wrap; }
   .img-thumb { position:relative; width:64px; height:64px; border-radius:10px; overflow:hidden; border:0.5px solid var(--gray-300); background:var(--gray-100); }
   .img-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
   .img-thumb .nm { position:absolute; left:0; right:0; bottom:0; font-size:9px; color:#fff; background:rgba(0,0,0,.45); padding:1px 3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .img-thumb .rm { position:absolute; top:1px; right:1px; width:16px; height:16px; border-radius:50%; border:none; background:rgba(0,0,0,.55); color:#fff; font-size:11px; line-height:14px; cursor:pointer; padding:0; }
   .msg-imgs { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
   .msg-img { width:120px; height:120px; object-fit:cover; border-radius:8px; cursor:pointer; border:0.5px solid var(--gray-300); }
-  .chat-input textarea, .chat-input input { flex:1; padding:10px 14px; border-radius:14px; border:0.5px solid var(--gray-300); background:var(--gray-100); font-size:14px; line-height:1.5; outline:none; resize:none; min-height:84px; max-height:200px; font-family:inherit; box-sizing:border-box; }
-  .chat-input textarea:focus, .chat-input input:focus { border-color:var(--blue-400); background:var(--bg); box-shadow:0 0 0 3px var(--blue-50); }
-  .chat-input .send { width:40px; height:40px; border-radius:50%; border:none; background:var(--blue-500); color:var(--on-accent); cursor:pointer; flex-shrink:0; font-size:16px; }
+  .ci-row { display:flex; align-items:flex-end; gap:8px; }
+  .chat-input textarea, .chat-input input { flex:1; padding:8px 6px; border:none; background:transparent; font-size:14px; line-height:1.5; outline:none; resize:none; min-height:26px; max-height:200px; font-family:inherit; box-sizing:border-box; }
+  .chat-input textarea:focus { box-shadow:none; }
+  .chat-input .send { width:38px; height:38px; border-radius:50%; border:none; background:var(--blue-500); color:var(--on-accent); cursor:pointer; flex-shrink:0; font-size:16px; display:flex; align-items:center; justify-content:center; }
   .chat-input .send:hover { background:var(--blue-600); }
+  .ci-send { width:38px; height:38px; border-radius:50%; border:none; background:var(--blue-500); color:#fff; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; transition:background .15s,transform .1s; }
+  .ci-send:hover { background:var(--blue-600); }
+  .ci-send:active { transform:scale(.94); }
+  .ci-send svg { width:20px; height:20px; }
+  .ci-stop { height:38px; padding:0 12px; border-radius:10px; border:.5px solid var(--gray-300); background:var(--bg); color:var(--gray-600); cursor:pointer; font-size:13px; flex-shrink:0; }
+  .ci-stop:hover { background:var(--gray-100); }
+  .voice-on { color:var(--danger-strong)!important; }
 
   /* 卡片网格（精选角色库/资源库） */
   .grid-wrap { padding:16px 20px; overflow-y:auto; flex:1; }
@@ -779,15 +797,29 @@
           </div>
           <div id="chatGoalBar" style="font-size:12px;color:var(--gray-600);padding:4px 14px;border-bottom:.5px solid var(--gray-200);display:none"></div>
           <div class="chat-body" id="chatBody"></div>
-          <div class="chat-input">
+          <div class="chat-input" id="msgInputBar">
             <div class="img-prev" id="msgPrev" style="display:none"></div>
-            <button class="ico-btn" title="插入图片" onclick="document.getElementById('msgFile').click()">🖼️</button>
-            <button class="ico-btn" title="截图并粘贴到输入框" onclick="takeScreenshot('msgInput')">✂️</button>
-            <button class="ico-btn" title="@ 指定某成员处理本条" onclick="insertAt('msgInput')">@</button>
-            <button class="send" id="btnVoice" onpointerdown="voiceHoldStart('msgInput','btnVoice')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" title="按住说话" style="background:#1D9E75;touch-action:none">🎙</button>
-            <textarea id="msgInput" placeholder="发消息给团队…（Enter 发送 · Shift+Enter 换行）" rows="3" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
-            <button class="send" id="btnSendMsg" onclick="sendMsg()">↑</button>
-            <input type="file" id="msgFile" accept="image/*" multiple hidden onchange="onImgPick('msgInput',this)">
+            <div class="ci-bar">
+              <button class="ci-ico" title="插入图片" onclick="document.getElementById('msgFile').click()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.7"/><path d="M21 17l-5-5L7 21"/></svg>
+              </button>
+              <button class="ci-ico" title="截图并粘贴到输入框" onclick="takeScreenshot('msgInput')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.4 6H15.6M8.4 18H15.6M6 8.4V15.6M18 8.4V15.6"/></svg>
+              </button>
+              <button class="ci-ico" title="@ 指定某成员处理本条" onclick="insertAt('msgInput')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15.2 9.6c0 1.5-1.5 2.2-3 2.2s-3-.7-3-2.2 1.3-2 3-2 3 .5 3 2zM8.6 16c.6-1.4 1.9-2.1 3.4-2.1s2.8.7 3.4 2.1"/></svg>
+              </button>
+              <button class="ci-ico" id="btnVoice" title="按住说话" onpointerdown="voiceHoldStart('msgInput','btnVoice')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" style="color:#1D9E75;touch-action:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v2.5M9 21h6"/></svg>
+              </button>
+            </div>
+            <div class="ci-row">
+              <textarea id="msgInput" placeholder="发消息给团队…（Enter 发送 · Shift+Enter 换行）" rows="1" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
+              <button class="ci-send" id="btnSendMsg" onclick="sendMsg()" title="发送">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+              </button>
+              <input type="file" id="msgFile" accept="image/*" multiple hidden onchange="onImgPick('msgInput',this)">
+            </div>
           </div>
         </div>
       <!-- v6 分栏：进程轨迹 + 看板（右侧拉出） -->
@@ -959,13 +991,29 @@
           </div>
           <div class="chat-input" id="metaInputBar">
             <div class="img-prev" id="metaPrev" style="display:none"></div>
-            <button class="ico-btn" title="插入图片" onclick="document.getElementById('metaFile').click()">🖼️</button>
-            <button class="ico-btn" title="截图并粘贴到输入框" onclick="takeScreenshot('metaInput')">✂️</button>
-            <button class="send" id="btnVoiceMeta" onpointerdown="voiceHoldStart('metaInput','btnVoiceMeta')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" title="按住说话" style="background:#1D9E75;touch-action:none">🎙</button>
-            <textarea id="metaInput" placeholder="和元神说点什么…（Enter 发送 · Shift+Enter 换行）" rows="3" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMeta();}"></textarea>
-            <button class="send" id="btnSendMeta" onclick="sendMeta()">↑</button>
-            <button class="btn ghost sm" id="btnMetaStop2" onclick="metaStop()">中止</button>
-            <input type="file" id="metaFile" accept="image/*" multiple hidden onchange="onImgPick('metaInput',this)">
+            <div class="ci-bar">
+              <button class="ci-ico" title="插入图片" onclick="document.getElementById('metaFile').click()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.7"/><path d="M21 17l-5-5L7 21"/></svg>
+              </button>
+              <button class="ci-ico" title="截图并粘贴到输入框" onclick="takeScreenshot('metaInput')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.4 6H15.6M8.4 18H15.6M6 8.4V15.6M18 8.4V15.6"/></svg>
+              </button>
+              <button class="ci-ico" id="btnVoiceMeta" title="按住说话" onpointerdown="voiceHoldStart('metaInput','btnVoiceMeta')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" style="color:#1D9E75;touch-action:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v2.5M9 21h6"/></svg>
+              </button>
+              <span class="ci-spacer"></span>
+              <button class="ci-model" id="metaModelChip" onclick="openModelSetup()" title="点击配置 / 切换模型">
+                <span class="dot" id="metaModelDot"></span><span class="lbl" id="metaModelLbl">未配置模型</span>
+              </button>
+            </div>
+            <div class="ci-row">
+              <textarea id="metaInput" placeholder="和元神说点什么…（Enter 发送 · Shift+Enter 换行）" rows="1" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMeta();}"></textarea>
+              <button class="ci-stop" id="btnMetaStop2" onclick="metaStop()">中止</button>
+              <button class="ci-send" id="btnSendMeta" onclick="sendMeta()" title="发送">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+              </button>
+              <input type="file" id="metaFile" accept="image/*" multiple hidden onchange="onImgPick('metaInput',this)">
+            </div>
           </div>
         </div>
         <div class="rooms" style="width:240px">
@@ -1689,7 +1737,7 @@ let _authCheckTries = 0;
 function checkAuth(){
   if(!SESSION){ showAuthModal(); return; }
   fetch('/api/auth/status', {headers: sessHeaders()}).then(r=>r.json()).then(j=>{
-    if(j.logged_in){ hideAuthModal(); renderUserBar(j.user); localStorage.setItem('fs_guide_toured','1'); maybeShowModelSetup(j.model); }
+    if(j.logged_in){ hideAuthModal(); renderUserBar(j.user); localStorage.setItem('fs_guide_toured','1'); maybeShowModelSetup(j.model); refreshModelChip(); }
     else { SESSION=''; localStorage.removeItem('fs_session'); showAuthModal(); }
   }).catch(()=>{
     // 服务可能尚未就绪（窗口已加载、后端仍在初始化）：重试，而非直接弹登录框
@@ -1706,7 +1754,7 @@ function renderUserBar(u){
   el.onclick=doLogout;
 }
 /* v0.64.33：首次登录模型配置引导（主模型 + 多备用模型） */
-function maybeShowModelSetup(model){
+async function maybeShowModelSetup(model){
   if(!model) return;
   if(localStorage.getItem('fs_model_setup_seen')) return;
   const mask=document.getElementById('modelSetupMask'); if(!mask) return;
@@ -1731,6 +1779,35 @@ function maybeShowModelSetup(model){
 function closeModelSetup(){
   const mask=document.getElementById('modelSetupMask'); if(mask) mask.style.display='none';
   localStorage.setItem('fs_model_setup_seen','1');
+  refreshModelChip();
+}
+/* 元神输入框「模型」芯片：点击打开配置（不受首次引导 seen 限制） */
+async function openModelSetup(){
+  try{
+    const list=await apiJson('/api/models');
+    const m=(Array.isArray(list)?list:[]).find(x=>x.agent_id===META_PID)||{};
+    const mask=document.getElementById('modelSetupMask'); if(!mask) return;
+    document.getElementById('modelSetupEmpty').style.display='block';
+    const pSel=document.getElementById('setupModelProvider');
+    const baseEl=document.getElementById('setupModelBase');
+    const nameEl=document.getElementById('setupModelName');
+    pSel.value=m.provider||'deepseek'; nameEl.value=m.model_name||''; baseEl.value=m.base_url||'';
+    document.getElementById('modelSetupErr').textContent='';
+    const box=document.getElementById('setupBackups'); if(box) box.innerHTML='';
+    try{ const r=await apiJson('/api/models/'+META_PID+'/backups'); if(r&&r.ok&&Array.isArray(r.backups)) r.backups.forEach(b=>addBackupRow(b)); }catch(e){}
+    mask.style.display='flex';
+  }catch(e){ toast('打开模型配置失败：'+errText(e),'err'); }
+}
+/* 刷新元神输入框模型芯片状态（绿点 = 已配 Key） */
+async function refreshModelChip(){
+  const dot=document.getElementById('metaModelDot'), lbl=document.getElementById('metaModelLbl');
+  if(!dot||!lbl) return;
+  try{
+    const list=await apiJson('/api/models');
+    const m=(Array.isArray(list)?list:[]).find(x=>x.agent_id===META_PID)||{};
+    if(m.has_key){ dot.classList.add('ok'); lbl.textContent=(m.provider||'deepseek')+(m.model_name?(' · '+m.model_name):''); }
+    else { dot.classList.remove('ok'); lbl.textContent='未配置模型'; }
+  }catch(e){ lbl.textContent='模型状态未知'; }
 }
 const _SETUP_PROVIDER_OPTS = '<option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="claude">Claude</option><option value="qwen">通义千问</option><option value="moonshot">Moonshot</option><option value="zhipu">智谱 GLM</option><option value="ollama">Ollama（本地免 Key）</option>';
 function addBackupRow(preset){
@@ -2239,7 +2316,8 @@ async function sendMsg(){
   if(curView==='meta'){ await sendMetaInChat(); return; }
   const inp=document.getElementById('msgInput');
   const v=inp.value.trim(); const imgs=_pendingImages['msgInput'];
-  if(!v && !imgs.length || !curRoom)return;
+  if(!curRoom){ toast('请先在左侧选择一个项目 / 群聊，再发送消息','err'); return; }
+  if(!v && !imgs.length) return;
   inp.value=''; autoResizeInput(inp); _pendingImages['msgInput']=[]; renderImgPreview('msgInput'); window.__LAST_SENT__=true;
   // v4.2：异步派单——后端立即返回 job_id，这里轮询进度，不再阻塞等 100-200s
   inp.placeholder='元神分析中…'; inp.disabled=true;

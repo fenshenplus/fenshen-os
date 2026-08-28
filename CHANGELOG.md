@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.64.39] — 2026-08-28
+### Added
+- 修复前端致命 SyntaxError（maybeShowModelSetup 缺 async 致整段主脚本崩溃，引发发不出/看不到元神入口/不弹 API 配置三症）+ 输入框 WorkBuddy 风格美化（圆角卡片/SVG 图标工具栏/模型状态芯片）
+
 ## [v0.64.38] — 2026-08-28
 ### Added
 - UI裁剪修复(底部输入框/图标)+产出展示区开合确认+原生标准库(auth)融合+Ponytail极简纪律
