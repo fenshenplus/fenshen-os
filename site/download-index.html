@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分身 · 下载（v6.4 / 0.64.42）</title>
+<style>
+  :root{--bg:#0f1020;--card:#1a1b2e;--meta:#6d5bd0;--meta2:#34c98e;--fg:#e8e8f0;--mut:#9aa0b4}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(1200px 600px at 50% -10%,#2a2150,var(--bg));color:var(--fg);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:48px 16px}
+  .logo{width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,var(--meta),var(--meta2));display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;color:#fff;box-shadow:0 8px 30px rgba(109,91,208,.4);margin-bottom:14px}
+  h1{font-size:24px;font-weight:600;letter-spacing:.5px}
+  .sub{color:var(--mut);font-size:13px;margin-top:6px;text-align:center;line-height:1.7}
+  .ver{display:inline-block;margin-top:12px;padding:4px 12px;border-radius:99px;background:rgba(109,91,208,.18);color:#c9c0ff;font-size:12px;font-weight:600;border:1px solid rgba(109,91,208,.4)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;width:100%;max-width:760px;margin-top:34px}
+  .card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:22px 20px;display:flex;flex-direction:column;gap:10px;transition:transform .15s,border-color .15s}
+  .card:hover{transform:translateY(-3px);border-color:rgba(109,91,208,.6)}
+  .card .ic{font-size:30px}
+  .card .pf{font-size:15px;font-weight:600}
+  .card .meta{font-size:12px;color:var(--mut);line-height:1.6;min-height:48px}
+  .btn{display:block;text-align:center;text-decoration:none;background:linear-gradient(135deg,var(--meta),#8a7be0);color:#fff;padding:11px 14px;border-radius:11px;font-size:14px;font-weight:600;margin-top:auto}
+  .btn:active{opacity:.85}
+  .btn.alt{background:linear-gradient(135deg,#2c8c63,var(--meta2))}
+  .note{margin-top:30px;max-width:760px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:18px 20px;font-size:12px;color:var(--mut);line-height:1.9}
+  .note b{color:var(--fg)}
+  .note code{background:rgba(0,0,0,.3);padding:1px 6px;border-radius:5px;color:#c9c0ff}
+  footer{margin-top:28px;color:var(--mut);font-size:11px;text-align:center}
+</style>
+</head>
+<body>
+  <div class="logo">元</div>
+  <h1>分身</h1>
+  <div class="sub">元神（你的数字分身）驾驶 WorkBuddy（执行外壳）<br>少而精的精选 skill / 角色库 · 强原生基础能力</div>
+  <div class="ver">当前版本 v6.4 · 0.64.42 ｜ 2026-08-28</div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="ic">🍎</div>
+      <div class="pf">macOS</div>
+      <div class="meta">.dmg 安装包（Apple Silicon / Intel 通用）。拖入「应用程序」即可。</div>
+      <a class="btn" href="fenshen-v6.4-macOS.dmg">下载 macOS 版</a>
+    </div>
+    <div class="card">
+      <div class="ic">🪟</div>
+      <div class="pf">Windows</div>
+      <div class="meta">.exe 压缩包（未签名）。解压后双击 <code>分身.exe</code>，遇 SmartScreen 选「仍要运行」。</div>
+      <a class="btn alt" href="fenshen-v0.64.42-Windows-exe.zip">下载 Windows 版</a>
+    </div>
+    <div class="card">
+      <div class="ic">📱</div>
+      <div class="pf">Android</div>
+      <div class="meta">纯通讯器 APK。安装后在「设置」里允许未知来源，连接本机/服务器引擎。</div>
+      <a class="btn" href="app-release.apk">下载 Android APK</a>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>移动端怎么用？</b><br>
+    分身移动端是一个<b>纯通讯器</b>：它本身不跑大模型，而是经 <code>/ws</code> 桥接，连接你本机或服务器上运行的「分身引擎」（桌面版 / 中继服务）。<br>
+    1) 先在电脑上启动分身桌面端（或部署中继服务）；<br>
+    2) 手机安装 APK 后打开，按引导填入引擎地址（本机填 <code>ws://127.0.0.1:8002</code>，远程填服务器地址）；<br>
+    3) 连接成功后，即可在手机上收发消息、查看元神产出。<br>
+    <b>iOS</b> 暂未上架 App Store / TestFlight，敬请期待。
+  </div>
+
+  <footer>分身 · 你的数字分身 ｜ 下载服务器</footer>
+</body>
+</html>

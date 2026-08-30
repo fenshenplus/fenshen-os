@@ -24,6 +24,10 @@ deploy-s4.exp
 site/*.zip
 site/*.dmg
 
+# Windows 构建产物与发行包（大文件，不在仓库维护）
+winbuild/
+*-Windows-exe.zip
+
 # PyInstaller 构建产物（不入库）
 dist/
 build/

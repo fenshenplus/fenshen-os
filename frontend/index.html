@@ -489,8 +489,8 @@
       <div class="auth-links">
         <span id="authForgot" data-i18n="忘记密码？" onclick="authSwitch('reset')">忘记密码？</span>
       </div>
-      <div class="auth-skip" data-i18n="暂不登录（本地模式）" onclick="hideAuthModal()">暂不登录（本地模式）</div>
-      <div class="auth-legal">注册即代表同意 <a href="http://39.105.6.135/privacy.html" target="_blank" rel="noopener">隐私政策</a> 与 <a href="http://39.105.6.135/terms.html" target="_blank" rel="noopener">用户协议</a></div>
+      <button class="btn auth-btn" style="background:#fff;color:var(--gray-600);border:.5px solid var(--gray-200);margin-top:10px" data-i18n="本地模式（暂不登录）" onclick="enterLocalMode()">本地模式（暂不登录）</button>
+      <div class="auth-legal">注册即代表同意 <a href="http://47.111.25.150:8001/privacy.html" target="_blank" rel="noopener">隐私政策</a> 与 <a href="http://47.111.25.150:8001/terms.html" target="_blank" rel="noopener">用户协议</a></div>
     </div>
   </div>
 
@@ -1687,7 +1687,20 @@ function errText(e){
 }
 // 统一的接口调用：HTTP 层出错也要抛出来，不能静默
 let SESSION = localStorage.getItem('fs_session') || '';
+let LOCAL_MODE = localStorage.getItem('fs_local_mode') === '1';
 function sessHeaders(extra){ const h=extra||{}; if(SESSION) h['x-session-token']=SESSION; return h; }
+function enterLocalMode(){
+  LOCAL_MODE=true; localStorage.setItem('fs_local_mode','1');
+  hideAuthModal();
+  onAppReady();
+}
+async function onAppReady(){
+  await refreshModelChip();
+  // 无论登录还是本地模式，只要元神模型没配 Key，就先弹出配置引导
+  if(!metaModelReady && !localStorage.getItem('fs_model_setup_seen')){
+    openModelSetup();
+  }
+}
 async function apiJson(url, opts){
   opts = opts||{};
   opts.headers = sessHeaders(opts.headers||{});
@@ -1718,9 +1731,11 @@ function viewStats(){
 let _authMode='login';
 let _authCheckTries = 0;
 function checkAuth(){
+  // 本地模式：不强制登录，但进入后仍需配置元神模型
+  if(!SESSION && LOCAL_MODE){ onAppReady(); return; }
   if(!SESSION){ showAuthModal(); return; }
   fetch('/api/auth/status', {headers: sessHeaders()}).then(r=>r.json()).then(j=>{
-    if(j.logged_in){ hideAuthModal(); renderUserBar(j.user); localStorage.setItem('fs_guide_toured','1'); maybeShowModelSetup(j.model); refreshModelChip(); }
+    if(j.logged_in){ hideAuthModal(); renderUserBar(j.user); localStorage.setItem('fs_guide_toured','1'); onAppReady(); }
     else { SESSION=''; localStorage.removeItem('fs_session'); showAuthModal(); }
   }).catch(()=>{
     // 服务可能尚未就绪（窗口已加载、后端仍在初始化）：重试，而非直接弹登录框
@@ -1782,15 +1797,27 @@ async function openModelSetup(){
   }catch(e){ toast('打开模型配置失败：'+errText(e),'err'); }
 }
 /* 刷新元神输入框模型芯片状态（绿点 = 已配 Key） */
+let metaModelReady=false;
 async function refreshModelChip(){
   const dot=document.getElementById('metaModelDot'), lbl=document.getElementById('metaModelLbl');
   if(!dot||!lbl) return;
   try{
     const list=await apiJson('/api/models');
     const m=(Array.isArray(list)?list:[]).find(x=>x.agent_id===META_PID)||{};
+    metaModelReady=!!m.has_key;
     if(m.has_key){ dot.classList.add('ok'); lbl.textContent=(m.provider||'deepseek')+(m.model_name?(' · '+m.model_name):''); }
     else { dot.classList.remove('ok'); lbl.textContent='未配置模型'; }
-  }catch(e){ lbl.textContent='模型状态未知'; }
+  }catch(e){ metaModelReady=false; lbl.textContent='模型状态未知'; }
+}
+async function ensureMetaModelReady(){
+  if(metaModelReady) return true;
+  try{
+    const list=await apiJson('/api/models');
+    const m=(Array.isArray(list)?list:[]).find(x=>x.agent_id===META_PID)||{};
+    if(m.has_key){ metaModelReady=true; return true; }
+  }catch(e){}
+  openModelSetup();
+  return false;
 }
 const _SETUP_PROVIDER_OPTS = '<option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="claude">Claude</option><option value="qwen">通义千问</option><option value="moonshot">Moonshot</option><option value="zhipu">智谱 GLM</option><option value="ollama">Ollama（本地免 Key）</option>';
 function addBackupRow(preset){
@@ -1845,6 +1872,7 @@ async function submitModelSetup(){
       body:JSON.stringify({backups})
     });
     if(!rb || !rb.ok){ errEl.textContent=(rb&&rb.error)||'备用模型保存失败'; return; }
+    metaModelReady=true; localStorage.setItem('fs_model_setup_seen','1');
     closeModelSetup();
     const tip = backups.length ? ('（含 '+backups.length+' 个备用模型，主模型失败时自动切换）') : '';
     toast('✅ 模型已配置，元神可以开始对话了'+tip);
@@ -2654,10 +2682,14 @@ function updateChatHead(){
   const bd=document.getElementById('btnBoard'); if(bd) bd.style.display=isMeta?'none':'';
   const mp=document.getElementById('metaPin'); if(mp) mp.style.display=isMeta?'':'none';
 }
-function setView(v, pid){
-  curView=v;
-  if(v==='meta'){ renderMetaPin(); updateChatHead(); loadMetaView(); }
-  else { if(pid) curRoom=pid; renderRooms(); updateChatHead(); if(curRoom) loadChat(curRoom); }
+async function setView(v, pid){
+  if(v==='meta'){
+    // 只要用户想进元神，就先确认模型已配；未配则弹出配置，其余交互拦住
+    const ready=await ensureMetaModelReady();
+    if(!ready) return;
+    curView='meta'; renderMetaPin(); updateChatHead(); await loadMetaView();
+  }
+  else { curView=v; pinInterviewActive=false; if(pid) curRoom=pid; renderRooms(); updateChatHead(); if(curRoom) await loadChat(curRoom); }
 }
 async function loadMetaView(){
   document.getElementById('chatTitle').textContent='元神';
@@ -2666,11 +2698,20 @@ async function loadMetaView(){
   const b=document.getElementById('chatBody'); b.innerHTML='加载中…';
   let msgs=[]; try{ const res=await fetch('/api/messages/'+META_PID); msgs=await res.json(); }catch(e){ console.error(e); }
   renderChat(msgs);
-  const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder='和元神说点什么…（Enter 发送）'; inp.style.height='auto'; autoResizeInput(inp); }
+  if(!metaModelReady){
+    const banner=document.createElement('div');
+    banner.style.cssText='margin:10px 14px;padding:10px 12px;background:var(--warning-weak);border:.5px solid var(--line-2);border-radius:10px;font-size:12px;color:var(--fg);line-height:1.6';
+    banner.innerHTML='🧠 <b>先为元神配置大模型 API</b>，否则元神无法对话。<button class="btn sm meta" style="margin-left:8px" onclick="openModelSetup()">去配置</button>';
+    b.insertBefore(banner, b.firstChild);
+  }
+  const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder=pinInterviewActive?'回答元神访谈题…（Enter 提交 · Shift+Enter 换行）':'和元神说点什么…（Enter 发送）'; inp.style.height='auto'; autoResizeInput(inp); }
 }
 async function sendMetaInChat(){
+  if(!(await ensureMetaModelReady())) return;
   const inp=document.getElementById('msgInput'); const v=inp.value.trim(); const imgs=_pendingImages['msgInput'];
-  if(!v && !imgs.length)return; inp.value=''; autoResizeInput(inp); _pendingImages['msgInput']=[]; renderImgPreview('msgInput'); window.__LAST_SENT__=true;
+  if(!v && !imgs.length)return;
+  if(pinInterviewActive){ inp.value=''; autoResizeInput(inp); await submitPinInterview(v); return; }
+  inp.value=''; autoResizeInput(inp); _pendingImages['msgInput']=[]; renderImgPreview('msgInput'); window.__LAST_SENT__=true;
   inp.placeholder='元神思考中…'; inp.disabled=true; activeChatAbort=new AbortController();
   try{ await withBusy('btnSendMsg','…',async()=>{ await apiJson('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v, images:imgs}),signal:activeChatAbort.signal}); }); }
   finally{ activeChatAbort=null; inp.placeholder='和元神说点什么…（Enter 发送）'; inp.disabled=false; }
@@ -2694,21 +2735,10 @@ function mpInterviewHTML(){
     </div>
     <div class="mp-q" id="mpQ"></div>
     <div class="mp-probes" id="mpProbes"></div>
-    <div class="chat-input" id="mpInputBar">
-      <div class="ci-bar">
-        <button class="ci-ico" id="mpBtnVoice" title="按住说话（元神会记住你的声音与语气）" onpointerdown="voiceHoldStart('mpAns','mpBtnVoice')" onpointerup="voiceHoldEnd()" onpointerleave="voiceHoldEnd()" onpointercancel="voiceHoldEnd()" style="color:#1D9E75;touch-action:none">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v2.5M9 21h6"/></svg>
-        </button>
-      </div>
-      <div class="ci-row">
-        <textarea id="mpAns" class="mp-ans" rows="2" placeholder="回答这道访谈…（语音或打字 · Ctrl/⌘+Enter 提交）" oninput="autoResizeInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();mpSubmitInterview(this);}"></textarea>
-        <button class="ci-send" onclick="mpSubmitInterview(this)" title="提交并继续">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-        </button>
-      </div>
-    </div>
+    <div class="mp-hint" id="mpInputHint" style="margin:8px 0;font-size:12px;color:var(--gray-400)">在底部主输入框回复这道访谈题，元神会记录并继续了解你。</div>
     <div class="mp-iv-actions" style="margin-top:8px">
-      <button class="btn sm ghost" onclick="mpLoadInterview(this)">跳过</button>
+      <button class="btn sm ghost" onclick="skipPinInterview()">跳过这题</button>
+      <button class="btn sm ghost" onclick="stopPinInterview()">结束访谈</button>
     </div>
     <div id="mpReflect"></div>
   </div>`;
@@ -2727,28 +2757,39 @@ function mpWorkHTML(){
     <div class="mp-hint">大部分事情直接开「单人任务」，元神会像 WorkBuddy 一样快速交付；只有需要多人协作时才开「团队任务（群聊模式）」。要干啥直接跟元神说。</div>
   </div>`;
 }
-async function mpLoadInterview(btn){ await withBusy(btn,'加载中…',async()=>{ const d=await apiJson('/api/meta/interview/next'); mpRenderInterview(d); }); }
+async function mpLoadInterview(btn){ await startPinInterview(); }
 function mpRenderInterview(d){
   const q=document.getElementById('mpQ'); if(!q) return;
   const cnt=document.getElementById('mpIvCnt'); if(cnt) cnt.textContent=(d.progress||0)+'/'+(d.total||0);
-  const pr=document.getElementById('mpProbes'), an=document.getElementById('mpAns'), rf=document.getElementById('mpReflect');
-  if(d.phase==='complete'||!d.question){ q.textContent='🎉 元神已经比较了解你了！也可以随时补充，或上传资料让它更懂你。'; if(pr)pr.textContent=''; if(an)an.style.display='none'; }
-  else { q.textContent=d.question; if(pr)pr.innerHTML=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>'); if(an){an.style.display=''; if(an.dataset.qid!==d.qid){ an.value=''; } an.dataset.qid=d.qid;} }
+  const pr=document.getElementById('mpProbes'), hint=document.getElementById('mpInputHint'), rf=document.getElementById('mpReflect');
+  if(d.phase==='complete'||!d.question){ q.textContent='🎉 元神已经比较了解你了！也可以随时补充，或上传资料让它更懂你。'; if(pr)pr.textContent=''; if(hint)hint.style.display='none'; }
+  else { q.textContent=d.question; if(pr)pr.innerHTML=(d.probes||[]).map(p=>'· '+escapeHtml(p)).join('<br>'); if(hint)hint.style.display=''; }
   if(rf) rf.innerHTML = d.reflection ? '<div class="mp-reflect">'+escapeBr(d.reflection)+'</div>' : '';
 }
-async function mpSubmitInterview(btn){
-  const a=document.getElementById('mpAns'); const qid=a.dataset.qid; const v=a.value.trim();
-  const rf=document.getElementById('mpReflect');
-  const hasReflection = rf && rf.innerHTML && rf.innerHTML.trim().length>0;
-  if(!v){
-    if(!qid) return;
-    if(hasReflection){ await mpLoadInterview(btn); return; } // 元神已有理解 → 视为「继续了解」，刷新最新状态
-    toast('在下方输入框写下你的回答，再点「提交并继续」（或按 Ctrl/⌘+Enter）');
-    try{ a.focus(); }catch(e){}
-    return;
-  }
-  a.value='';
-  await withBusy(btn,'元神消化中…',async()=>{ const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid,answer:v, audio_clip_id: window.__pendingVoiceClip||null})}); mpRenderInterview(d.next||d); });
+let pinInterviewActive=false, pinInterviewState=null;
+async function startPinInterview(){
+  pinInterviewActive=true;
+  const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder='回答元神访谈题…（Enter 提交 · Shift+Enter 换行）'; inp.focus(); }
+  await withBusy(null,'加载中…',async()=>{ const d=await apiJson('/api/meta/interview/next'); pinInterviewState=d; mpRenderInterview(d); });
+  fillMetaPinStats(); updateDistillProgress();
+}
+function stopPinInterview(){
+  pinInterviewActive=false; pinInterviewState=null;
+  const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）';
+  mpRenderInterview({phase:'complete'});
+}
+async function skipPinInterview(){ await startPinInterview(); }
+async function submitPinInterview(v){
+  if(!pinInterviewState || !pinInterviewState.qid || pinInterviewState.phase==='complete') return;
+  const b=document.getElementById('chatBody'); if(!b) return;
+  const userRow=document.createElement('div'); userRow.className='msg right';
+  userRow.innerHTML=`<div class="bubble"><div class="sender">你</div><span class="btext">${escapeHtml(v)}</span></div>`;
+  b.appendChild(userRow); b.scrollTop=b.scrollHeight;
+  await withBusy('btnSendMsg','元神消化中…',async()=>{
+    const d=await apiJson('/api/meta/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qid:pinInterviewState.qid, answer:v, audio_clip_id: window.__pendingVoiceClip||null})});
+    pinInterviewState=d.next||d;
+    mpRenderInterview(pinInterviewState);
+  });
   fillMetaPinStats(); updateDistillProgress();
 }
 function fillMetaPinStats(){ const fc=document.getElementById('mpFileCnt'); if(fc) fc.textContent=window.metaFileCount||0; }
@@ -5170,13 +5211,15 @@ async function voiceHoldEnd(){
   window.__pendingVoiceClip=clipId;
   const text=(window.__voiceTranscript||'').trim() || (inp?inp.value.trim():'');
   if(text){
-    if(inpId==='msgInput') await sendMsg();
+    if(inpId==='msgInput'){
+      if(curView==='meta' && pinInterviewActive) await submitPinInterview(text);
+      else await sendMsg();
+    }
     else if(inpId==='metaInput'){
       if(metaInterviewActive && metaInterviewState && metaInterviewState.qid && metaInterviewState.phase!=='complete')
         await submitInterviewFromChat(text);
       else await sendMeta();
     }
-    else if(inpId==='mpAns') await mpSubmitInterview(document.querySelector('#mpInputBar .ci-send'));
   } else if(clipId){
     toast('已保留语音片段，但没识别出文字（可重试或打字回答）');
   }
