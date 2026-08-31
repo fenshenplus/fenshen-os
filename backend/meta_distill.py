@@ -28,6 +28,8 @@ META_DIMS = ["interest", "decision", "emotion", "value", "comm",
 _LAST_CHAT_EXTRACT_TS = 0.0
 _CHAT_EXTRACT_COOLDOWN = 60  # 同一用户两次闲聊抽取至少间隔 60 秒
 _CHAT_EXTRACT_MIN_LEN = 30  # 太短的句子不触发抽取
+# v0.64.43：素材蒸馏最小长度，低于此值拒绝并给出明确提示
+_INGEST_MIN_LEN = 80
 DIM_LABEL = {
     "interest": "【利益关切】", "decision": "【决策倾向】", "emotion": "【情感信号】",
     "value": "【价值观锚点】", "comm": "【沟通风格】",
@@ -48,6 +50,11 @@ MATERIAL_TYPES = {
     "document": "工作文档（周报 / 方案 / 代码评审意见）",
     "creation": "创作内容（博客 / 视频脚本 / 朋友圈 / 社交媒体）",
     "feedback": "别人对我的评价（同事反馈 / 朋友评价）",
+    # v0.64.43 移动蒸馏（保守采集策略）：相册 / 账单 / 社媒 / 语音自述
+    "album": "相册照片（拍摄时间地点，端侧抽取生活轨迹）",
+    "transaction": "交易账单（支付平台导出的 CSV / 账单文本）",
+    "social": "社交媒体（公开发帖 / 评论 / 签名）",
+    "voice": "语音自述（端侧转写后的文本）",
 }
 # 授权状态：蒸馏他人时必须获得被蒸馏人明示授权
 AUTH_STATUS = ["owner", "pending", "authorized", "revoked", "denied"]
@@ -64,6 +71,8 @@ def _migrate_distill_v2():
             ("authorization_status", "ALTER TABLE user_model ADD COLUMN authorization_status TEXT DEFAULT 'owner'"),
             ("material_type", "ALTER TABLE user_model ADD COLUMN material_type TEXT DEFAULT ''"),
             ("quality_score", "ALTER TABLE user_model ADD COLUMN quality_score REAL DEFAULT 0"),
+            # v0.64.43：人格事实溯源到素材，支撑「删除素材即删除其产生的事实」（用户主权）
+            ("material_id", "ALTER TABLE user_model ADD COLUMN material_id INTEGER DEFAULT 0"),
         ]:
             if col not in cols:
                 conn.execute(sql)
@@ -519,9 +528,11 @@ def _decode(v):
 
 def _store_facts(facts, source: str, qid=None, subject_id: str = "self",
                  target_type: str = "self", authorization_status: str = "owner",
-                 material_type: str = "", quality_score: float = 0):
+                 material_type: str = "", quality_score: float = 0,
+                 material_id: int = 0):
     """把抽取到的结构化事实 upsert 进 user_model（同 dim+field 取更高置信）。
     v6.4 支持蒸馏他人：必须传入 subject_id / target_type / authorization_status。
+    v0.64.43：material_id 记录事实来源素材，支撑按素材精确删除（用户主权/合规删除权）。
     """
     if not facts:
         return 0
@@ -554,10 +565,11 @@ def _store_facts(facts, source: str, qid=None, subject_id: str = "self",
         else:
             conn.execute(
                 "INSERT INTO user_model (dim,field,value,confidence,source,qid,created_at,updated_at,"
-                "subject,target_type,authorization_status,material_type,quality_score) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "subject,target_type,authorization_status,material_type,quality_score,material_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (dim, field, val_str, conf, source, qid, now, now,
-                 subject_id, target_type, authorization_status, material_type, quality_score))
+                 subject_id, target_type, authorization_status, material_type, quality_score,
+                 material_id))
         n += 1
     conn.commit()
     conn.close()
@@ -859,6 +871,11 @@ async def meta_ingest(req: Request):
         material_type = "document"
     if not text:
         return {"ok": False, "error": "empty text"}
+    # v0.64.43：素材过短时抽取无意义，直接拒绝并说明，避免"上传成功但 0 条事实"的困惑
+    if len(text) < _INGEST_MIN_LEN:
+        return {"ok": False, "error": f"too short",
+                "hint": f"素材内容不足 {_INGEST_MIN_LEN} 字，无法蒸馏出有效人格特征。请提供更完整的文本。",
+                "min_len": _INGEST_MIN_LEN, "actual_len": len(text)}
     # 伦理护栏：蒸馏他人必须已授权
     if target_type == "other" and authorization_status not in ("authorized", "owner"):
         return {"ok": False, "error": "蒸馏他人需先获得被蒸馏人明示授权（authorized），未经授权禁止克隆"}
@@ -868,26 +885,42 @@ async def meta_ingest(req: Request):
     facts = await _extract_async(
         EXTRACT_SYSTEM + f"\n这是{type_hint}类型的素材，尽量多抽取真实事实，不确定不要编。",
         f"文件名：{filename}\n内容：\n{text[:8000]}")
+    # v0.64.43：离线/未配置模型时 facts=None，必须明确告知，不能伪装成"成功但 0 条"
+    if facts is None:
+        return {"ok": False, "error": "llm_offline",
+                "hint": "元神模型未配置或不可用，无法从素材中蒸馏人格特征。请先为元神配置大模型 API Key。",
+                "material_type": material_type, "subject": subject_id}
     dims = set(f["dim"] for f in facts if f.get("dim") in META_DIMS) if facts else set()
     conf_avg = sum(float(f.get("confidence", 0.5)) for f in facts) / len(facts) if facts else 0
     quality = _quality_score(len(text), len(facts) if facts else 0, dims, conf_avg)
+    now = datetime.now().isoformat()
+    # 先落素材记录拿到 material_id，再让事实溯源到它（支撑按素材精确删除）。
+    # 注意：必须先 commit 再调用 _store_facts——后者会另开连接写入，
+    # 若此处持有未提交写事务，会因 SQLite 写锁导致 "database is locked"。
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO distill_materials (subject_id,material_type,filename,content_preview,"
+        "extracted_facts,quality_score,ts) VALUES (?,?,?,?,?,?,?)",
+        (subject_id, material_type, filename, text[:200], 0, quality, now))
+    material_id = cur.lastrowid or 0
+    conn.commit()
+    conn.close()
+
     n = _store_facts(facts, "upload", subject_id=subject_id, target_type=target_type,
                      authorization_status=authorization_status, material_type=material_type,
-                     quality_score=quality) if facts else 0
+                     quality_score=quality, material_id=material_id)
+
     conn = get_db()
-    now = datetime.now().isoformat()
+    conn.execute("UPDATE distill_materials SET extracted_facts=? WHERE id=?", (n, material_id))
     if n:
         conn.execute(
             "INSERT INTO long_term_memory (category,content,source,ts) VALUES (?,?,?,?)",
             ("distilled", f"从资料《{filename}》蒸馏出 {n} 条人格事实", source, now))
-    conn.execute(
-        "INSERT INTO distill_materials (subject_id,material_type,filename,content_preview,"
-        "extracted_facts,quality_score,ts) VALUES (?,?,?,?,?,?,?)",
-        (subject_id, material_type, filename, text[:200], n, quality, now))
     conn.commit()
     conn.close()
     return {"ok": True, "extracted": n, "quality_score": quality,
             "material_type": material_type, "subject": subject_id,
+            "material_id": material_id,
             "summary": (facts[:5] if facts else [])}
 
 
@@ -1106,5 +1139,45 @@ def list_materials(request: Request):
                                "filename": r["filename"], "extracted_facts": r["extracted_facts"],
                                "quality_score": r["quality_score"], "ts": r["ts"]}
                               for r in rows]}
+    finally:
+        conn.close()
+
+
+# ── API：删除单条素材（v0.64.43 用户主权）——连带删除它由蒸馏产生的人格事实 ──
+@app.delete("/api/meta/distill/materials/{mid}")
+def delete_material(mid: int, request: Request):
+    subject_id = request.query_params.get("subject") or "self"
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id,filename FROM distill_materials WHERE id=? AND subject_id=?",
+            (mid, subject_id)).fetchone()
+        if not row:
+            return {"ok": False, "error": "素材不存在或不属于该对象"}
+        # 只删除"由该素材首次产生"的事实；被后续素材再次强化的事实会保留（避免误删）
+        cur = conn.execute("DELETE FROM user_model WHERE material_id=? AND subject=?",
+                           (mid, subject_id))
+        conn.execute("DELETE FROM distill_materials WHERE id=?", (mid,))
+        conn.commit()
+        return {"ok": True, "deleted_material": mid, "deleted_facts": cur.rowcount or 0,
+                "filename": row["filename"]}
+    finally:
+        conn.close()
+
+
+# ── API：清空某对象的全部素材与人格事实（v0.64.43 一键删除权）──
+@app.delete("/api/meta/distill/materials")
+def clear_materials(request: Request):
+    subject_id = request.query_params.get("subject") or "self"
+    confirm = request.query_params.get("confirm")
+    if confirm != "yes":
+        return {"ok": False, "error": "清空需显式确认", "hint": "请带 confirm=yes 调用"}
+    conn = get_db()
+    try:
+        m = conn.execute("DELETE FROM distill_materials WHERE subject_id=?", (subject_id,))
+        f = conn.execute("DELETE FROM user_model WHERE subject=?", (subject_id,))
+        conn.commit()
+        return {"ok": True, "deleted_materials": m.rowcount or 0,
+                "deleted_facts": f.rowcount or 0, "subject": subject_id}
     finally:
         conn.close()

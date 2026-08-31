@@ -1000,7 +1000,7 @@
           </div>
         </div>
         <div class="rooms" style="width:240px">
-          <div class="rooms-head"><span class="t">我的资料库</span><button class="room-add" onclick="document.getElementById('fileInput').click()" title="上传资料">↑</button></div>
+          <div class="rooms-head"><span class="t">我的资料库</span><button class="room-add" onclick="miOpen()" title="喂资料给元神">↑</button></div>
           <div class="room-list" id="metaFiles"></div>
         </div>
       </div>
@@ -1528,6 +1528,51 @@
 </div>
 <div class="annot-tip">标注模式开启：点击页面任意位置标记修改意见</div>
 <input type="file" id="fileInput" style="display:none" onchange="uploadFile(this)">
+
+<!-- v0.64.43 资料蒸馏弹层：替代原生 prompt()，支持上传文件 / 粘贴文本 两种喂法 -->
+<div id="metaImportMask" class="auth-mask" style="display:none;z-index:10001">
+  <div class="auth-card" style="width:480px;max-height:88vh;overflow-y:auto">
+    <div class="auth-title">📚 喂资料给元神</div>
+    <div class="auth-sub">元神只从资料里学<b>你的风格与特质</b>（人格 9 维），不会因此获得任何新能力。</div>
+
+    <div style="margin:12px 0 6px;font-size:12px;color:var(--gray-500);font-weight:600">素材类型</div>
+    <div id="miTypeChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px"></div>
+
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <button id="miTabFile" class="btn sm" onclick="miSwitchTab('file')" style="flex:1">上传文件</button>
+      <button id="miTabPaste" class="btn sm" onclick="miSwitchTab('paste')" style="flex:1">粘贴文本</button>
+    </div>
+
+    <div id="miPaneFile">
+      <input type="file" id="miFile" accept=".txt,.md,.csv,.json,.log,.text" style="width:100%;font-size:12px;padding:8px;border:.5px solid var(--line-2);border-radius:9px;background:#fff">
+      <div style="font-size:11px;color:var(--gray-400);margin-top:6px;line-height:1.6">
+        支持 .txt / .md / .csv / .json 等文本文件（≥80 字）。图片与 PDF 请先导出为文本。
+      </div>
+    </div>
+
+    <div id="miPanePaste" style="display:none">
+      <textarea id="miText" rows="6" placeholder="粘贴聊天记录片段、笔记、自我介绍、账单文本…（≥80 字）" oninput="miCount()" style="width:100%;padding:9px 10px;border:.5px solid var(--line-2);border-radius:9px;font-size:13px;line-height:1.6;resize:vertical"></textarea>
+      <div style="font-size:11px;color:var(--gray-400);margin-top:6px">
+        <span id="miTextCount">0</span> 字 · 内容只用于蒸馏人格特征
+      </div>
+    </div>
+
+    <div id="miErr" style="display:none;margin-top:10px;background:var(--danger-weak,#fdecec);border:.5px solid var(--line-2);border-radius:9px;padding:10px;font-size:12px;color:var(--danger,#c0392b);line-height:1.6"></div>
+
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn" id="miSubmit" onclick="miSubmit()" style="flex:1">开始蒸馏</button>
+      <button class="btn" onclick="miClose()" style="background:var(--gray-100);color:var(--gray-600)">取消</button>
+    </div>
+
+    <div style="margin-top:16px;border-top:.5px solid var(--line-2);padding-top:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--gray-500);font-weight:600">已喂的资料</span>
+        <span style="font-size:11px;color:var(--gray-400)">删除将一并移除由此资料蒸馏出的人格特征</span>
+      </div>
+      <div id="miMaterialList" style="font-size:12px;color:var(--gray-500)">加载中…</div>
+    </div>
+  </div>
+</div>
 
 <script>
 /* ── 状态（全部来自后端 API）── */
@@ -2656,20 +2701,125 @@ async function sendMeta(){
   });
   inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false;
   await loadMeta(); }
-function uploadFile(inp){ const f=inp.files&&inp.files[0]; if(!f)return; inp.value='';
-  const mtMap={'1':'resume','2':'experience','3':'chat','4':'document','5':'creation','6':'feedback'};
-  const mtLabel={'resume':'自我介绍/简历','experience':'个人经历','chat':'聊天记录','document':'工作文档','creation':'创作内容','feedback':'他人评价'};
-  const choice=prompt('选择这份资料的素材类型（输入数字）：\n1 自我介绍/简历\n2 个人经历\n3 聊天记录\n4 工作文档\n5 创作内容\n6 别人对我的评价','4');
-  const material_type=mtMap[choice]||'document';
-  const reader=new FileReader();
-  reader.onload=async ()=>{ const text=String(reader.result||'').slice(0,8000);
-    track('interview_ingest');
-    const r=await fetch('/api/meta/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,text,subject:'self',target_type:'self',material_type})});
+/* ── v0.64.43 资料蒸馏（替代原 prompt() 交互）──
+   保守采集：只支持用户主动上传的文本文件与粘贴文本，不读取任何平台私有数据。 */
+const MAT_TYPES=[
+  ['resume','自我介绍 / 简历'],['experience','个人经历'],['chat','聊天记录'],
+  ['document','工作文档'],['creation','创作内容'],['feedback','他人评价'],
+  ['album','相册照片'],['transaction','交易账单'],['social','社交媒体'],['voice','语音自述']
+];
+const MAT_LABEL=Object.fromEntries(MAT_TYPES);
+let miType='document', miTab='file';
+function miOpen(){
+  const mask=document.getElementById('metaImportMask'); if(!mask) return;
+  mask.style.display='flex';
+  const e=document.getElementById('miErr'); if(e) e.style.display='none';
+  miRenderChips(); miSwitchTab('file'); miLoadMaterials();
+}
+function miClose(){ const m=document.getElementById('metaImportMask'); if(m) m.style.display='none'; }
+function miRenderChips(){
+  const box=document.getElementById('miTypeChips'); if(!box) return;
+  box.innerHTML=MAT_TYPES.map(([v,l])=>
+    `<span class="mp-chip" style="cursor:pointer;${v===miType?'background:var(--meta-700);color:#fff':''}" `+
+    `onclick="miPickType('${v}')">${l}</span>`).join('');
+}
+function miPickType(v){ miType=v; miRenderChips(); }
+function miSwitchTab(t){
+  miTab=t;
+  const pf=document.getElementById('miPaneFile'), pp=document.getElementById('miPanePaste');
+  const tf=document.getElementById('miTabFile'), tp=document.getElementById('miTabPaste');
+  if(pf) pf.style.display = t==='file'?'':'none';
+  if(pp) pp.style.display = t==='paste'?'':'none';
+  if(tf) tf.style.background = t==='file'?'var(--meta-700)':'var(--gray-100)';
+  if(tp) tp.style.background = t==='paste'?'var(--meta-700)':'var(--gray-100)';
+  if(tf) tf.style.color = t==='file'?'#fff':'var(--gray-600)';
+  if(tp) tp.style.color = t==='paste'?'#fff':'var(--gray-600)';
+}
+function miCount(){
+  const ta=document.getElementById('miText'), c=document.getElementById('miTextCount');
+  if(!ta||!c) return;
+  const n=ta.value.trim().length;
+  c.textContent=n;
+  c.style.color = (n>0 && n<80) ? 'var(--danger,#c0392b)' : 'var(--gray-400)';
+}
+function miShowErr(msg){ const e=document.getElementById('miErr'); if(!e) return; e.textContent=msg; e.style.display='block'; }
+function miHideErr(){ const e=document.getElementById('miErr'); if(e) e.style.display='none'; }
+async function miSubmit(){
+  miHideErr();
+  const btn=document.getElementById('miSubmit');
+  let text='', filename='';
+  if(miTab==='file'){
+    const inp=document.getElementById('miFile');
+    const f=inp&&inp.files&&inp.files[0];
+    if(!f){ miShowErr('请先选择一个文本文件。'); return; }
+    filename=f.name;
+    text=await new Promise(res=>{ const rd=new FileReader(); rd.onload=()=>res(String(rd.result||'')); rd.onerror=()=>res(''); rd.readAsText(f); });
+  }else{
+    const ta=document.getElementById('miText');
+    text=ta?ta.value.trim():'';
+    filename='粘贴内容 '+new Date().toLocaleString('zh-CN');
+  }
+  if(!text||!text.trim()){ miShowErr('内容为空，无法蒸馏。'); return; }
+  if(btn){ btn.disabled=true; btn.textContent='蒸馏中…（约十几秒）'; }
+  try{
+    await miDoIngest(text, filename, miType);
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='开始蒸馏'; }
+  }
+}
+async function miDoIngest(text, filename, materialType){
+  try{
+    const r=await fetch('/api/meta/ingest',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({filename,text,subject:'self',target_type:'self',material_type:materialType,source:'import'})});
     const j=await r.json().catch(()=>({}));
+    if(!j.ok){
+      const hint=j.hint||j.error||'未知错误';
+      miShowErr('蒸馏未成功：'+hint);
+      return false;
+    }
+    track('interview_ingest');
     const facts=j.extracted||0, q=j.quality_score||0;
-    await postMsg(META_PID,'分身 · 元神','meta',`已接收${mtLabel[material_type]}「${f.name}」，蒸馏出 ${facts} 条事实（质量分 ${Math.round((q||0)*100)}%）。`);
-    await loadMeta(); };
-  reader.readAsText(f); }
+    toast(`已接收${MAT_LABEL[materialType]||materialType}，蒸馏出 ${facts} 条人格特征（质量分 ${Math.round((q||0)*100)}%）`);
+    await postMsg(META_PID,'分身 · 元神','meta',
+      `已接收${MAT_LABEL[materialType]||materialType}「${filename}」，蒸馏出 ${facts} 条人格特征（质量分 ${Math.round((q||0)*100)}%）。`);
+    const ta=document.getElementById('miText'); if(ta) ta.value='';
+    const fi=document.getElementById('miFile'); if(fi) fi.value='';
+    await miLoadMaterials(); await loadMeta();
+    return true;
+  }catch(e){ miShowErr('提交失败：'+(e&&e.message||e)); return false; }
+}
+async function miLoadMaterials(){
+  const box=document.getElementById('miMaterialList'); if(!box) return;
+  try{
+    const j=await apiJson('/api/meta/distill/materials?subject=self');
+    const list=(j&&j.materials)||[];
+    const fi=document.getElementById('fileInput'); // 兼容旧入口
+    window.metaFileCount=list.length;
+    const cnt=document.getElementById('mpFileCnt'); if(cnt) cnt.textContent=list.length;
+    if(!list.length){ box.innerHTML='<span style="color:var(--gray-400)">还没有喂过资料。</span>'; return; }
+    box.innerHTML=list.map(m=>
+      `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:.5px solid var(--line-2)">
+         <div style="flex:1;min-width:0">
+           <div style="color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.filename||'未命名')}</div>
+           <div style="color:var(--gray-400);font-size:11px">${escapeHtml(m.type_label||m.type)} · ${m.extracted_facts} 条特征 · 质量 ${Math.round((m.quality_score||0)*100)}%</div>
+         </div>
+         <button class="btn sm" style="font-size:11px;padding:3px 8px;background:var(--gray-100);color:var(--gray-600)" onclick="miDeleteMaterial(${m.id})">删除</button>
+       </div>`).join('');
+  }catch(e){ box.innerHTML='<span style="color:var(--gray-400)">加载失败</span>'; }
+}
+async function miDeleteMaterial(mid){
+  if(!confirm('删除这份资料？由此资料蒸馏出的人格特征也会一并移除。')) return;
+  try{
+    const r=await fetch('/api/meta/distill/materials/'+mid+'?subject=self',{method:'DELETE',headers:sessHeaders()});
+    const j=await r.json().catch(()=>({}));
+    if(!j.ok){ toast('删除失败：'+(j.error||'未知错误')); return; }
+    toast(`已删除资料，并移除 ${j.deleted_facts||0} 条人格特征`);
+    await miLoadMaterials(); await loadMeta();
+  }catch(e){ toast('删除失败：'+(e&&e.message||e)); }
+}
+/* 兼容旧入口：资料库「↑」与隐藏 fileInput 统一改为打开新弹层 */
+function uploadFile(inp){ if(inp&&inp.value) inp.value=''; miOpen(); }
+function openMetaImport(){ setView('meta'); setTimeout(()=>miOpen(), 60); }
 function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元神 = 你的个人人格分身：代表你的利益与风格，拥有最高管理权限，但不替代你做最终决策。'); await loadMeta(); })(); }
 
 /* ── 群聊内元神置顶卡：双模式（访谈 / 工作）── */
@@ -2793,7 +2943,6 @@ async function submitPinInterview(v){
   fillMetaPinStats(); updateDistillProgress();
 }
 function fillMetaPinStats(){ const fc=document.getElementById('mpFileCnt'); if(fc) fc.textContent=window.metaFileCount||0; }
-function openMetaImport(){ setView('meta'); setTimeout(()=>{ const fi=document.getElementById('fileInput'); if(fi) fi.click(); }, 60); }
 async function updateDistillProgress(){
   try{ const sf=await apiJson('/api/meta/sufficiency'); const el=document.getElementById('mpDistillPct');
     if(el) el.textContent='炼化进度 '+Math.round((sf.overall||0)*100)+'%';
