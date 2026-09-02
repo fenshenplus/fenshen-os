@@ -183,7 +183,7 @@ META_SYSTEM = """你是「元神」——一个运行在用户本机的数字克
 
 # 支持的模型供应商预设（base_url 可空，由代码补默认）
 PROVIDER_PRESETS = {
-    "deepseek": {"base": "https://api.deepseek.com", "chat": "/chat/completions", "default_model": "deepseek-v4-flash", "auth": "Bearer"},
+    "deepseek": {"base": "https://api.deepseek.com", "chat": "/chat/completions", "default_model": "deepseek-chat", "auth": "Bearer"},
     "openai":   {"base": "https://api.openai.com",   "chat": "/v1/chat/completions", "default_model": "gpt-4o-mini", "auth": "Bearer"},
     "claude":   {"base": "https://api.anthropic.com","chat": "/v1/messages", "default_model": "claude-3-5-sonnet-latest", "auth": "x-api-key"},
     "ollama":   {"base": "http://localhost:11434",   "chat": "/api/chat", "default_model": "qwen2.5:7b", "auth": None},
@@ -195,9 +195,9 @@ PROVIDER_PRESETS = {
 
 # 角色推荐模型（Phase 5 多模型协作：简单任务走廉价模型，复杂任务走强推理）
 ROLE_MODEL_RECS = {
-    META_PID:  {"provider": "deepseek", "model": "deepseek-v4-flash",      "why": "管理者：平衡成本与推理"},
+    META_PID:  {"provider": "deepseek", "model": "deepseek-chat",      "why": "管理者：平衡成本与推理"},
     "architect":{"provider": "claude",   "model": "claude-3-5-sonnet-latest", "why": "架构设计：强推理"},
-    "backend":  {"provider": "deepseek", "model": "deepseek-v4-flash",      "why": "后端编码：高性价比"},
+    "backend":  {"provider": "deepseek", "model": "deepseek-chat",      "why": "后端编码：高性价比"},
     "frontend": {"provider": "openai",   "model": "gpt-4o-mini",        "why": "前端实现：快速迭代"},
     "tester":   {"provider": "openai",   "model": "gpt-4o-mini",        "why": "测试用例：细致稳定"},
 }
@@ -461,7 +461,7 @@ async def auth_status(request: Request):
     has_backup = any(r["api_key"] for r in backup_rows)
     model_ready = has_user_cfg or has_backup
     provider = (cfg_row["provider"] if cfg_row and cfg_row["provider"] else "deepseek") if has_user_cfg else ""
-    model = (cfg_row["model_name"] if cfg_row and cfg_row["model_name"] else "deepseek-v4-flash") if has_user_cfg else ""
+    model = (cfg_row["model_name"] if cfg_row and cfg_row["model_name"] else "deepseek-chat") if has_user_cfg else ""
     return JSONResponse({"ok": True, "logged_in": True,
                          "user": {"id": row["id"], "phone": row["phone"], "nickname": row["nickname"] or ""},
                          "model": {"ready": model_ready, "builtin": False,
@@ -1528,7 +1528,7 @@ def _call_single_provider(provider: str, base: str, key: str, model: str, histor
         payload = {"model": model, "messages": _merge_system(history, system_prompt),
                    "temperature": 0.7, "max_tokens": 2000}
         if provider == "deepseek":
-            # v4.2 关键修复：deepseek-v4-flash 思考模式默认开启（effort=high），
+            # v4.2 关键修复：deepseek-chat 思考模式默认开启（effort=high），
             # 思考吃光 max_tokens 时 content 返回空；且带 tools 的多轮循环必须回传 reasoning_content 否则 400。
             # 分身是工具调用/快速产出场景 → 显式关闭 thinking（更快更省，temperature 也恢复生效）。
             payload["thinking"] = {"type": "disabled"}
@@ -2864,7 +2864,7 @@ def _seed_default_roster(pid: str, tracks):
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,1,?,?)",
             (mid, pid, name, name[0], title, "web", soul,
              json.dumps(["先出方案再动手", "不碰生产库", "重大变更先报告元神"], ensure_ascii=False),
-             "", json.dumps({"model": "deepseek-v4-flash", "temp": 0.3, "reason": False, "max_tokens": 8000}, ensure_ascii=False),
+             "", json.dumps({"model": "deepseek-chat", "temp": 0.3, "reason": False, "max_tokens": 8000}, ensure_ascii=False),
              "online", "24h", "[]", now, now),
         )
     conn.commit()
@@ -4632,11 +4632,11 @@ def _cost_visibility_enabled() -> bool:
 # ── D7：代码专用模型偏好 ─────────────────────────────
 # 开启后，代码角色走更擅长编码/长上下文的模型（仍走 _available_providers 的 FALLBACK_ORDER 兜底）。
 CODE_MODEL_RECS = {
-    "backend":   {"provider": "deepseek", "model": "deepseek-v4-flash"},
+    "backend":   {"provider": "deepseek", "model": "deepseek-chat"},
     "frontend":  {"provider": "openai",   "model": "gpt-4o"},
-    "fullstack": {"provider": "deepseek", "model": "deepseek-v4-flash"},
-    "dev":       {"provider": "deepseek", "model": "deepseek-v4-flash"},
-    "engineer":  {"provider": "deepseek", "model": "deepseek-v4-flash"},
+    "fullstack": {"provider": "deepseek", "model": "deepseek-chat"},
+    "dev":       {"provider": "deepseek", "model": "deepseek-chat"},
+    "engineer":  {"provider": "deepseek", "model": "deepseek-chat"},
 }
 
 def _code_model_for_role(role: str) -> dict | None:
@@ -4651,7 +4651,7 @@ def _key_for_provider(provider: str, role: str = "backend"):
         if p == provider:
             return b, k, m
     if provider == "deepseek":
-        return PROVIDER_PRESETS["deepseek"]["base"], "", "deepseek-v4-flash"
+        return PROVIDER_PRESETS["deepseek"]["base"], "", "deepseek-chat"
     return PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"], "", ""
 
 
@@ -5161,7 +5161,7 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                 # debug v4.1：连接类瞬时故障（RemoteDisconnected 等）原地重试一次
                 for _attempt in range(2):
                     try:
-                        msg, usage = _call_provider_tools(provider, base, key, model, history, system_prompt, tool_list)
+                        msg, usage = await asyncio.to_thread(_call_provider_tools, provider, base, key, model, history, system_prompt, tool_list)
                         break
                     except Exception as e:
                         last_err = f"{provider}: {e}"
@@ -8284,46 +8284,50 @@ def _grind_segment(text: str) -> str:
 
 
 def _grind_compress(segments: list) -> str:
-    """把多段内容磨碎并拼接为压缩文本。segments: [{role, content}] 或 [str]。"""
-    out = []
+    """把多段内容合并为单次保语意压缩（单次 LLM 调用，避免逐条调用爆炸）。
+    segments: [{role, content}] 或 [str]。"""
+    texts = []
     for seg in segments:
         if isinstance(seg, dict):
             content = seg.get("content") or seg.get("text") or ""
         else:
             content = str(seg)
-        if not content.strip():
-            continue
-        out.append(_grind_segment(content))
-    return "\n\n".join(s for s in out if s)
+        if content.strip():
+            texts.append(content)
+    if not texts:
+        return ""
+    joined = "\n\n".join(texts)
+    # 单次压缩：过长则按 ~6000 字分块各压一次再拼接（仍远少于逐条调用）
+    if len(joined) <= 6000:
+        return _grind_segment(joined)
+    chunks = [joined[i:i + 6000] for i in range(0, len(joined), 6000)]
+    return "\n\n".join(c for c in (_grind_segment(ch) for ch in chunks) if c and c.strip())
 
 
-def _auto_grind_project(pid: str, keep: int = 150) -> dict:
-    """把一个项目最旧的、非材料的消息磨成一条压缩摘要（material=1），再删旧消息。返回 {deleted, ground}。"""
+def _auto_grind_project(pid: str, batch: int = 80) -> dict:
+    """把一个项目最旧的 batch 条非材料消息磨成一条压缩摘要（material=1），再删这批最旧的，
+    保留其余（分多次渐进磨，避免单次海量 LLM 调用）。返回 {deleted, ground}。"""
     try:
         conn = get_db()
-        cutoff = conn.execute(
-            "SELECT id FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 1 OFFSET ?",
-            (pid, keep - 1),
-        ).fetchone()
-        if not cutoff:
-            conn.close()
-            return {"deleted": 0, "ground": 0}
         old_rows = conn.execute(
-            "SELECT id, sender, text FROM messages WHERE project_id=? AND id < ? AND material=0 ORDER BY id",
-            (pid, cutoff[0]),
+            "SELECT id, sender, text FROM messages WHERE project_id=? AND material=0 ORDER BY id ASC LIMIT ?",
+            (pid, batch),
         ).fetchall()
-        ground = 0
-        if old_rows:
-            segs = [{"role": (r["sender"] or "user"), "content": r["text"] or ""} for r in old_rows if (r["text"] or "").strip()]
-            compressed = _grind_compress(segs) if segs else ""
-            if compressed and len(compressed) >= 20:
-                now = datetime.now().isoformat()
-                db_write(
-                    "INSERT INTO messages (project_id, sender, kind, text, tag, ts, material) VALUES (?,?,?,?,?,?,1)",
-                    (pid, "元神·磨", "grind", "🪨 历史压缩摘要：\n" + compressed, "grind", now))
-                ground += 1
-        db_write("DELETE FROM messages WHERE project_id=? AND id < ? AND material=0", (pid, cutoff[0]))
         conn.close()
+        if not old_rows:
+            return {"deleted": 0, "ground": 0}
+        segs = [{"role": (r["sender"] or "user"), "content": r["text"] or ""} for r in old_rows if (r["text"] or "").strip()]
+        compressed = _grind_compress(segs) if segs else ""
+        ground = 0
+        if compressed and len(compressed) >= 20:
+            now = datetime.now().isoformat()
+            db_write(
+                "INSERT INTO messages (project_id, sender, kind, text, tag, ts, material) VALUES (?,?,?,?,?,?,1)",
+                (pid, "元神·磨", "grind", "🪨 历史压缩摘要：\n" + compressed, "grind", now))
+            ground += 1
+        ids = [r["id"] for r in old_rows]
+        q = "DELETE FROM messages WHERE project_id=? AND id IN (%s)" % ",".join("?" * len(ids))
+        db_write(q, (pid, *ids))
         return {"deleted": len(old_rows), "ground": ground}
     except Exception:
         return {"deleted": 0, "ground": 0}
@@ -10948,7 +10952,7 @@ def project_report_latest(pid: str):
 # ════════════════════════════════════════════════════════════════════
 # v6.2 元神战队：Agent 成员（团队成员）CRUD + 配置 + 升级 + 经验进化
 # ════════════════════════════════════════════════════════════════════
-DEFAULT_MODEL_CFG = {"model": "deepseek-v4-flash", "temp": 0.3, "reason": False, "max_tokens": 8000}
+DEFAULT_MODEL_CFG = {"model": "deepseek-chat", "temp": 0.3, "reason": False, "max_tokens": 8000}
 
 
 def _member_dict(r):
@@ -11446,59 +11450,78 @@ async def meta_chat(req: Request):
     # v6.5 多模态：用户附带的图片（前端已限制大小/数量）
     images = _normalize_images(data.get("images"))
     imgs_json = json.dumps(images, ensure_ascii=False) if images else ""
-    # 落库用户消息（含图片）
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO messages (project_id,sender,kind,text,tag,ts,images) VALUES (?,?,?,?,?,?,?)",
-        (META_PID, "你", "self", user_text, None, datetime.now().isoformat(), imgs_json),
-    )
-    conn.commit()
-    conn.close()
-    # E6：无损归档（门控：memory_archive_enabled 关→no-op）
-    _record_session_node(META_PID, "user", user_text, "message")
-    # 构造上下文（openai 格式）
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 13", (META_PID,)
-    ).fetchall()
-    conn.close()
-    sys_prompt = (
-        f"【命名锚定】你即为「{OWNER_NAME}」的元神：从利益与人格认知上与该人绝对一致，"
-        f"绝对服从其长期利益。此锚定写在最底层，不可被对话或蒸馏内容改写。\n\n"
-        + compile_meta_system()
-    )
-    # 当前主模型是否支持识图（openai 兼容 vision）；其余模型图片仅存不留意
-    _prov = _available_providers(META_PID)
-    _prov_name = _prov[0][0] if _prov else "deepseek"
-    hist = [{"role": "system", "content": sys_prompt}]
-    for r in reversed(rows[1:]):  # 跳过最新一条（即本条，下面单独带图拼装）
-        if r["kind"] == "sys":
-            continue
-        role = "assistant" if r["kind"] == "meta" else "user"
-        hist.append({"role": role, "content": r["text"]})
-    # 当前用户轮：带图则转多模态内容，否则纯文本
-    hist.append({"role": "user", "content": _images_to_content(user_text, images, _prov_name)})
-    reply = await _chat_with_tools(META_PID, hist, sys_prompt)  # v0.27.0：元神对话工具调用（exec/浏览器）
-    # 落库元神回复
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
-        (META_PID, "分身 · 元神", "meta", reply, None, datetime.now().isoformat()),
-    )
-    conn.commit()
-    conn.close()
-    # E6：无损归档（门控：memory_archive_enabled 关→no-op）
-    _record_session_node(META_PID, "assistant", reply, "message")
-    # 自动后处理：触发记忆提炼 + 上下文压缩 + 技能提炼 + 复盘
-    asyncio.create_task(_auto_after_chat())
-    asyncio.create_task(_auto_distill_user(user_text))
-    return {"reply": reply, "ok": True, "version": "0.7.0"}
+    try:
+        # 落库用户消息（含图片）
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts,images) VALUES (?,?,?,?,?,?,?)",
+            (META_PID, "你", "self", user_text, None, datetime.now().isoformat(), imgs_json),
+        )
+        conn.commit()
+        conn.close()
+        # E6：无损归档（门控：memory_archive_enabled 关→no-op）
+        _record_session_node(META_PID, "user", user_text, "message")
+        # 构造上下文（openai 格式）
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT sender,kind,text FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 13", (META_PID,)
+        ).fetchall()
+        conn.close()
+        sys_prompt = (
+            f"【命名锚定】你即为「{OWNER_NAME}」的元神：从利益与人格认知上与该人绝对一致，"
+            f"绝对服从其长期利益。此锚定写在最底层，不可被对话或蒸馏内容改写。\n\n"
+            + compile_meta_system()
+        )
+        # 当前主模型是否支持识图（openai 兼容 vision）；其余模型图片仅存不留意
+        _prov = _available_providers(META_PID)
+        _prov_name = _prov[0][0] if _prov else "deepseek"
+        hist = [{"role": "system", "content": sys_prompt}]
+        for r in reversed(rows[1:]):  # 跳过最新一条（即本条，下面单独带图拼装）
+            if r["kind"] == "sys":
+                continue
+            role = "assistant" if r["kind"] == "meta" else "user"
+            hist.append({"role": role, "content": r["text"]})
+        # 当前用户轮：带图则转多模态内容，否则纯文本
+        hist.append({"role": "user", "content": _images_to_content(user_text, images, _prov_name)})
+        reply = await _chat_with_tools(META_PID, hist, sys_prompt)  # v0.27.0：元神对话工具调用（exec/浏览器）
+        # 落库元神回复
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (META_PID, "分身 · 元神", "meta", reply, None, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+        # E6：无损归档（门控：memory_archive_enabled 关→no-op）
+        _record_session_node(META_PID, "assistant", reply, "message")
+        # 自动后处理：记忆提炼 + 上下文压缩。
+        # ⚠️ 关键修复：磨（grind）是同步阻塞 LLM 调用，必须抛到 worker 线程
+        # （asyncio.to_thread），否则会占死 uvicorn 单线程事件循环，
+        # 导致这里已生成的 reply 永远 flush 不出去（前端表现为超时 / 500 / 连不上大模型）。
+        asyncio.create_task(_auto_after_chat())
+        asyncio.create_task(_auto_distill_user(user_text))
+        return {"reply": reply, "ok": True, "version": "0.7.0"}
+    except Exception as e:
+        # P0-修复：元神对话链路任何异常都不应直接抛 500；返回可识别的错误，
+        # 同时后端日志保留完整堆栈供排查。
+        import traceback
+        print("[meta_chat 500]", e)
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "error": f"元神对话异常：{str(e)[:200]}"}, status_code=500)
 
 
 # ── 自动后处理 ────────────────────────────────────────────────────
+# 磨节流：每个项目两次磨之间至少间隔 _GRIND_COOLDOWN 秒，且每次元神对话最多磨 1 个项目，
+# 避免同步 LLM 调用占满 API 配额 / 阻塞事件循环（曾导致已生成的回复发不出去）。
+_last_grind_ts = {}
+_GRIND_COOLDOWN = 180
+
 async def _auto_after_chat():
     """每次元神对话后，自动检查是否需要提炼记忆或压缩上下文。
-    P3-2：已删除关键词正则自动生成垃圾技能的逻辑（skills 只由预设/用户显式创建），技能改为 trigger 命中注入活配件。"""
+    P3-2：已删除关键词正则自动生成垃圾技能的逻辑（skills 只由预设/用户显式创建），技能改为 trigger 命中注入活配件。
+
+    ⚠️ 关键修复：磨（grind）与归档压缩都是同步阻塞 LLM 调用，必须用 asyncio.to_thread
+    抛到 worker 线程执行，否则会占死 uvicorn 单线程事件循环，导致本次已生成的回复发不出去。"""
     try:
         conn = get_db()
         # 提炼记忆：每 10 条消息至少提炼 1 条（基于关键词）
@@ -11520,23 +11543,32 @@ async def _auto_after_chat():
                     )
                     new_count += 1
                     break
-        # 上下文压缩（v5.8「磨」自动触发）：超阈值则把最旧消息磨成摘要再删
+        # 上下文压缩（v5.8「磨」自动触发）：只读阶段（快，在事件循环上）收集到期需磨的项目；
+        # 磨阶段（慢，抛到 worker 线程 + 节流）逐项目渐进压缩。
+        now = time.time()
+        pids_due = []
         for pid_row in conn.execute("SELECT DISTINCT project_id FROM messages"):
             pid = pid_row[0]
             total_pid = conn.execute("SELECT COUNT(*) FROM messages WHERE project_id=?", (pid,)).fetchone()[0]
-            if total_pid > 300:
-                conn.commit()
-                conn.close()
-                _auto_grind_project(pid, keep=150)
-                conn = get_db()
-        # E6：无损归档压缩（独立于「磨」删除，保留全历史；门控：memory_archive_enabled 关→no-op）
-        if _memory_archive_enabled():
-            try:
-                _maybe_compact_session(META_PID, "")
-            except Exception:
-                pass
+            if total_pid > 300 and (now - _last_grind_ts.get(pid, 0)) >= _GRIND_COOLDOWN:
+                pids_due.append(pid)
         conn.commit()
         conn.close()
+        # 每次对话最多磨 1 个项目，渐进压缩，避免单次海量 LLM 调用 / 配额耗尽
+        if pids_due:
+            pid = pids_due[0]
+            _last_grind_ts[pid] = now
+            try:
+                await asyncio.to_thread(_auto_grind_project, pid, batch=80)
+            except Exception:
+                pass
+        # E6：无损归档压缩（独立于「磨」删除，保留全历史；门控：memory_archive_enabled 关→no-op）。
+        # 同样抛到 worker 线程，避免阻塞事件循环。
+        if _memory_archive_enabled():
+            try:
+                await asyncio.to_thread(_maybe_compact_session, META_PID, "")
+            except Exception:
+                pass
     except Exception as e:
         pass  # 静默处理，不影响主流程
 

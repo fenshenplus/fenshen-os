@@ -527,7 +527,7 @@
       </div>
       <div class="field" style="margin-bottom:12px">
         <label style="font-size:12px;color:var(--gray-500)">模型名</label>
-        <input id="setupModelName" class="auth-input" style="margin-bottom:0" placeholder="如 deepseek-v4-flash / gpt-4o-mini">
+        <input id="setupModelName" class="auth-input" style="margin-bottom:0" placeholder="如 deepseek-chat / gpt-4o-mini（留空用官方默认）">
       </div>
       <div style="margin:10px 0 4px;display:flex;align-items:center;justify-content:space-between">
         <label style="font-size:12px;color:var(--gray-600);font-weight:600">备用模型（可选，主模型失败自动切换）</label>
@@ -535,13 +535,17 @@
       </div>
       <div id="setupBackups" style="display:flex;flex-direction:column;gap:8px"></div>
       <div class="auth-err" id="modelSetupErr"></div>
-      <button class="btn meta auth-btn" id="btnModelSetupUse" onclick="submitModelSetup()">保存并进入</button>
+      <div id="modelSetupTest" style="font-size:12px;min-height:16px;margin-bottom:10px;color:var(--fg)"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn sm" type="button" onclick="testSetupModel(this)">测试连接</button>
+        <button class="btn meta auth-btn" id="btnModelSetupUse" onclick="submitModelSetup()" style="flex:1">保存并进入</button>
+      </div>
     </div>
   </div>
 
   <style>
-  .auth-mask{position:fixed;inset:0;background:rgba(15,12,40,.55);display:flex;align-items:center;justify-content:center;z-index:9999}
-  .auth-card{width:320px;max-width:90vw;background:#fff;border-radius:16px;padding:22px 22px 18px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .auth-mask{position:fixed;inset:0;background:rgba(15,12,40,.55);display:flex;align-items:flex-start;justify-content:center;z-index:9999;overflow-y:auto;padding:5vh 0}
+  .auth-card{width:320px;max-width:90vw;background:#fff;border-radius:16px;padding:22px 22px 18px;box-shadow:0 12px 40px rgba(0,0,0,.25);max-height:90vh;overflow-y:auto}
   .auth-title{font-size:18px;font-weight:600;color:#221c4a}
   .auth-sub{font-size:11px;color:#9aa0b4;margin:6px 0 14px;line-height:1.5}
   .auth-tabs{display:flex;gap:18px;margin-bottom:12px}
@@ -1904,6 +1908,11 @@ async function submitModelSetup(){
               model_name:(row.querySelector('.bk-name').value||'').trim()};
     if(bk.api_key) backups.push(bk);
   });
+  // 保存前必须本界面测试连通：不通就不能确认
+  try{
+    const tj=await apiJson('/api/models/'+META_PID+'/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,base_url,api_key:key,model_name})});
+    if(!tj.ok){ errEl.textContent='⚠️ 模型连通测试未通过：'+(tj.error||'失败')+'。请检查 Key 与模型名后重试，未通过不能保存。'; return; }
+  }catch(e){ errEl.textContent='测试请求失败：'+errText(e); return; }
   try{
     const r=await apiJson('/api/models/'+META_PID, {
       method:'PUT',
@@ -1922,6 +1931,24 @@ async function submitModelSetup(){
     const tip = backups.length ? ('（含 '+backups.length+' 个备用模型，主模型失败时自动切换）') : '';
     toast('✅ 模型已配置，元神可以开始对话了'+tip);
   }catch(e){ errEl.textContent='保存失败：'+errText(e); }
+}
+/* 首次引导「测试连接」：本界面用输入的 Key 直接探活，不通则明确提示 */
+async function testSetupModel(btn){
+  const provider=document.getElementById('setupModelProvider').value;
+  const base_url=document.getElementById('setupModelBase').value.trim();
+  const key=document.getElementById('setupModelKey').value.trim();
+  const model_name=document.getElementById('setupModelName').value.trim();
+  const errEl=document.getElementById('modelSetupErr');
+  const t=document.getElementById('modelSetupTest');
+  if(provider!=='ollama' && !key){ errEl.textContent='请先填写 API Key 再测试。'; return; }
+  if(t) t.textContent='测试中…（可能要等十几秒）';
+  await withBusy(btn,'测试中…',async()=>{
+    try{
+      const j=await apiJson('/api/models/'+META_PID+'/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,base_url,api_key:key,model_name})});
+      if(t) t.textContent = j.ok ? ('✅ 连通成功：'+(j.reply||'')) : ('❌ '+ (j.error||'失败'));
+      toast(j.ok?'模型连通':'模型没连上：'+(j.error||'失败'), j.ok?'ok':'err');
+    }catch(e){ if(t) t.textContent='❌ 请求失败：'+errText(e); throw e; }
+  });
 }
 function showAuthModal(){ const m=document.getElementById('authMask'); if(m) m.style.display='flex'; const e=document.getElementById('authErr'); if(e) e.textContent=''; }
 function hideAuthModal(){ const m=document.getElementById('authMask'); if(m) m.style.display='none'; }

@@ -1,71 +1,44 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>隐私政策 · 分身</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" type="image/png" href="./favicon.png" />
+<title>隐私政策 · 分身AI助手</title>
 <style>
-  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;line-height:1.7;color:#1c1c1e;max-width:720px;margin:0 auto;padding:40px 20px;background:#fff}
-  h1{font-size:24px;margin-bottom:8px}
-  .sub{color:#6e6e73;font-size:13px;margin-bottom:32px}
-  h2{font-size:17px;margin-top:28px;margin-bottom:10px;color:#000}
-  p{font-size:14px;margin:10px 0;color:#333}
-  ul{font-size:14px;color:#333;padding-left:22px}
-  li{margin:6px 0}
-  .back{display:inline-block;margin-top:32px;font-size:14px;color:#007aff;text-decoration:none}
-  .back:hover{text-decoration:underline}
+  :root{--blue:#007aff;--gray-900:#1c1c1e;--gray-400:#8e8e93;--gray-100:#f5f5f7}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--gray-900);background:var(--gray-100);line-height:1.7;font-size:15px}
+  .wrap{max-width:760px;margin:0 auto;padding:48px 20px 80px}
+  h1{font-size:24px;margin-bottom:6px}
+  .sub{color:var(--gray-400);font-size:13px;margin-bottom:28px}
+  h2{font-size:17px;margin:26px 0 10px}
+  p{margin:10px 0;color:#3a3a3c}
+  a{color:var(--blue);text-decoration:none}
+  .back{display:inline-block;margin-top:32px;color:var(--blue);font-size:14px}
 </style>
 </head>
 <body>
-  <h1>隐私政策</h1>
-  <div class="sub">生效日期：2026 年 8 月 22 日 · 更新日期：2026 年 8 月 27 日</div>
+  <div class="wrap">
+    <h1>隐私政策</h1>
+    <div class="sub">分身AI助手（fenshen.plus）· 最后更新：2026 年</div>
 
-  <p>分身（以下简称"本应用"）尊重并保护所有用户的个人隐私。本政策将帮助您了解我们在您使用本应用时如何收集、使用、存储和保护您的个人信息。</p>
+    <h2>1. 我们收集什么</h2>
+    <p>分身是<strong>本地优先</strong>的个人数字分身引擎：你的聊天记录、项目数据、蒸馏素材与人格模型默认全部存储在你本机 SQLite 数据库，<strong>不主动上传云端</strong>。</p>
 
-  <h2>一、我们收集的信息</h2>
-  <p>为了向您提供服务，我们可能收集以下信息：</p>
-  <ul>
-    <li><b>账号信息</b>：手机号、邮箱、密码（加密存储）、昵称等您主动填写的信息；</li>
-    <li><b>设备与日志信息</b>：设备标识、操作系统版本、IP 地址、应用崩溃日志、操作日志等；</li>
-    <li><b>您授权的数据</b>：您主动上传的文档、资料、项目文件，以及您授权本应用访问的本地文件；</li>
-    <li><b>对话与任务数据</b>：您与元神的对话记录、任务看板、成员配置等工作区数据。</li>
-  </ul>
+    <h2>2. 模型调用</h2>
+    <p>调用大模型需要你自带 API Key。Key 仅保存在你本机，用于向你指定的模型服务商发起请求；我们不会代收、转发或存储你的模型密钥。</p>
 
-  <h2>二、信息的使用</h2>
-  <p>我们仅将您的信息用于：</p>
-  <ul>
-    <li>提供、维护和改进本应用服务；</li>
-    <li>完成您请求的任务、命令执行、浏览器自动化等操作；</li>
-    <li>保障账号安全、防止欺诈和滥用；</li>
-    <li>在您同意的情况下发送服务通知。</li>
-  </ul>
+    <h2>3. 通讯与下载</h2>
+    <p>手机端作为通信终端通过中转服务连接你的桌面引擎；域名 fenshen.plus 仅提供产品介绍与安装包下载，不要求注册账号。</p>
 
-  <h2>三、本地优先与数据存储</h2>
-  <p>本应用采用<strong>本地优先</strong>架构：您的工作区数据、对话记录、项目文件默认存储在您的本机，我们不会上传至云端。仅在您明确使用需要联网的功能（如短信验证码、大模型 API 调用）时，才会向第三方服务传输必要数据。</p>
+    <h2>4. 你的权利</h2>
+    <p>你可随时在桌面端删除任意蒸馏素材，由其产生的全部人格事实会一并移除。卸载即销毁本机全部数据。</p>
 
-  <h2>四、信息共享</h2>
-  <p>我们不会将您的个人信息出售给任何第三方。仅在以下情形可能共享：</p>
-  <ul>
-    <li>获得您的明确同意；</li>
-    <li>法律法规要求或政府机关依法要求；</li>
-    <li>为完成服务所必需的第三方服务提供商（如云短信、大模型 API），且受保密义务约束。</li>
-  </ul>
+    <h2>5. 联系我们</h2>
+    <p>如有隐私疑问，可通过官网首页渠道联系分身AI助手团队。</p>
 
-  <h2>五、信息安全</h2>
-  <p>我们采取合理的技术和管理措施保护您的信息安全，包括密码加密、本地令牌鉴权、敏感操作审批等。但请注意，任何网络传输和存储都无法保证绝对安全。</p>
-
-  <h2>六、您的权利</h2>
-  <p>您可以随时访问、修改、删除您的个人信息，或通过卸载应用并删除 <code>~/.fenshen</code> 目录彻底清除本地数据。</p>
-
-  <h2>七、未成年人保护</h2>
-  <p>本应用主要面向成年人。如果您是未成年人，请在监护人指导下使用。</p>
-
-  <h2>八、政策更新</h2>
-  <p>我们可能不时修订本政策。更新后的政策将在本页面发布，重大变更会通过应用内提示告知您。</p>
-
-  <h2>九、联系我们</h2>
-  <p>如您对本隐私政策有任何疑问，请通过应用内反馈或 GitHub Issues 与我们联系。</p>
-
-  <a class="back" href="./index.html">← 返回官网</a>
+    <a class="back" href="./index.html">← 返回首页</a>
+  </div>
 </body>
 </html>

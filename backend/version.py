@@ -15,7 +15,7 @@ import os
 import subprocess
 
 # ── 版本号（语义化 MAJOR.MINOR.PATCH）──
-SEMVER = "0.64.43"
+SEMVER = "0.64.44"
 
 # ── 发布标识（对外给人看的版本，如 v6.4）──
 RELEASE = "v6.4"
@@ -24,7 +24,7 @@ RELEASE = "v6.4"
 SCHEMA_VERSION = 1
 
 # ── 构建日期（发版时更新；scripts/bump_version.py 会自动维护）──
-BUILD_DATE = "2026-08-31"
+BUILD_DATE = "2026-09-02"
 
 
 def _git_commit() -> str:
