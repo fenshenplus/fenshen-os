@@ -3678,6 +3678,12 @@ async def set_model(agent_id: str, req: Request):
     base_url = data.get("base_url", "").strip() or None
     api_key = data.get("api_key", "").strip() or None
     model_name = data.get("model_name", "").strip() or None
+    # P0-归一化：deepseek 供应商模型名大小写/别名容错，非法名（如用户误填 "Deepseek"）
+    # 一律回落到官方真实通用模型 deepseek-v4-flash，避免 400 Bad Request 致连不上大模型。
+    if provider == "deepseek":
+        _DS_VALID = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp", "deepseek-chat", "deepseek-reasoner"}
+        _mn = (model_name or "").strip().lower()
+        model_name = _mn if _mn in _DS_VALID else "deepseek-v4-flash"
     conn = get_db()
     conn.execute(
         "INSERT OR REPLACE INTO model_configs (agent_id,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?)",
@@ -3711,6 +3717,10 @@ async def test_model(agent_id: str, req: Request):
     key = data.get("api_key", "").strip()
     base = data.get("base_url", "").strip() or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"]
     model = data.get("model_name", "").strip() or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["default_model"]
+    if provider == "deepseek":
+        _DS_VALID = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp", "deepseek-chat", "deepseek-reasoner"}
+        _mn = (model or "").strip().lower()
+        model = _mn if _mn in _DS_VALID else "deepseek-v4-flash"
     if not key and provider != "ollama":
         return {"ok": False, "error": "缺少 API Key"}
     try:
