@@ -30,6 +30,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSION_FILE = os.path.join(ROOT, "backend", "version.py")
 CHANGELOG = os.path.join(ROOT, "CHANGELOG.md")
 VMGMT = os.path.join(ROOT, "VERSION_MANAGEMENT.md")
+# macOS 外壳版本：必须与 version.py 同步，否则会出现「外壳 0.64.42 + 二进制 0.64.43」的错配
+PLIST = os.path.join(ROOT, "packaging", "macos", "Info.plist")
 SMOKE = os.path.join(ROOT, "tests", "smoke_v40.py")
 
 
@@ -97,6 +99,26 @@ def write_vmgmt(release: str, date: str) -> None:
     open(VMGMT, "w").write(c)
 
 
+def write_infoplist(new_semver: str) -> bool:
+    """同步 macOS 外壳 CFBundleVersion。
+
+    历史上多次出现「version.py 已 bump、Info.plist 没跟上」导致打包出
+    「外壳版本 < 二进制版本」的错配包（v0.64.42 事故）。此处在 bump 时一并写入，
+    从流程上杜绝该问题。
+    """
+    if not os.path.exists(PLIST):
+        return False
+    c = open(PLIST).read()
+    new_c, n = re.subn(
+        r"(<key>CFBundleVersion</key>\s*<string>)[\d.]+(</string>)",
+        rf"\g<1>{new_semver}\g<2>", c)
+    if n == 0:
+        return False
+    if new_c != c:
+        open(PLIST, "w").write(new_c)
+    return True
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("kind", choices=["major", "minor", "patch"])
@@ -121,7 +143,13 @@ def main() -> None:
     write_version(new, release, date)
     write_changelog(new, release, date, args.message)
     write_vmgmt(release or _current_release(), date)
-    print(f"✓ 已 bump 至 {new}" + (f" / {release}" if release else "") + "，并更新 CHANGELOG.md + VERSION_MANAGEMENT.md")
+    plist_ok = write_infoplist(new)
+    files = "CHANGELOG.md + VERSION_MANAGEMENT.md"
+    if plist_ok:
+        files += " + packaging/macos/Info.plist"
+    print(f"✓ 已 bump 至 {new}" + (f" / {release}" if release else "") + f"，并更新 {files}")
+    if not plist_ok:
+        print("  ⚠️ 未能同步 packaging/macos/Info.plist（文件缺失或格式不符），请手动核对 CFBundleVersion！")
     print("  下一步：git commit + git tag + 跑安装包/官网推送。")
 
 
