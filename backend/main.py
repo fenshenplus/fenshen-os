@@ -1349,6 +1349,46 @@ def get_model_config(agent_id: str):
     conn = get_db()
     row = conn.execute("SELECT * FROM model_configs WHERE agent_id=?", (agent_id,)).fetchone()
     conn.close()
+    if row and row["api_key"]:
+        return dict(row)
+    # 优先级提高：DB 缺失 key 时立即从冗余文件尝试恢复并落库
+    try:
+        path = _model_store_path()
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as _f:
+                data = json.load(_f)
+            rec = data.get(agent_id)
+            if rec and rec.get("api_key"):
+                preset = PROVIDER_PRESETS.get(rec.get("provider") or "deepseek", PROVIDER_PRESETS["deepseek"])
+                restored = {
+                    "agent_id": agent_id,
+                    "provider": rec.get("provider") or "deepseek",
+                    "base_url": rec.get("base_url") or None,
+                    "api_key": rec.get("api_key"),
+                    "model_name": rec.get("model_name") or preset["default_model"],
+                }
+                conn2 = get_db()
+                try:
+                    conn2.execute(
+                        "INSERT OR REPLACE INTO model_configs (agent_id,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?)",
+                        (agent_id, restored["provider"], restored["base_url"], restored["api_key"], restored["model_name"]),
+                    )
+                    # 备用模型一并恢复
+                    for i, b in enumerate(rec.get("backups") or []):
+                        if not b or not b.get("api_key"):
+                            continue
+                        bp = PROVIDER_PRESETS.get(b.get("provider") or "deepseek", PROVIDER_PRESETS["deepseek"])
+                        conn2.execute(
+                            "INSERT OR REPLACE INTO model_backups (agent_id,idx,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?,?)",
+                            (agent_id, i, b.get("provider") or "deepseek", b.get("base_url") or None,
+                             b.get("api_key"), b.get("model_name") or bp["default_model"]),
+                        )
+                    conn2.commit()
+                finally:
+                    conn2.close()
+                return restored
+    except Exception:
+        pass
     if row:
         return dict(row)
     return None
@@ -3687,6 +3727,7 @@ def list_models():
             "has_key": bool(_raw_key),
             "key_mask": _mask,
             "backups": backups,
+            "source": "db" if _raw_key else "none",
             "recommended": rec.get("provider", ""),
             "recommended_model": rec.get("model", ""),
             "recommend_why": rec.get("why", ""),
@@ -3798,6 +3839,16 @@ async def cross_check(req: Request):
         "b": {"agent_id": agent_b, "result": result_b, "degraded": degraded_b},
     }
 
+
+@app.post("/api/models/{agent_id}/restore")
+async def restore_model_api(agent_id: str):
+    """主动触发从冗余文件恢复某 agent 的模型配置（幂等）。"""
+    cfg = get_model_config(agent_id)
+    if cfg and cfg.get("api_key"):
+        return {"ok": True, "restored": False, "has_key": True, "source": "db"}
+    # get_model_config 已内置 store fallback；再读一次确认
+    cfg2 = get_model_config(agent_id)
+    return {"ok": bool(cfg2 and cfg2.get("api_key")), "restored": True, "has_key": bool(cfg2 and cfg2.get("api_key")), "source": "store" if (cfg2 and cfg2.get("api_key")) else "none"}
 
 @app.put("/api/models/{agent_id}")
 async def set_model(agent_id: str, req: Request):

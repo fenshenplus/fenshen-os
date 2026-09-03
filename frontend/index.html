@@ -345,16 +345,21 @@
   .annot-tip { display:none; position:fixed; top:54px; left:50%; transform:translateX(-50%); background:var(--amber); color:var(--on-accent); font-size:11px; padding:4px 12px; border-radius:20px; z-index:60; }
   .annot-panel { position:fixed; top:0; right:0; width:300px; height:100vh; background:var(--bg); border-left:0.5px solid var(--gray-200); box-shadow:-4px 0 16px rgba(0,0,0,.06); display:none; flex-direction:column; z-index:55; }
   .annot-panel.show { display:flex; }
-  /* 元神产出展示区：最右侧滑出面板（可开合） */
+  /* 元神产出展示区：最右侧常驻面板，只展开/收起，不关闭 */
   .out-panel{position:fixed;top:0;right:0;width:340px;height:100vh;background:var(--bg);border-left:.5px solid var(--gray-200);box-shadow:-4px 0 16px rgba(0,0,0,.06);display:none;flex-direction:column;z-index:56;transition:width .18s ease}
   .out-panel.show{display:flex}
-  .out-panel .op-h{padding:12px 14px;font-size:13px;font-weight:500;border-bottom:.5px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center;gap:8px}
-  /* 收起态：缩成右侧窄条，仅留图标 */
-  .out-panel.collapsed{width:44px}
+  .out-panel .op-h{padding:12px 14px;font-size:13px;font-weight:500;border-bottom:.5px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center;gap:8px;user-select:none}
+  .out-panel .op-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .out-panel .split-close{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:transparent;border:none;color:var(--gray-500);cursor:pointer;font-size:15px;line-height:1}
+  .out-panel .split-close:hover{background:var(--gray-100);color:var(--fg)}
+  /* 收起态：右侧窄条，整体可点击展开，保留竖排标题提示 */
+  .out-panel.collapsed{width:44px;cursor:pointer}
+  .out-panel.collapsed:hover{background:var(--gray-50)}
   .out-panel.collapsed .out-body{display:none}
-  .out-panel.collapsed .op-h{padding:10px 4px;flex-direction:column;justify-content:center;gap:10px}
-  .out-panel.collapsed .op-h > span{display:none}
-  .out-panel.collapsed .op-h .split-close{font-size:14px}
+  .out-panel.collapsed .op-h{padding:10px 4px;flex-direction:column;justify-content:flex-start;align-items:center;gap:10px;height:100vh;border-bottom:none}
+  .out-panel.collapsed .op-title{display:block;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:2px;font-size:11px;color:var(--gray-500);white-space:nowrap;transform:rotate(180deg);margin-top:8px}
+  .out-panel.collapsed .op-title .emoji-only{display:inline}
+  .out-panel.collapsed .split-close{order:-1;margin-top:6px;font-size:16px}
   .out-body{flex:1;overflow-y:auto;padding:10px 12px}
   .out-item{border:.5px solid var(--gray-200);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--bg)}
   .out-item .oi-proj{font-size:13px;font-weight:600;color:var(--meta-700)}
@@ -507,6 +512,10 @@
       <div class="auth-title">🧠 为元神配置大模型</div>
       <div class="auth-sub">分身不内置任何大模型，必须由你提供 API Key，否则元神无法对话。</div>
       <div id="modelSetupEmpty">
+        <div id="modelSetupRemembered" style="display:none;background:var(--success-weak);border:.5px solid var(--line-2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;line-height:1.6;color:var(--fg);align-items:center;gap:8px">
+          <span style="font-size:16px">✅</span>
+          <span><b>元神已记住大模型配置</b><br><span style="color:var(--gray-500)">配置已在本机加密冗余保存，升级或重装后打开即用。留空 Key 不会覆盖已有配置。</span></span>
+        </div>
         <div style="background:var(--warning-weak);border:.5px solid var(--line-2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;line-height:1.6;color:var(--fg)">
           <b>请填写你的模型 API Key</b><br>
           <span style="color:var(--gray-500)">支持 DeepSeek / OpenAI / Claude / 通义千问 / Moonshot / 智谱；本机已装 Ollama 也可免 Key 使用。</span>
@@ -777,7 +786,7 @@
           <div class="chat-head">
             <div style="display:flex;align-items:center;gap:10px">
               <div><div class="t" id="chatTitle">元神</div><div class="sub" id="chatSub">运行中</div></div>
-              <button class="btn sm meta" id="btnMetaOutputMain" onclick="toggleMetaOutput()" title="展开/收起右侧元神产出展示区">产出展示区</button>
+              <button class="btn sm meta" id="btnMetaOutputMain" onclick="onBtnMetaOutputMainClick()" title="展开/收起右侧元神产出展示区">产出展示区</button>
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span id="phaseBadge" style="font-size:10px;background:var(--meta-50);color:var(--meta-700);padding:2px 8px;border-radius:10px;font-weight:500">需求澄清</span>
@@ -1002,16 +1011,13 @@
         </div>
       </div>
 
-      <!-- 元神产出展示区（最右侧滑出，可开合） -->
-      <div class="out-panel" id="metaOutputPanel">
+      <!-- 元神产出展示区（最右侧可展开/收起的面板，常驻不关闭） -->
+      <div class="out-panel" id="metaOutputPanel" onclick="onMetaOutputPanelClick(event)">
         <div class="op-h">
-          <span>📦 元神产出展示区</span>
-          <div style="display:flex;gap:4px;align-items:center">
-            <button class="split-close" id="btnMetaCollapse" onclick="toggleMetaOutputCollapse()" title="展开/收起面板">⟨</button>
-            <button class="split-close" onclick="toggleMetaOutput()" title="关闭面板">✕</button>
-          </div>
+          <span class="op-title">📦 元神产出展示区</span>
+          <button class="split-close" id="btnMetaCollapse" onclick="toggleMetaOutput(event)" title="展开 / 收起">«</button>
         </div>
-        <div class="out-body" id="metaOutputBody"><div class="out-empty">点击顶部「产出展示区」按钮加载元神在各项目中的产出物…</div></div>
+        <div class="out-body" id="metaOutputBody"><div class="out-empty">元神会在各项目产出 site / dist / build / out 后，自动在这里汇总展示。</div></div>
       </div>
 
       <!-- 精选角色库 -->
@@ -1847,6 +1853,8 @@ async function openModelSetup(){
     pSel.value=m.provider||'deepseek'; nameEl.value=m.model_name||''; baseEl.value=m.base_url||'';
     const keyEl=document.getElementById('setupModelKey');
     window.__metaHasKey = !!m.has_key;
+    const tip=document.getElementById('modelSetupRemembered');
+    if(tip) tip.style.display = m.has_key ? 'flex' : 'none';
     if(keyEl){
       keyEl.value='';
       keyEl.placeholder = m.key_mask ? ('已保存：'+m.key_mask+'（留空则保留现有 Key）') : 'API Key（必填）';
@@ -1876,6 +1884,13 @@ async function ensureMetaModelReady(){
     const list=await apiJson('/api/models');
     const m=(Array.isArray(list)?list:[]).find(x=>x.agent_id===META_PID)||{};
     if(m.has_key){ metaModelReady=true; return true; }
+    // 优先级提高：list 没有 key 时，主动触发后端从冗余文件恢复
+    const r=await apiJson('/api/models/'+META_PID+'/restore',{method:'POST'});
+    if(r && r.ok && r.has_key){
+      const list2=await apiJson('/api/models');
+      const m2=(Array.isArray(list2)?list2:[]).find(x=>x.agent_id===META_PID)||{};
+      if(m2.has_key){ metaModelReady=true; return true; }
+    }
   }catch(e){}
   openModelSetup();
   return false;
@@ -2717,27 +2732,45 @@ async function loadMeta(){ const b=document.getElementById('metaChat'); b.innerH
   f.innerHTML=''; files.forEach(x=>{ const d=document.createElement('div'); d.className='room';
     d.innerHTML=`<span class="s" style="background:var(--meta-700)"></span><div class="info"><div class="nm">${escapeHtml(x.name)}</div><div class="ds">资料库 · 已学习</div></div>`; f.appendChild(d); }); window.metaFileCount=(files||[]).length; }
 
-/* 元神产出展示区：最右侧滑出面板（开合） */
-function toggleMetaOutput(){
-  const p=document.getElementById('metaOutputPanel'); if(!p)return;
-  const open=p.classList.toggle('show');
-  if(open){
-    let collapsed=false; try{ collapsed = localStorage.getItem('fs_output_panel_collapsed')==='1'; }catch(_){}
-    p.classList.toggle('collapsed', collapsed);
-    const cb=document.getElementById('btnMetaCollapse'); if(cb) cb.textContent=collapsed?'»':'⟨';
-    if(!collapsed) loadMetaOutputs();
-  }
-  const b=document.getElementById('btnMetaOutput'); const bm=document.getElementById('btnMetaOutputMain');
-  [b,bm].forEach(btn=>{ if(!btn) return; btn.classList.toggle('active', open); btn.textContent=open?'收起产出区':'产出展示区'; });
-  try{ localStorage.setItem('fs_output_panel_dismissed', open?'':'1'); }catch(_){}
+/* 元神产出展示区：最右侧常驻面板，只有展开/收起，没有关闭 */
+const META_OUTPUT_WIDTH='340px', META_OUTPUT_COL_WIDTH='44px';
+function syncMetaOutputButton(collapsed){
+  const bm=document.getElementById('btnMetaOutputMain');
+  const cb=document.getElementById('btnMetaCollapse');
+  if(cb) cb.textContent=collapsed?'»':'«';
+  if(bm){ bm.classList.toggle('active', !collapsed); bm.textContent=collapsed?'展开产出区':'收起产出区'; bm.title=collapsed?'展开右侧元神产出展示区':'收起右侧元神产出展示区'; }
 }
-/* 收起/展开面板（保留在屏幕右侧窄条，区别于 ✕ 关闭） */
-function toggleMetaOutputCollapse(){
-  const p=document.getElementById('metaOutputPanel'); if(!p)return;
-  const c=p.classList.toggle('collapsed');
-  const btn=document.getElementById('btnMetaCollapse'); if(btn) btn.textContent=c?'»':'⟨';
-  if(!c) loadMetaOutputs();
-  try{ localStorage.setItem('fs_output_panel_collapsed', c?'1':''); }catch(_){}
+function showMetaOutput(collapsed){
+  const p=document.getElementById('metaOutputPanel'); if(!p) return;
+  p.classList.add('show');
+  p.classList.toggle('collapsed', !!collapsed);
+  syncMetaOutputButton(!!collapsed);
+  if(!collapsed) loadMetaOutputs();
+  try{ localStorage.setItem('fs_output_panel_collapsed', collapsed?'1':''); }catch(_){}
+}
+/* 切换展开/收起；event 存在时只响应按钮，窄条点击也走这里 */
+function toggleMetaOutput(ev){
+  if(ev){ ev.stopPropagation(); }
+  const p=document.getElementById('metaOutputPanel'); if(!p || !p.classList.contains('show')) return;
+  const collapsed=!p.classList.contains('collapsed');
+  showMetaOutput(collapsed);
+}
+/* 点击收起态的窄条任意位置也可展开 */
+function onMetaOutputPanelClick(ev){
+  const p=document.getElementById('metaOutputPanel'); if(!p) return;
+  if(p.classList.contains('collapsed')) toggleMetaOutput(ev);
+}
+function initMetaOutputPanel(){
+  const p=document.getElementById('metaOutputPanel'); if(!p) return;
+  let collapsed=false; try{ collapsed=localStorage.getItem('fs_output_panel_collapsed')==='1'; }catch(_){}
+  // 移动端默认收起，桌面默认展开
+  if(window.innerWidth<=768 && !localStorage.getItem('fs_output_panel_collapsed')) collapsed=true;
+  showMetaOutput(collapsed);
+}
+function onBtnMetaOutputMainClick(){
+  if(curView!=='meta'){ setView('meta'); return; }
+  const p=document.getElementById('metaOutputPanel'); if(!p) return;
+  toggleMetaOutput();
 }
 async function loadMetaOutputs(){
   const body=document.getElementById('metaOutputBody'); if(!body)return;
@@ -2920,13 +2953,10 @@ async function setView(v, pid){
     const ready=await ensureMetaModelReady();
     if(!ready) return;
     curView='meta'; renderMetaPin(); updateChatHead(); await loadMetaView();
-    // v0.64.49-fix：桌面端进入元神主视图时默认展开右侧产出栏，避免用户找不到入口
-    if(window.innerWidth>768 && !localStorage.getItem('fs_output_panel_dismissed')){
-      const p=document.getElementById('metaOutputPanel');
-      if(p && !p.classList.contains('show')) toggleMetaOutput();
-    }
+    // v0.64.51：产出区常驻右侧，桌面默认展开/移动默认收起
+    initMetaOutputPanel();
   }
-  else { curView=v; pinInterviewActive=false; if(pid) curRoom=pid; renderRooms(); updateChatHead(); if(curRoom) await loadChat(curRoom); }
+  else { curView=v; pinInterviewActive=false; if(pid) curRoom=pid; renderRooms(); updateChatHead(); if(curRoom) await loadChat(curRoom); const p=document.getElementById('metaOutputPanel'); if(p) p.classList.remove('show'); }
 }
 async function loadMetaView(){
   document.getElementById('chatTitle').textContent='元神';
