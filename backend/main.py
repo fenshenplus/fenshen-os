@@ -1299,6 +1299,33 @@ def init_db():
 init_db()
 
 
+# 公网远程隧道：relay_enabled 时拉起 desktop tunnel_client，设置变更时动态启停
+async def _relay_tunnel_loop():
+    import asyncio as _a
+    _tunnel_task = None
+    while True:
+        await _a.sleep(5)
+        try:
+            enabled = get_setting("relay_enabled", "0") == "1"
+            tid = get_setting("relay_tunnel_id", "")
+            tok = get_setting("relay_tunnel_token", "")
+        except Exception:
+            continue
+        if enabled and tid and tok:
+            if _tunnel_task is None or _tunnel_task.done():
+                try:
+                    from backend.relay.tunnel_client import run_tunnel
+                    relay_url = os.environ.get("FENSHEN_RELAY_URL") or get_setting("relay_url", "")
+                    _tunnel_task = _a.create_task(run_tunnel(tid, tok, relay_url or None))
+                    print(f"[tunnel] 隧道已启动 tunnel={tid[:8]} url={relay_url or 'default'}…")
+                except Exception as e:
+                    print("[tunnel] 启动失败：", repr(e))
+        else:
+            if _tunnel_task is not None and not _tunnel_task.done():
+                _tunnel_task.cancel()
+                _tunnel_task = None
+
+
 # 后台任务：自动巡检（按用户设置，见 /api/meta/settings）
 @app.on_event("startup")
 async def _start_patrol():
@@ -1313,6 +1340,8 @@ async def _start_patrol():
         _maintain_attribution()
     except Exception:
         pass
+    # 公网远程隧道（移动端经中继访问本机引擎）：relay_enabled 时拉起，设置变更时动态启停
+    asyncio.create_task(_relay_tunnel_loop())
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -9524,6 +9553,12 @@ def meta_settings_get():
         "shared_context_pool": get_setting("shared_context_pool", "1") == "1",
         # v5.2 监控自动兜底：服务端口监控配置 [{name,port,restart_cmd}]
         "services": json.loads(get_setting("services", "[]")),
+        # 公网远程：手机经中继访问本机引擎（tunnel_id/token 每用户独立）
+        "relay_enabled": get_setting("relay_enabled", "0") == "1",
+        "relay_tunnel_id": get_setting("relay_tunnel_id", ""),
+        "relay_tunnel_token": get_setting("relay_tunnel_token", ""),
+        "relay_url": os.environ.get("FENSHEN_RELAY_URL",
+                                    get_setting("relay_url", "ws://127.0.0.1:8848")),
     }
 
 
@@ -9619,6 +9654,44 @@ async def meta_settings_set(req: Request):
         if _k in _CODE_SETTING_KEYS:
             set_setting(_k, "1" if _v in (True, "1", 1) else "0")
     return {"ok": True, "settings": meta_settings_get()}
+
+
+@app.post("/api/meta/relay/enable")
+async def relay_enable(req: Request):
+    """启用/停用公网远程隧道，并在启用时派生每用户独立的 tunnel_id/token。
+
+    返回 invite 邀请码（tunnel_id + token + relay_url），供手机扫码/手动录入。
+    令牌由 FENSHEN_RELAY_SECRET 经 HMAC 派生，无状态可校验；若未设 secret 则退化为随机令牌
+    （需中继端同步持有，适合个人中继）。
+    """
+    import secrets as _secrets
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    enabled = bool(data.get("enabled", True))
+    set_setting("relay_enabled", "1" if enabled else "0")
+    if not enabled:
+        return {"ok": True, "relay_enabled": False}
+    tid = get_setting("relay_tunnel_id") or ""
+    tok = get_setting("relay_tunnel_token") or ""
+    if not tid:
+        from backend.relay.protocol import generate_tunnel_id, derive_tunnel_token
+        tid = generate_tunnel_id()
+        secret = os.environ.get("FENSHEN_RELAY_SECRET", "")
+        tok = derive_tunnel_token(secret, tid) if secret else _secrets.token_hex(32)
+        set_setting("relay_tunnel_id", tid)
+        set_setting("relay_tunnel_token", tok)
+    relay_url = os.environ.get("FENSHEN_RELAY_URL",
+                               get_setting("relay_url", "ws://127.0.0.1:8848"))
+    set_setting("relay_url", relay_url)
+    return {
+        "ok": True, "relay_enabled": True,
+        "tunnel_id": tid, "tunnel_token": tok, "relay_url": relay_url,
+        "invite": json.dumps(
+            {"url": relay_url, "tunnel": tid, "token": tok},
+            ensure_ascii=False),
+    }
 
 
 def _snapshot_path(p: str) -> dict:
