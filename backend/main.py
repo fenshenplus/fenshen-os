@@ -1382,6 +1382,93 @@ def set_model_backups(agent_id: str, backups: list):
     conn.close()
 
 
+# ── 模型配置冗余存储 + 启动自愈（一次配置、永久生效、迭代更新打开即用）──
+# 主存仍是 DB(model_configs)；此处额外把配置写一份到「应用支持目录」，
+# 与 ~/.fenshen 解耦——重装/升级 .app 不会动 Application Support，DB 即便被清也能自愈。
+def _model_store_path():
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support/com.fenshen.app")
+    elif sys.platform == "win32":
+        base = os.environ.get("APPDATA", os.path.expanduser("~/.fenshen"))
+        base = os.path.join(base, "com.fenshen.app")
+    else:
+        base = os.path.expanduser("~/.fenshen")
+    try:
+        os.makedirs(base, exist_ok=True)
+    except Exception:
+        pass
+    return os.path.join(base, "model_config.json")
+
+
+def _write_model_store(agent_id: str, rec: dict, backups: list = None):
+    """把某 agent 的主模型 + 备用模型冗余写入应用支持目录。"""
+    path = _model_store_path()
+    data = {}
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as _f:
+                data = json.load(_f)
+    except Exception:
+        data = {}
+    item = {
+        "provider": rec.get("provider"),
+        "base_url": rec.get("base_url"),
+        "api_key": rec.get("api_key"),
+        "model_name": rec.get("model_name"),
+    }
+    if backups is not None:
+        item["backups"] = backups
+    data[agent_id] = item
+    try:
+        with open(path, "w", encoding="utf-8") as _f:
+            json.dump(data, _f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def restore_model_configs_from_store():
+    """启动自愈：DB 中某 agent 缺 api_key 但冗余文件有 → 补回 DB；DB 已有则信任 DB。"""
+    path = _model_store_path()
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as _f:
+            data = json.load(_f)
+    except Exception:
+        return
+    conn = get_db()
+    try:
+        for agent_id, rec in data.items():
+            if not rec or not rec.get("api_key"):
+                continue
+            cur = conn.execute("SELECT api_key FROM model_configs WHERE agent_id=?", (agent_id,)).fetchone()
+            if cur and cur["api_key"]:
+                continue  # DB 已有 key，优先信任 DB，不覆盖
+            provider = rec.get("provider") or "deepseek"
+            preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])
+            conn.execute(
+                "INSERT OR REPLACE INTO model_configs (agent_id,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?)",
+                (agent_id, provider, rec.get("base_url") or None, rec.get("api_key"),
+                 rec.get("model_name") or preset["default_model"]))
+            # 备用模型一并自愈
+            for i, b in enumerate(rec.get("backups") or []):
+                if not b or not b.get("api_key"):
+                    continue
+                bp = PROVIDER_PRESETS.get(b.get("provider") or "deepseek", PROVIDER_PRESETS["deepseek"])
+                conn.execute(
+                    "INSERT OR REPLACE INTO model_backups (agent_id,idx,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?,?)",
+                    (agent_id, i, b.get("provider") or "deepseek", b.get("base_url") or None,
+                     b.get("api_key"), b.get("model_name") or bp["default_model"]))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# 启动自愈：若 DB 缺失模型 key（被清/升级残留），从应用支持目录冗余文件恢复。
+# 放在函数定义之后调用，避免模块自上而下执行时的 NameError。
+restore_model_configs_from_store()
+
+
 def resolve_provider_cfg(agent_id: str):
     """返回 (provider, base_url, api_key, model_name) 或 None 表示离线。"""
     cfg = get_model_config(agent_id)
@@ -3589,13 +3676,16 @@ def list_models():
         c = cfgs.get(a["agent_id"])
         rec = ROLE_MODEL_RECS.get(a["agent_id"], {})
         backups = get_model_backups(a["agent_id"])
+        _raw_key = (c or {}).get("api_key") or ""
+        _mask = ("sk-…" + _raw_key[-4:]) if _raw_key and len(_raw_key) >= 4 else ("sk-…" if _raw_key else "")
         out.append({
             "agent_id": a["agent_id"],
             "name": a["name"],
             "provider": (c or {}).get("provider", "deepseek"),
             "model_name": (c or {}).get("model_name", ""),
             "base_url": (c or {}).get("base_url", ""),
-            "has_key": bool((c or {}).get("api_key")),
+            "has_key": bool(_raw_key),
+            "key_mask": _mask,
             "backups": backups,
             "recommended": rec.get("provider", ""),
             "recommended_model": rec.get("model", ""),
@@ -3716,6 +3806,14 @@ async def set_model(agent_id: str, req: Request):
     base_url = data.get("base_url", "").strip() or None
     api_key = data.get("api_key", "").strip() or None
     model_name = data.get("model_name", "").strip() or None
+    # 前端不回显明文 key：若用户留空且 DB 已有 key → 视为"保留现有"，避免误清空。
+    if not api_key:
+        try:
+            _cur = get_db().execute("SELECT api_key FROM model_configs WHERE agent_id=?", (agent_id,)).fetchone()
+            if _cur and _cur["api_key"]:
+                api_key = _cur["api_key"]
+        except Exception:
+            pass
     # P0-归一化：deepseek 供应商模型名大小写/别名容错，非法名（如用户误填 "Deepseek"）
     # 一律回落到官方真实通用模型 deepseek-v4-flash，避免 400 Bad Request 致连不上大模型。
     if provider == "deepseek":
@@ -3729,6 +3827,8 @@ async def set_model(agent_id: str, req: Request):
     )
     conn.commit()
     conn.close()
+    # 冗余持久化：写入应用支持目录，升级/重装后启动自愈可恢复
+    _write_model_store(agent_id, {"provider": provider, "base_url": base_url, "api_key": api_key, "model_name": model_name})
     return {"ok": True}
 
 
@@ -3744,6 +3844,12 @@ async def set_model_backups_api(agent_id: str, req: Request):
     if not isinstance(backups, list):
         return {"ok": False, "error": "backups 必须是数组"}
     set_model_backups(agent_id, backups)
+    # 冗余持久化：把主模型 + 备用模型一并写入应用支持目录
+    _prim = get_model_config(agent_id) or {}
+    _write_model_store(agent_id, {
+        "provider": _prim.get("provider"), "base_url": _prim.get("base_url"),
+        "api_key": _prim.get("api_key"), "model_name": _prim.get("model_name"),
+    }, backups=get_model_backups(agent_id))
     return {"ok": True, "count": len(get_model_backups(agent_id))}
 
 
