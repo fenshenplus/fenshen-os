@@ -506,6 +506,9 @@
           <span style="color:var(--gray-500)">支持 DeepSeek / OpenAI / Claude / 通义千问 / Moonshot / 智谱；本机已装 Ollama 也可免 Key 使用。</span>
         </div>
       </div>
+      <!-- v0.64.46：验证按钮置顶，保证一打开弹窗就能看到，不会被挤到折叠线以下 -->
+      <button class="btn meta auth-btn" type="button" onclick="testSetupStored(this)" style="width:100%;margin-bottom:6px" title="直接探测库内已配置的 Key，确认 API 有效可用，无需重输">✅ 验证当前配置（用已存 Key 探活）</button>
+      <div id="modelSetupTest" style="font-size:12px;min-height:16px;margin-bottom:10px;color:var(--fg)"></div>
       <div class="field" style="margin-bottom:8px">
         <label style="font-size:12px;color:var(--gray-500)">模型供方</label>
         <select id="setupModelProvider" style="width:100%;padding:9px 10px;border:.5px solid #e3e3ec;border-radius:9px;font-size:13px;background:#fff">
@@ -536,8 +539,6 @@
       </div>
       <div id="setupBackups" style="display:flex;flex-direction:column;gap:8px"></div>
       <div class="auth-err" id="modelSetupErr"></div>
-      <div id="modelSetupTest" style="font-size:12px;min-height:16px;margin-bottom:10px;color:var(--fg)"></div>
-      <button class="btn meta auth-btn" type="button" onclick="testSetupStored(this)" style="width:100%;margin-bottom:8px" title="直接探测库内已配置的 Key，确认 API 有效可用，无需在此重输">✅ 验证当前配置（用已存 Key 探活）</button>
       <div style="display:flex;gap:8px">
         <button class="btn sm" type="button" onclick="testSetupModel(this)" title="若你在上方输入了新的 Key，用新 Key 探活">测试新 Key</button>
         <button class="btn meta auth-btn" id="btnModelSetupUse" onclick="submitModelSetup()" style="flex:1">保存并进入</button>
