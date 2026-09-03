@@ -3723,9 +3723,27 @@ async def test_model(agent_id: str, req: Request):
     data = await req.json()
     # 临时构造配置测试（不落库）
     provider = data.get("provider", "deepseek")
-    key = data.get("api_key", "").strip()
-    base = data.get("base_url", "").strip() or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"]
-    model = data.get("model_name", "").strip() or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["default_model"]
+    key = (data.get("api_key") or "").strip()
+    use_stored = bool(data.get("use_stored"))
+    base = (data.get("base_url") or "").strip() or None
+    model = (data.get("model_name") or "").strip() or None
+    # v0.64.45：留空 api_key + use_stored=True → 直接取库内已配 Key/Base/Model 探测，
+    # 解决「页面不回显已存 Key，用户必须重输才能测试」导致的「检测不可用」。
+    if (not key) and use_stored:
+        conn = get_db()
+        row = conn.execute(
+            "SELECT provider,base_url,api_key,model_name FROM model_configs WHERE agent_id=?",
+            (agent_id,),
+        ).fetchone()
+        conn.close()
+        if not row or not (row[2] or "").strip():
+            return {"ok": False, "error": "当前角色尚未配置 API Key，请先填写后再测试。"}
+        provider = (row[0] or provider or "deepseek").strip()
+        base = (row[1] or "").strip() or base
+        key = (row[2] or "").strip()
+        model = (row[3] or "").strip() or model
+    base = base or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"]
+    model = model or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["default_model"]
     if provider == "deepseek":
         _DS_VALID = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp", "deepseek-chat", "deepseek-reasoner"}
         _mn = (model or "").strip().lower()

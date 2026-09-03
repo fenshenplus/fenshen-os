@@ -537,8 +537,9 @@
       <div id="setupBackups" style="display:flex;flex-direction:column;gap:8px"></div>
       <div class="auth-err" id="modelSetupErr"></div>
       <div id="modelSetupTest" style="font-size:12px;min-height:16px;margin-bottom:10px;color:var(--fg)"></div>
+      <button class="btn meta auth-btn" type="button" onclick="testSetupStored(this)" style="width:100%;margin-bottom:8px" title="直接探测库内已配置的 Key，确认 API 有效可用，无需在此重输">✅ 验证当前配置（用已存 Key 探活）</button>
       <div style="display:flex;gap:8px">
-        <button class="btn sm" type="button" onclick="testSetupModel(this)">测试连接</button>
+        <button class="btn sm" type="button" onclick="testSetupModel(this)" title="若你在上方输入了新的 Key，用新 Key 探活">测试新 Key</button>
         <button class="btn meta auth-btn" id="btnModelSetupUse" onclick="submitModelSetup()" style="flex:1">保存并进入</button>
       </div>
     </div>
@@ -1957,6 +1958,23 @@ async function testSetupModel(btn){
     try{
       const j=await apiJson('/api/models/'+META_PID+'/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,base_url,api_key:key,model_name})});
       if(t) t.textContent = j.ok ? ('✅ API 有效可用：'+(j.reply||'')) : ('❌ API 不可用：'+ (j.error||'失败'));
+      toast(j.ok?'API 有效可用':'API 不可用：'+(j.error||'失败'), j.ok?'ok':'err');
+    }catch(e){ if(t) t.textContent='❌ 请求失败：'+errText(e); throw e; }
+  });
+}
+/* v0.64.45：验证当前已存配置——直接用库内 Key 探活，无需让用户重输 Key */
+async function testSetupStored(btn){
+  const provider=document.getElementById('setupModelProvider').value;
+  const base_url=document.getElementById('setupModelBase').value.trim();
+  const model_name=document.getElementById('setupModelName').value.trim();
+  const errEl=document.getElementById('modelSetupErr');
+  const t=document.getElementById('modelSetupTest');
+  errEl.textContent='';
+  if(t) t.textContent='正在验证当前配置（用库内已存 Key 探活）…';
+  await withBusy(btn,'验证中…',async()=>{
+    try{
+      const j=await apiJson('/api/models/'+META_PID+'/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,base_url,model_name,use_stored:true})});
+      if(t) t.textContent = j.ok ? ('✅ API 有效可用：'+(j.reply||'已用库内 Key 探活成功')) : ('❌ API 不可用：'+ (j.error||'失败'));
       toast(j.ok?'API 有效可用':'API 不可用：'+(j.error||'失败'), j.ok?'ok':'err');
     }catch(e){ if(t) t.textContent='❌ 请求失败：'+errText(e); throw e; }
   });
@@ -3859,6 +3877,8 @@ async function saveModel(agent_id, btn){
 }
 async function testModel(agent_id, btn){
   const payload=modelPayload(agent_id); if(!payload) return;
+  // 若没填 Key（页面不回显已存 Key），让后端用库内已配 Key 探活
+  if(!payload.api_key) payload.use_stored=true;
   const t=document.getElementById('mtest-'+agent_id); if(t) t.textContent='测试中…（模型可能要等十几秒）';
   await withBusy(btn,'测试中…',async()=>{
     try{
