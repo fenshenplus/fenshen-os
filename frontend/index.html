@@ -229,7 +229,8 @@
   .task-jump { display:inline-block; margin-left:6px; padding:1px 8px; border-radius:10px; background:var(--accent-weak); color:var(--accent-strong); font-size:10px; cursor:pointer; vertical-align:middle; }
   .task-jump:hover { background:var(--accent); color:var(--on-accent); }
   /* ── 输入框（WorkBuddy 风格：圆角卡片 + 图标工具栏 + 发送）── */
-  .chat-input { display:flex; flex-direction:column; gap:8px; margin:10px 14px 12px; padding:10px 12px; border:.5px solid var(--gray-200); border-radius:16px; background:var(--bg); flex-shrink:0; box-shadow:0 1px 3px rgba(20,20,40,.04); }
+  /* 输入框固定底部，禁止被 flex 压缩/裁切（参考 WorkBuddy 紧凑风格） */
+  .chat-input { display:flex; flex-direction:column; gap:8px; margin:10px 14px; padding:10px 12px; border:.5px solid var(--gray-200); border-radius:16px; background:var(--bg); flex:0 0 auto; min-height:58px; box-shadow:0 1px 3px rgba(20,20,40,.04); }
   .chat-input.drag { border-color:var(--blue-400); box-shadow:0 0 0 3px var(--blue-50); }
   .ico-btn { width:32px; height:32px; border-radius:9px; border:none; background:transparent; cursor:pointer; flex-shrink:0; font-size:16px; display:flex; align-items:center; justify-content:center; }
   .ci-bar { display:flex; align-items:center; gap:2px; }
@@ -1737,7 +1738,17 @@ function errText(e){
 // 统一的接口调用：HTTP 层出错也要抛出来，不能静默
 let SESSION = localStorage.getItem('fs_session') || '';
 let LOCAL_MODE = localStorage.getItem('fs_local_mode') === '1';
-function sessHeaders(extra){ const h=extra||{}; if(SESSION) h['x-session-token']=SESSION; return h; }
+function sessHeaders(extra){
+  const h=extra||{};
+  if(SESSION) h['x-session-token']=SESSION;
+  // 本机令牌：从 cookie 显式取出随每个 API 请求携带，确保模型连通「测试连接」等接口稳定鉴权
+  // （不依赖浏览器/WebView 对 cookie 的自动附带，避免 PyWebview 下偶发未授权导致检测不可用）
+  try{
+    const m=document.cookie.match(/(?:^|;\s*)fenshen_token=([^;]+)/);
+    if(m && m[1]) h['x-fenshen-token']=decodeURIComponent(m[1]);
+  }catch(_){}
+  return h;
+}
 function enterLocalMode(){
   LOCAL_MODE=true; localStorage.setItem('fs_local_mode','1');
   hideAuthModal();
@@ -1945,8 +1956,8 @@ async function testSetupModel(btn){
   await withBusy(btn,'测试中…',async()=>{
     try{
       const j=await apiJson('/api/models/'+META_PID+'/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,base_url,api_key:key,model_name})});
-      if(t) t.textContent = j.ok ? ('✅ 连通成功：'+(j.reply||'')) : ('❌ '+ (j.error||'失败'));
-      toast(j.ok?'模型连通':'模型没连上：'+(j.error||'失败'), j.ok?'ok':'err');
+      if(t) t.textContent = j.ok ? ('✅ API 有效可用：'+(j.reply||'')) : ('❌ API 不可用：'+ (j.error||'失败'));
+      toast(j.ok?'API 有效可用':'API 不可用：'+(j.error||'失败'), j.ok?'ok':'err');
     }catch(e){ if(t) t.textContent='❌ 请求失败：'+errText(e); throw e; }
   });
 }
@@ -3852,8 +3863,8 @@ async function testModel(agent_id, btn){
   await withBusy(btn,'测试中…',async()=>{
     try{
       const j=await apiJson('/api/models/'+encodeURIComponent(agent_id)+'/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-      if(t) t.textContent = j.ok ? ('✅ 连通：'+ (j.reply||'')) : ('❌ '+ (j.error||'失败'));
-      toast(j.ok?'模型连通':'模型没连上：'+(j.error||'失败'), j.ok?'ok':'err');
+      if(t) t.textContent = j.ok ? ('✅ API 有效可用：'+ (j.reply||'')) : ('❌ API 不可用：'+ (j.error||'失败'));
+      toast(j.ok?'API 有效可用':'API 不可用：'+(j.error||'失败'), j.ok?'ok':'err');
     }catch(e){ if(t) t.textContent='❌ 请求失败：'+errText(e); throw e; }
   });
 }

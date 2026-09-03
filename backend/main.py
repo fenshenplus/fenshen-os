@@ -261,6 +261,11 @@ def _host_allowed(host: str) -> bool:
     return hostname in {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
+def _is_local_request(request: Request) -> bool:
+    h = (request.client.host if request.client else "") or ""
+    return h in ("127.0.0.1", "::1", "localhost") or h.endswith("127.0.0.1")
+
+
 @app.middleware("http")
 async def local_guard(request: Request, call_next):
     path = request.url.path
@@ -284,6 +289,10 @@ async def local_guard(request: Request, call_next):
                         httponly=False, max_age=60 * 60 * 24 * 365, path="/")
         return resp
     if path in PUBLIC_API:
+        return await call_next(request)
+    # 模型连通性「测试连接」：本机 localhost 才可免令牌调用（仅校验用户自有 Key，不外泄存储 Key）。
+    # 仍受上方 Host/Origin 校验约束；非 localhost（如局域网其它机器）仍要求令牌。
+    if path.startswith("/api/models/") and path.endswith("/test") and _is_local_request(request):
         return await call_next(request)
     token = (request.headers.get("x-fenshen-token")
              or request.cookies.get(COOKIE_NAME)
