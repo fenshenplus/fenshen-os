@@ -780,7 +780,6 @@
                   <div class="more-row"><button class="btn sm" onclick="toggleFreeze()" id="freezeBtn" style="flex:1">冻结</button></div>
                   <div class="more-row"><button class="btn sm" onclick="openChangeOrder()" style="flex:1">修改单</button></div>
                   <div class="more-row"><button class="btn sm" onclick="openSnapshots()" style="flex:1">快照</button></div>
-                  <div class="more-row"><button class="btn sm" id="btnSplit" onclick="toggleSplit()" style="flex:1">展开产出区</button></div>
                   <div class="more-row"><button class="btn sm meta" id="btnBoard" onclick="openBoard()" style="flex:1">模块看板</button></div>
                   <div class="more-row"><button class="btn ghost sm" id="btnMetaStop" onclick="metaStop()" style="flex:1">元神中止</button></div>
                 </div>
@@ -829,23 +828,6 @@
             </div>
           </div>
         </div>
-      <!-- v6 分栏：进程轨迹 + 看板（右侧拉出） -->
-      <div class="split" id="splitPanel" style="display:none">
-        <div class="split-head">
-          <div class="split-tabs">
-            <span class="split-tab active" id="tabTraj" data-i18n="进程轨迹" onclick="switchSplit('traj')">进程轨迹</span>
-            <span class="split-tab" id="tabBoard" data-i18n="看板" onclick="switchSplit('board')">看板</span>
-          </div>
-          <button class="split-close" onclick="toggleSplit()">✕</button>
-        </div>
-        <div class="split-body">
-          <div id="trajPane">
-            <div id="trajList" style="padding:8px 4px"></div>
-            <div id="trajEvents" class="traj-events"></div>
-          </div>
-          <div id="boardPane" style="display:none;padding:12px"><div id="splitBoard"></div></div>
-        </div>
-      </div>
       </div>
 
       <!-- 管理项目：所有项目看板总览，点击进入群聊 -->
@@ -2271,7 +2253,7 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
     }
     else { row.className='msg '+(m.kind==='self'?'right':'left');
       const cls=escapeHtml(m.kind==='meta'?'meta':m.kind); const tag=m.tag?`<span class="tag ${escapeHtml(m.tag)}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
-      let acts=''; if(m.kind==='meta') acts=`<div class="acts"><button class="btn sm" onclick="metaCheck(this)">检查产出</button><button class="btn sm ghost" onclick="metaStop()">中止</button><button class="btn sm" onclick="metaReassign(this)">重派</button></div>`;
+      let acts='';
       // 图片附件（v6.5 多模态）
       let imgs='';
       if(m.images){ try{ const arr=JSON.parse(m.images); if(Array.isArray(arr)&&arr.length){ imgs='<div class="msg-imgs">'+arr.map(im=>`<img class="msg-img" src="data:${im.mime};base64,${im.data}" onclick="openImg(this.src)" alt="${escapeHtml(im.name||'图片')}">`).join('')+'</div>'; } }catch(e){} }
@@ -3066,6 +3048,14 @@ async function stopMetaInterview(){
   if(b) b.querySelectorAll('.meta-interview-bubble').forEach(el=>el.remove());
   const inp=document.getElementById('metaInput');
   if(inp) inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）';
+  // v0.64.47：给用户明确反馈，否则会以为按钮没生效
+  toast('✅ 访谈已结束，可以正常和元神对话了','ok');
+  // 同时在对话里留一条小结
+  if(b){
+    const row=document.createElement('div'); row.className='sysmsg';
+    row.innerHTML='<span>📝 访谈已手动结束。</span>';
+    b.appendChild(row); b.scrollTop=b.scrollHeight;
+  }
 }
 async function loadInterview(btn){
   await withBusy(btn,'加载中…',async()=>{
