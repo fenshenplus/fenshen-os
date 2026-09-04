@@ -1011,15 +1011,6 @@
         </div>
       </div>
 
-      <!-- 元神产出展示区（最右侧可展开/收起的面板，常驻不关闭） -->
-      <div class="out-panel hidden" id="metaOutputPanel" onclick="onMetaOutputPanelClick(event)">
-        <div class="op-h">
-          <span class="op-title">📦 元神产出展示区</span>
-          <button class="split-close" id="btnMetaCollapse" onclick="toggleMetaOutput(event)" title="展开 / 收起">«</button>
-        </div>
-        <div class="out-body" id="metaOutputBody"><div class="out-empty">元神会在各项目产出 site / dist / build / out 后，自动在这里汇总展示。</div></div>
-      </div>
-
       <!-- 精选角色库 -->
       <div class="section" id="sec-roles">
         <div class="grid-wrap">
@@ -1379,6 +1370,16 @@
         </div>
       </div>
     </div>
+
+    <!-- 元神产出展示区（最右侧可展开/收起的面板，常驻不关闭） -->
+    <div class="out-panel hidden" id="metaOutputPanel" onclick="onMetaOutputPanelClick(event)">
+      <div class="op-h">
+        <span class="op-title">📦 元神产出展示区</span>
+        <button class="split-close" id="btnMetaCollapse" onclick="toggleMetaOutput(event)" title="展开 / 收起">«</button>
+      </div>
+      <div class="out-body" id="metaOutputBody"><div class="out-empty">元神会在各项目产出 site / dist / build / out 后，自动在这里汇总展示。</div></div>
+    </div>
+
   </div>
 </div>
 
