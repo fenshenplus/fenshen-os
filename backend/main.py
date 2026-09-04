@@ -297,6 +297,12 @@ async def local_guard(request: Request, call_next):
     # 仍受上方 Host/Origin 校验约束；非 localhost（如局域网其它机器）仍要求令牌。
     if path.startswith("/api/models/") and path.endswith("/test") and _is_local_request(request):
         return await call_next(request)
+    # D0.4/D0.5 状态/用量/路由查询：本机 localhost 的 GET 可免令牌读取（只读，不外泄 Key）；
+    # 写操作（POST /budget）仍要求令牌，避免被局域网其它机器越权改配置。
+    if (request.method == "GET" and path.startswith("/api/models/")
+            and path.endswith(("/status", "/usage", "/route", "/budget"))
+            and _is_local_request(request)):
+        return await call_next(request)
     token = (request.headers.get("x-fenshen-token")
              or request.cookies.get(COOKIE_NAME)
              or request.query_params.get("token") or "")
@@ -749,6 +755,19 @@ def init_db():
             api_key TEXT,
             model_name TEXT,
             PRIMARY KEY (agent_id, idx)
+        );
+        CREATE TABLE IF NOT EXISTS model_health (
+            agent_id TEXT PRIMARY KEY,
+            ok INTEGER DEFAULT 0,
+            ts TEXT,
+            latency_ms INTEGER,
+            served_provider TEXT,
+            served_model TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS model_budgets (
+            agent_id TEXT PRIMARY KEY,
+            daily_tokens INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS exec_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1930,6 +1949,127 @@ def _ollama_alive() -> bool:
     return _OLLAMA_CACHE["alive"]
 
 
+# ── D0.5 主备路由健康态 + D0.2 上下文管理 + D0.3 Token 预算 ──────────
+_PROVIDER_HEALTH = {}  # (provider, model) -> {"ok":int, "fail":int, "ts":float}
+
+
+def _record_provider_outcome(provider: str, model: str, ok: bool):
+    """记录某 (provider, model) 的成败，驱动主备路由优先选择已知可用模型。"""
+    k = (provider, model)
+    h = _PROVIDER_HEALTH.get(k, {"ok": 0, "fail": 0, "ts": 0.0})
+    h["ok"] = h.get("ok", 0) + (1 if ok else 0)
+    h["fail"] = h.get("fail", 0) + (0 if ok else 1)
+    h["ts"] = time.time()
+    _PROVIDER_HEALTH[k] = h
+
+
+def _health_score(provider: str, model: str) -> float:
+    h = _PROVIDER_HEALTH.get((provider, model))
+    if not h:
+        return 0.0
+    # 长期失败且近期无成功 → 强负分；有成功则非负
+    return h["ok"] - h["fail"] * 2
+
+
+def _est_tokens(text: str) -> int:
+    """粗估 token 数：CJK 约 1.5 token/字，其他字符约 4 字符/token。用于上下文窗口截断。"""
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    other = len(text) - cjk
+    return int(cjk * 1.5 + other / 4) + 1
+
+
+def _context_window(history: list, system_prompt: str = None, max_tokens: int = 9000) -> list:
+    """D0.2 上下文管理：在 token 预算内保留「系统锚点 + 首条需求锚点 + 最近若干轮」，
+    超出部分丢弃最早的中间历史——防长上下文溢出导致模型报错/胡说（截断保护）。
+    确定性、零额外 LLM 调用，绝不静默丢关键信息（锚点恒保）。"""
+    sys_msgs = [{"role": "system", "content": system_prompt}] if system_prompt else []
+    body = [m for m in history if isinstance(m, dict) and m.get("role") != "system"]
+    est = sum(_est_tokens(m.get("content", "")) for m in sys_msgs)
+    anchor = body[:1]  # 首条（通常是最早的用户需求/约束）作为锚点恒保
+    est += sum(_est_tokens(m.get("content", "")) for m in anchor)
+    recent = list(body[1:])
+    kept = []
+    for m in reversed(recent):
+        t = _est_tokens(m.get("content", ""))
+        if est + t > max_tokens and kept:
+            break
+        kept.append(m)
+        est += t
+    return sys_msgs + anchor + list(reversed(kept))
+
+
+def _usage_today(agent_id: str) -> int:
+    """D0.3 Token 管理：返回该角色今日已消耗 token 总量（input+output）。"""
+    conn = get_db()
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        row = conn.execute(
+            "SELECT COALESCE(SUM(input_tokens+output_tokens),0) FROM model_usage "
+            "WHERE agent_id=? AND ts>=?", (agent_id, today + "T00:00:00")
+        ).fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def _get_budget(agent_id: str) -> int:
+    """每日 token 预算（0 = 不限）。"""
+    conn = get_db()
+    try:
+        r = conn.execute("SELECT daily_tokens FROM model_budgets WHERE agent_id=?", (agent_id,)).fetchone()
+        return int(r[0]) if r else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def _set_budget(agent_id: str, daily_tokens: int):
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO model_budgets (agent_id, daily_tokens) VALUES (?,?)",
+            (agent_id, int(daily_tokens or 0)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _check_budget(agent_id: str, est_input: int = 0) -> str:
+    """预算护栏：超出今日预算即返回提示文案（非空=被拦截），绝不静默放行。"""
+    budget = _get_budget(agent_id)
+    if not budget:
+        return ""
+    used = _usage_today(agent_id)
+    if used + est_input > budget:
+        return (f"[元神·预算护栏] 今日已用 {used:,} token，预算 {budget:,}，"
+                f"本次约需 {est_input:,} 将超额。请在「设置→模型」上调预算，或次日自动重置。")
+    return ""
+
+
+def _update_model_health(agent_id: str, ok: bool, latency_ms: int = 0,
+                         served_provider: str = "", served_model: str = ""):
+    """D0.4 连接状态：记录最近一次连通结果，供状态面板/接口读取。"""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO model_health (agent_id,ok,ts,latency_ms,served_provider,served_model,updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (agent_id, 1 if ok else 0, datetime.now().isoformat(), int(latency_ms),
+             served_provider, served_model, datetime.now().isoformat()),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
 def _is_conn_error(e: Exception) -> bool:
     """debug v4.1：连接类异常判定——远端断开/连接中止/超时等瞬时故障值得原地重试一次。
     非连接类错误（鉴权/参数/额度）不重试，直接走降级链。"""
@@ -1948,7 +2088,21 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None,
     """统一 LLM 调用（Phase 5：埋点 + 降级链）。主模型失败自动尝试其他可用模型。
     debug v4.1：连接类瞬时故障在同一 provider 自动重试一次，再进降级链。
     评测 P1（2026-08-16）：新增 phase/scope_modules/project_id 透传——话题/记忆/磨/蒸馏等
-    直调调用点可携带项目维度记账，修复 token 报告的项目级归集缺失。"""
+    直调调用点可携带项目维度记账，修复 token 报告的项目级归集缺失。
+
+    D0 增强（v0.64.60）：
+      · D0.2 上下文管理：传入 history 先做上下文窗口截断（保留系统锚点+首条需求+最近若干轮），防溢出；
+      · D0.3 Token 预算护栏：今日 token 超预算则拦截并返回明确提示，绝不静默放行；
+      · D0.4/D0.5 健康态：成功/失败均记录 (provider,model) 成败与「实际服务模型」，供状态面板与路由优选。"""
+    # D0.3 Token 预算护栏（先拦，避免无谓扣费）
+    est_input = sum(_est_tokens(m.get("content", "")) for m in history if isinstance(m, dict))
+    budget_block = _check_budget(agent_id, est_input)
+    if budget_block:
+        _log_usage(agent_id, "none", "", 0, "blocked", input_tokens=est_input,
+                   phase=phase, scope_modules=scope_modules, project_id=project_id)
+        return budget_block
+    # D0.2 上下文窗口截断
+    history = _context_window(history, system_prompt)
     cands = _available_providers(agent_id, member_override)
     if not cands:
         _log_usage(agent_id, "none", "", 0, "offline", phase=phase, scope_modules=scope_modules, project_id=project_id)
@@ -1962,8 +2116,11 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None,
             _log_usage(agent_id, provider, model, latency, "success",
                        usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
                        phase=phase, scope_modules=scope_modules, project_id=project_id)
+            _record_provider_outcome(provider, model, True)
+            _update_model_health(agent_id, True, latency, provider, model)
             return text
         except Exception as e:
+            _record_provider_outcome(provider, model, False)
             if _is_conn_error(e):
                 # 连接瞬时故障：原地重试一次再放弃
                 try:
@@ -1972,6 +2129,8 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None,
                     _log_usage(agent_id, provider, model, latency, "success",
                                usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
                                phase=phase, scope_modules=scope_modules, project_id=project_id)
+                    _record_provider_outcome(provider, model, True)
+                    _update_model_health(agent_id, True, latency, provider, model)
                     return text
                 except Exception as e2:
                     latency = int((datetime.now() - t0).total_seconds() * 1000)
@@ -1983,6 +2142,7 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None,
             _log_usage(agent_id, provider, model, latency, "degraded",
                        phase=phase, scope_modules=scope_modules, project_id=project_id)
             errors.append(f"{provider}: {e}")
+    _update_model_health(agent_id, False)
     return f"[元神·降级] 所有模型调用失败（{'；'.join(errors[:2])}）。已记录你的输入，可稍后重试。"
 
 
@@ -4055,6 +4215,7 @@ async def test_model(agent_id: str, req: Request):
         model = normalize_ds_model(model)
     if not key and provider != "ollama":
         return {"ok": False, "error": "缺少 API Key"}
+    t0 = time.time()
     try:
         if provider == "claude":
             resp = requests.post(base + "/v1/messages",
@@ -4062,10 +4223,12 @@ async def test_model(agent_id: str, req: Request):
                 json={"model": model, "system": "ping", "messages": [{"role": "user", "content": "回复 ok"}], "max_tokens": 20},
                 timeout=20)
             resp.raise_for_status()
+            _update_model_health(agent_id, True, int((time.time() - t0) * 1000), provider, model)
             return {"ok": True, "reply": resp.json()["content"][0]["text"][:80]}
         elif provider == "ollama":
             resp = requests.post(base + "/api/chat", json={"model": model, "messages": [{"role": "user", "content": "ping"}], "stream": False}, timeout=40)
             resp.raise_for_status()
+            _update_model_health(agent_id, True, int((time.time() - t0) * 1000), provider, model)
             return {"ok": True, "reply": resp.json()["message"]["content"][:80]}
         else:
             resp = requests.post(base + PROVIDER_PRESETS[provider]["chat"],
@@ -4073,9 +4236,106 @@ async def test_model(agent_id: str, req: Request):
                 json={"model": model, "messages": [{"role": "user", "content": "回复 ok 两个字"}], "max_tokens": 30},
                 timeout=20)
             resp.raise_for_status()
+            _update_model_health(agent_id, True, int((time.time() - t0) * 1000), provider, model)
             return {"ok": True, "reply": resp.json()["choices"][0]["message"]["content"][:80]}
     except Exception as e:
+        _update_model_health(agent_id, False)
         return {"ok": False, "error": str(e)[:160]}
+
+
+# ── D0.4 连接状态 + D0.3 Token 用量 + D0.5 主备路由透明化 ──────────
+@app.get("/api/models/{agent_id}/status")
+def model_status(agent_id: str):
+    """连接状态 + 今日用量 + 预算 + 实际服务模型，供前端状态面板轮询。"""
+    cfg = get_model_config(agent_id) or {}
+    conn = get_db()
+    try:
+        h = conn.execute("SELECT * FROM model_health WHERE agent_id=?", (agent_id,)).fetchone()
+        budget = conn.execute("SELECT daily_tokens FROM model_budgets WHERE agent_id=?", (agent_id,)).fetchone()
+        today = datetime.now().strftime("%Y-%m-%d")
+        u = conn.execute(
+            "SELECT COALESCE(SUM(input_tokens+output_tokens),0), COUNT(*) FROM model_usage "
+            "WHERE agent_id=? AND ts>=?", (agent_id, today + "T00:00:00")
+        ).fetchone()
+    finally:
+        conn.close()
+    has_key = bool(cfg.get("api_key"))
+    today_tokens = int(u[0]) if u else 0
+    today_calls = int(u[1]) if u else 0
+    daily_budget = int(budget[0]) if budget else 0
+    return {
+        "agent_id": agent_id,
+        "configured": has_key,
+        "provider": cfg.get("provider", "deepseek"),
+        "model_name": cfg.get("model_name", ""),
+        "has_key": has_key,
+        "last_test_ok": bool(h["ok"]) if h else None,
+        "last_test_ts": h["ts"] if h else None,
+        "last_latency_ms": h["latency_ms"] if h else None,
+        "served_provider": h["served_provider"] if h else None,
+        "served_model": h["served_model"] if h else None,
+        "today_tokens": today_tokens,
+        "today_calls": today_calls,
+        "daily_budget": daily_budget,
+        "over_budget": (today_tokens >= daily_budget) if daily_budget else False,
+    }
+
+
+@app.get("/api/models/{agent_id}/usage")
+def model_usage_detail(agent_id: str):
+    """该角色今日 / 累计 token 与调用量。"""
+    conn = get_db()
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        t = conn.execute(
+            "SELECT COALESCE(SUM(input_tokens+output_tokens),0), COUNT(*) FROM model_usage "
+            "WHERE agent_id=? AND ts>=?", (agent_id, today + "T00:00:00")
+        ).fetchone()
+        allt = conn.execute(
+            "SELECT COALESCE(SUM(input_tokens+output_tokens),0), COUNT(*) FROM model_usage WHERE agent_id=?",
+            (agent_id,)
+        ).fetchone()
+        budget = conn.execute("SELECT daily_tokens FROM model_budgets WHERE agent_id=?", (agent_id,)).fetchone()
+    finally:
+        conn.close()
+    return {
+        "agent_id": agent_id,
+        "today_tokens": int(t[0]) if t else 0,
+        "today_calls": int(t[1]) if t else 0,
+        "total_tokens": int(allt[0]) if allt else 0,
+        "total_calls": int(allt[1]) if allt else 0,
+        "daily_budget": int(budget[0]) if budget else 0,
+    }
+
+
+@app.get("/api/models/{agent_id}/budget")
+def get_budget_api(agent_id: str):
+    return {"ok": True, "agent_id": agent_id, "daily_tokens": _get_budget(agent_id)}
+
+
+@app.post("/api/models/{agent_id}/budget")
+async def set_budget_api(agent_id: str, req: Request):
+    data = await req.json()
+    val = int(data.get("daily_tokens", 0) or 0)
+    if val < 0:
+        return {"ok": False, "error": "预算不能为负"}
+    _set_budget(agent_id, val)
+    return {"ok": True, "agent_id": agent_id, "daily_tokens": val}
+
+
+@app.get("/api/models/{agent_id}/route")
+def model_route(agent_id: str):
+    """D0.5 主备路由透明化：返回该角色实际会尝试的候选链（不含 Key），并标注健康度。"""
+    cands = _available_providers(agent_id)
+    out = []
+    for provider, base, key, model in cands:
+        h = _PROVIDER_HEALTH.get((provider, model))
+        out.append({
+            "provider": provider, "model": model,
+            "healthy": (h["ok"] > h["fail"]) if h else None,
+            "ok": h["ok"] if h else 0, "fail": h["fail"] if h else 0,
+        })
+    return {"agent_id": agent_id, "route": out, "primary": out[0] if out else None}
 
 
 # ── API：元神系统级执行器（桌面最高权限）──────────────────────────

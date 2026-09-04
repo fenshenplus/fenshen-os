@@ -996,6 +996,7 @@
               <span class="ci-spacer"></span>
               <button class="ci-model" id="metaModelChip" onclick="openModelSetup()" title="点击配置 / 切换模型">
                 <span class="dot" id="metaModelDot"></span><span class="lbl" id="metaModelLbl">未配置模型</span>
+                <span id="metaModelStatus" style="font-size:10px;color:var(--gray-400);margin-left:5px"></span>
               </button>
             </div>
             <div class="ci-row">
@@ -1761,6 +1762,8 @@ function enterLocalMode(){
 }
 async function onAppReady(){
   await refreshModelChip();
+  // 每 30 秒刷新模型连接状态（D0.4 连接状态面板）
+  setInterval(refreshModelChip, 30000);
   // 无论登录还是本地模式，只要元神模型没配 Key，就先弹出配置引导
   if(!metaModelReady && !localStorage.getItem('fs_model_setup_seen')){
     openModelSetup();
@@ -1869,19 +1872,36 @@ async function openModelSetup(){
     mask.style.display='flex';
   }catch(e){ toast('打开模型配置失败：'+errText(e),'err'); }
 }
-/* 刷新元神输入框模型芯片状态（绿点 = 已配 Key） */
+/* 刷新元神输入框模型芯片状态（绿点 = 已配 Key；副行 = 连接 + 今日用量） */
 let metaModelReady=false;
 async function refreshModelChip(){
-  const dot=document.getElementById('metaModelDot'), lbl=document.getElementById('metaModelLbl');
+  const dot=document.getElementById('metaModelDot'), lbl=document.getElementById('metaModelLbl'), st=document.getElementById('metaModelStatus');
   if(!dot||!lbl) return;
   try{
     const list=await apiJson('/api/models');
     const m=(Array.isArray(list)?list:[]).find(x=>x.agent_id===META_PID)||{};
     metaModelReady=!!m.has_key;
     if(m.has_key){ dot.classList.add('ok'); lbl.textContent=(m.provider||'deepseek')+(m.model_name?(' · '+m.model_name):''); }
-    else { dot.classList.remove('ok'); lbl.textContent='未配置模型'; }
-  }catch(e){ metaModelReady=false; lbl.textContent='模型状态未知'; }
+    else { dot.classList.remove('ok'); lbl.textContent='未配置模型'; if(st) st.textContent=''; return; }
+    // D0.4 连接状态：拉取最新状态面板数据
+    const s=await apiJson('/api/models/'+META_PID+'/status');
+    if(!st) return;
+    if(s.last_test_ok===true){
+      const lat = s.last_latency_ms!=null ? (s.last_latency_ms+'ms') : '';
+      const used = s.today_tokens!=null ? fmtTokens(s.today_tokens) : '';
+      const bud = (s.daily_budget>0 && s.over_budget) ? ' ⚠️预算预警' : '';
+      st.textContent = `🟢${lat?(' '+lat):''}${used?(' · 今日 '+used):''}${bud}`;
+      st.style.color = s.over_budget ? 'var(--amber)' : 'var(--green)';
+    } else if(s.last_test_ok===false){
+      st.textContent = '🔴 未连通 · 点此测试';
+      st.style.color = 'var(--red)';
+    } else {
+      st.textContent = '⚪ 未测试 · 点此测试';
+      st.style.color = 'var(--gray-400)';
+    }
+  }catch(e){ metaModelReady=false; lbl.textContent='模型状态未知'; if(st) st.textContent=''; }
 }
+function fmtTokens(n){ n=Number(n)||0; if(n>=1e6) return (n/1e6).toFixed(2)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'k'; return ''+n; }
 async function ensureMetaModelReady(){
   if(metaModelReady) return true;
   try{
@@ -3962,8 +3982,18 @@ async function renderModels(){
         <button class="btn primary sm" onclick="saveModel('${jsStr(c.agent_id)}',this)">保存</button>
         <button class="btn sm" onclick="testModel('${jsStr(c.agent_id)}',this)">测试连接</button>
       </div>
-      <div class="kv" id="mtest-${escapeHtml(c.agent_id)}" style="margin-top:6px"></div>`;
+      <div class="kv" id="mtest-${escapeHtml(c.agent_id)}" style="margin-top:6px"></div>
+      <div style="margin-top:8px;padding-top:8px;border-top:.5px solid var(--gray-100);font-size:11px;color:var(--gray-500)">
+        <div id="musage-${escapeHtml(c.agent_id)}" style="margin-bottom:6px">用量：加载中…</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="white-space:nowrap">每日 Token 预算</label>
+          <input id="mbudget-${escapeHtml(c.agent_id)}" type="number" min="0" step="1000" placeholder="0 = 不限"
+            style="width:110px;padding:3px 6px;border:.5px solid var(--gray-200);border-radius:6px;font-size:11px">
+          <button class="btn sm" onclick="saveBudget('${jsStr(c.agent_id)}',this)">设预算</button>
+        </div>
+      </div>`;
     g.appendChild(card);
+    loadModelStats(c.agent_id);
   });
 }
 function onProviderChange(sel){ const card=sel.closest('.card'); const k=card.querySelector('[data-f=api_key]'); const lbl=k.previousElementSibling;
@@ -3994,8 +4024,28 @@ async function testModel(agent_id, btn){
       const j=await apiJson('/api/models/'+encodeURIComponent(agent_id)+'/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       if(t) t.textContent = j.ok ? ('✅ API 有效可用：'+ (j.reply||'')) : ('❌ API 不可用：'+ (j.error||'失败'));
       toast(j.ok?'API 有效可用':'API 不可用：'+(j.error||'失败'), j.ok?'ok':'err');
+      refreshModelChip(); // 同步顶部芯片状态
     }catch(e){ if(t) t.textContent='❌ 请求失败：'+errText(e); throw e; }
   });
+}
+/* D0.3 Token 预算 + D0.4 用量：设置每日预算 / 加载该角色用量 */
+async function saveBudget(agent_id, btn){
+  const el=document.getElementById('mbudget-'+agent_id); if(!el) return;
+  const v=parseInt(el.value||'0',10)||0;
+  await withBusy(btn,'保存中…',async()=>{
+    await apiJson('/api/models/'+encodeURIComponent(agent_id)+'/budget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daily_tokens:v})});
+    toast(v>0?('已设每日预算 '+v.toLocaleString()+' token'):'已取消预算上限','ok');
+    loadModelStats(agent_id);
+  });
+}
+async function loadModelStats(agent_id){
+  const el=document.getElementById('musage-'+agent_id); if(!el) return;
+  try{
+    const u=await apiJson('/api/models/'+encodeURIComponent(agent_id)+'/usage');
+    const bud = u.daily_budget>0 ? (' / 预算 '+u.daily_budget.toLocaleString()) : ' / 不限';
+    el.textContent = `用量：今日 ${fmtTokens(u.today_tokens)}（${u.today_calls} 次）｜ 累计 ${fmtTokens(u.total_tokens)}${bud}`;
+    const be=document.getElementById('mbudget-'+agent_id); if(be && !be.value) be.value=u.daily_budget||0;
+  }catch(e){ el.textContent='用量：获取失败'; }
 }
 
 /* ── 多模型协作（Phase 5：交叉验证 + 用量统计）── */
