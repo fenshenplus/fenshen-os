@@ -1617,6 +1617,15 @@ def migrate_phantom_models():
         print("[migrate] 已修正 %d 处占位模型名为 deepseek-chat" % fixed)
 
 
+def normalize_ds_model(model_name: str):
+    """归一化 DeepSeek 模型名：空 或 历史占位假模型（deepseek-v4-flash 等不存在的型号）
+    一律回落到官方真实默认模型 deepseek-chat。防止用户照占位符填旧名导致测试/对话 404。"""
+    _mn = (model_name or "").strip().lower()
+    if not _mn or _mn in _PHANTOM_DS_MODELS:
+        return PROVIDER_PRESETS["deepseek"]["default_model"]
+    return _mn
+
+
 # 启动双向同步：DB 与冗余 store 互为备份，任一有 key 即回写两者（修复「重装即忘」）。
 # 放在函数定义之后调用，避免模块自上而下执行时的 NameError。
 sync_model_configs()
@@ -3979,16 +3988,10 @@ async def set_model(agent_id: str, req: Request):
                 api_key = _cur["api_key"]
         except Exception:
             pass
-    # 模型名归一化：缺省回落到【官方真实通用模型 deepseek-chat】；
-    # 仅做大小写/首尾空白容错，保留用户填写的真实模型名（如 deepseek-reasoner / deepseek-coder）。
-    # ⚠️ 历史 bug：曾把空/非法名回落到不存在的占位模型 "deepseek-v4-flash"，
-    #    导致「测试用 deepseek-chat 通过、实际对话用假模型 404 失败」的「连接失败」假象。
+    # 模型名归一化：空 或 历史占位假模型（deepseek-v4-flash 等）一律回落到官方真实默认 deepseek-chat；
+    # 保留用户填写的真实模型名（如 deepseek-reasoner / deepseek-coder）。纵深防御「照占位符填旧名导致 404」。
     if provider == "deepseek":
-        _mn = (model_name or "").strip()
-        if not _mn:
-            model_name = PROVIDER_PRESETS["deepseek"]["default_model"]
-        else:
-            model_name = _mn.lower()
+        model_name = normalize_ds_model(model_name)
     conn = get_db()
     conn.execute(
         "INSERT OR REPLACE INTO model_configs (agent_id,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?)",
@@ -4049,8 +4052,7 @@ async def test_model(agent_id: str, req: Request):
     base = base or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"]
     model = model or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["default_model"]
     if provider == "deepseek":
-        _mn = (model or "").strip().lower()
-        model = _mn or PROVIDER_PRESETS["deepseek"]["default_model"]
+        model = normalize_ds_model(model)
     if not key and provider != "ollama":
         return {"ok": False, "error": "缺少 API Key"}
     try:
