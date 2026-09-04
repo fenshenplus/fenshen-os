@@ -92,6 +92,9 @@ if _MEI:
     DB_DIR = os.path.join(os.path.expanduser("~"), ".fenshen")
     os.makedirs(DB_DIR, exist_ok=True)
     DB = os.path.join(DB_DIR, "fenshen.db")
+# 允许测试/特殊部署覆盖 DB 路径（不影响默认行为；回归测试 test_model_key_persistence 使用）
+if os.environ.get("FENSHEN_DB_PATH"):
+    DB = os.environ["FENSHEN_DB_PATH"]
 META_PID = "__meta__"  # 元神私聊在消息表中使用的 project_id
 
 # ── 元神人格 grounding ─────────────────────────────────────────────
@@ -1450,7 +1453,11 @@ def set_model_backups(agent_id: str, backups: list):
 # 主存仍是 DB(model_configs)；此处额外把配置写一份到「应用支持目录」，
 # 与 ~/.fenshen 解耦——重装/升级 .app 不会动 Application Support，DB 即便被清也能自愈。
 def _model_store_path():
-    if sys.platform == "darwin":
+    # 允许测试/特殊部署覆盖冗余 store 路径（不影响默认行为）
+    env = os.environ.get("FENSHEN_MODEL_STORE")
+    if env:
+        base = env
+    elif sys.platform == "darwin":
         base = os.path.expanduser("~/Library/Application Support/com.fenshen.app")
     elif sys.platform == "win32":
         base = os.environ.get("APPDATA", os.path.expanduser("~/.fenshen"))
@@ -1490,40 +1497,78 @@ def _write_model_store(agent_id: str, rec: dict, backups: list = None):
         pass
 
 
-def restore_model_configs_from_store():
-    """启动自愈：DB 中某 agent 缺 api_key 但冗余文件有 → 补回 DB；DB 已有则信任 DB。"""
+def sync_model_configs():
+    """启动双向同步：DB 与冗余 store 互为备份，任一有 key 即全量回写两者。
+
+    修复「重装即忘」根因：旧逻辑只在显式 set_model 时写 store，且只做 store→DB 单向恢复。
+    若用户仅配过一次 Key（早于冗余 store 上线、store 从未写入），则 store 永远为空；
+    一旦「彻底重装」删掉 ~/.fenshen（DB 丢失），无冗余可恢复 → 每次重装都要重配 Key。
+
+    本函数：
+    ① DB 有 key 而 store 空 → 把 DB 的 key 回填 store（补齐冗余副本）；
+    ② 删 ~/.fenshen 后 DB 丢失但 Application Support 的 store 仍在 → 从 store 恢复 DB；
+    ③ 两处任一幸存即可恢复，满足「删掉重装只要不删记录、重启、更新都必须记住 API Key」。
+    优先级：DB 有 key 则以 DB 为准；否则用 store（绝不互相覆盖有效 key）。
+    """
     path = _model_store_path()
-    if not os.path.exists(path):
-        return
-    try:
-        with open(path, "r", encoding="utf-8") as _f:
-            data = json.load(_f)
-    except Exception:
-        return
+    store = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as _f:
+                store = json.load(_f)
+        except Exception:
+            store = {}
     conn = get_db()
     try:
-        for agent_id, rec in data.items():
-            if not rec or not rec.get("api_key"):
+        db_rows = {}
+        for r in conn.execute(
+            "SELECT agent_id, provider, base_url, api_key, model_name FROM model_configs").fetchall():
+            db_rows[r["agent_id"]] = dict(r)
+        merged = {}
+        for aid in set(db_rows) | set(store):
+            d = db_rows.get(aid)
+            s = store.get(aid)
+            chosen = d if (d and d.get("api_key")) else (s if (s and s.get("api_key")) else None)
+            if not chosen:
                 continue
-            cur = conn.execute("SELECT api_key FROM model_configs WHERE agent_id=?", (agent_id,)).fetchone()
-            if cur and cur["api_key"]:
-                continue  # DB 已有 key，优先信任 DB，不覆盖
-            provider = rec.get("provider") or "deepseek"
-            preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])
+            preset = PROVIDER_PRESETS.get(chosen.get("provider") or "deepseek", PROVIDER_PRESETS["deepseek"])
+            merged[aid] = {
+                "provider": chosen.get("provider") or "deepseek",
+                "base_url": chosen.get("base_url") or None,
+                "api_key": chosen["api_key"],
+                "model_name": chosen.get("model_name") or preset["default_model"],
+            }
+        for aid, m in merged.items():
             conn.execute(
                 "INSERT OR REPLACE INTO model_configs (agent_id,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?)",
-                (agent_id, provider, rec.get("base_url") or None, rec.get("api_key"),
-                 rec.get("model_name") or preset["default_model"]))
-            # 备用模型一并自愈
-            for i, b in enumerate(rec.get("backups") or []):
+                (aid, m["provider"], m["base_url"], m["api_key"], m["model_name"]))
+            # 备用模型：优先取 store 备份，否则取 DB model_backups
+            backups = (store.get(aid) or {}).get("backups")
+            if not backups:
+                backups = [dict(r) for r in conn.execute(
+                    "SELECT idx,provider,base_url,api_key,model_name FROM model_backups WHERE agent_id=? ORDER BY idx", (aid,)).fetchall()]
+            for i, b in enumerate(backups or []):
                 if not b or not b.get("api_key"):
                     continue
                 bp = PROVIDER_PRESETS.get(b.get("provider") or "deepseek", PROVIDER_PRESETS["deepseek"])
                 conn.execute(
                     "INSERT OR REPLACE INTO model_backups (agent_id,idx,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?,?)",
-                    (agent_id, i, b.get("provider") or "deepseek", b.get("base_url") or None,
+                    (aid, i, b.get("provider") or "deepseek", b.get("base_url") or None,
                      b.get("api_key"), b.get("model_name") or bp["default_model"]))
         conn.commit()
+        # 回写 store，与 DB 保持一致（补齐冗余副本）
+        out = {}
+        for aid, m in merged.items():
+            out[aid] = {
+                "provider": m["provider"], "base_url": m["base_url"],
+                "api_key": m["api_key"], "model_name": m["model_name"],
+                "backups": (store.get(aid) or {}).get("backups") or [],
+            }
+        try:
+            with open(path, "w", encoding="utf-8") as _f:
+                json.dump(out, _f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
     finally:
         conn.close()
 
@@ -1572,9 +1617,9 @@ def migrate_phantom_models():
         print("[migrate] 已修正 %d 处占位模型名为 deepseek-chat" % fixed)
 
 
-# 启动自愈：若 DB 缺失模型 key（被清/升级残留），从应用支持目录冗余文件恢复。
+# 启动双向同步：DB 与冗余 store 互为备份，任一有 key 即回写两者（修复「重装即忘」）。
 # 放在函数定义之后调用，避免模块自上而下执行时的 NameError。
-restore_model_configs_from_store()
+sync_model_configs()
 migrate_phantom_models()
 
 
