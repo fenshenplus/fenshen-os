@@ -1292,6 +1292,30 @@ def init_db():
         ' props TEXT DEFAULT \'{}\''
         ')'
     )
+    # ── v0.64.56 Goal-Mode（Ralph loop）：看板卡自主迭代 + 独立 judge 验收 ──
+    # 复用已有 done_criteria 作完成契约主描述；新增状态机字段 + 逐轮记录表。
+    gcols = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
+    for col, ddl in (
+        ("goal_mode", "INTEGER DEFAULT 0"),        # 0=关 1=开
+        ("goal_status", "TEXT DEFAULT ''"),        # running|paused|done|failed|''
+        ("goal_max_turns", "INTEGER DEFAULT 20"),  # 轮次预算（元神宪法护栏）
+        ("goal_subgoals", "TEXT DEFAULT '[]'"),    # JSON: [{id,text,check,status}]
+        ("goal_gates", "TEXT DEFAULT '[]'"),       # JSON: [{id,kind,spec,required_exit}]
+    ):
+        if col not in gcols:
+            cur.execute(f"ALTER TABLE tasks ADD COLUMN {col} {ddl}")
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS goal_runs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            turn INTEGER NOT NULL,
+            worker_out TEXT DEFAULT '',
+            verdict TEXT DEFAULT '',
+            reason TEXT DEFAULT '',
+            created_at TEXT
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_goal_runs_task ON goal_runs(task_id, turn)")
     conn.commit()
     conn.close()
 
@@ -8323,6 +8347,138 @@ async def verify_task(task_id: str, req: Request):
     _task_status(task_id, "review", pid, f"🔍 验收未通过：{task['name']}（{reason}）")
     _narrowcast_notify(pid, f"🔍 验收未通过：{task['name']}（{reason}）{mention}", targets)
     return {"ok": True, "pass": False, "status": "review", "reason": reason, "narrowcast": targets}
+
+
+# ── Goal-Mode（Ralph loop）：看板卡自主迭代 + 独立 judge 验收 ──────────────
+# 边界铁律：永不自动建卡、永不扇出群聊、worker ≠ judge；多任务排程仍归看板/元神。
+def _parse_goal_json(s, default):
+    try:
+        v = json.loads(s or "[]")
+        return v if isinstance(v, list) else default
+    except Exception:
+        return default
+
+
+@app.post("/api/tasks/{task_id}/goal/start")
+async def goal_start(task_id: str):
+    """开启 Goal-Mode 并拉起 Ralph 循环（后台任务，不阻塞调用方）。"""
+    from backend.goal_mode import start_goal
+    conn = get_db()
+    task = conn.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    conn.execute("UPDATE tasks SET goal_mode=1, goal_status='running' WHERE id=?", (task_id,))
+    conn.commit()
+    conn.close()
+    try:
+        start_goal(task_id)
+    except Exception as e:
+        return {"ok": False, "error": f"启动失败: {e}"}
+    return {"ok": True, "goal_status": "running", "message": "Goal-Mode 已启动，分身将自主推进直到验收通过"}
+
+
+@app.post("/api/tasks/{task_id}/goal/pause")
+async def goal_pause(task_id: str):
+    conn = get_db()
+    task = conn.execute("SELECT id,goal_mode FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    conn.execute("UPDATE tasks SET goal_status='paused' WHERE id=?", (task_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "goal_status": "paused"}
+
+
+@app.post("/api/tasks/{task_id}/goal/resume")
+async def goal_resume(task_id: str):
+    import asyncio as _a
+    from backend.goal_mode import run_goal_loop
+    conn = get_db()
+    task = conn.execute("SELECT id,goal_mode FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    if not task["goal_mode"]:
+        conn.close()
+        return {"ok": False, "error": "该任务未开启 Goal-Mode"}
+    conn.execute("UPDATE tasks SET goal_status='running' WHERE id=?", (task_id,))
+    conn.commit()
+    conn.close()
+    _a.create_task(run_goal_loop(task_id))
+    return {"ok": True, "goal_status": "running", "message": "Goal-Mode 已恢复"}
+
+
+@app.post("/api/tasks/{task_id}/goal/clear")
+async def goal_clear(task_id: str):
+    conn = get_db()
+    conn.execute("UPDATE tasks SET goal_mode=0, goal_status='' WHERE id=?", (task_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "goal_status": "", "message": "Goal-Mode 已关闭"}
+
+
+@app.post("/api/tasks/{task_id}/goal/subgoal")
+async def goal_add_subgoal(task_id: str, req: Request):
+    """追加一条验收项（运行中可编辑，对应 Hermes /subgoal）。
+    check 形如：native:file_exists:/path | cmd:pytest tests/ | llm:（主观）| 空（自由验收）。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    text = (data.get("text") or "").strip()
+    check = (data.get("check") or "").strip()
+    if not text:
+        return {"ok": False, "error": "验收项文本不能为空"}
+    conn = get_db()
+    task = conn.execute("SELECT id,goal_subgoals FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    subs = _parse_goal_json(task["goal_subgoals"], [])
+    subs.append({"id": uuid.uuid4().hex[:8], "text": text, "check": check, "status": "pending"})
+    conn.execute("UPDATE tasks SET goal_subgoals=? WHERE id=?", (json.dumps(subs, ensure_ascii=False), task_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "subgoals": subs}
+
+
+@app.post("/api/tasks/{task_id}/goal/gate")
+async def goal_add_gate(task_id: str, req: Request):
+    """追加一条质量门（对应 Hermes /goal gate add）。kind: cmd|native|page。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    kind = (data.get("kind") or "").strip().lower()
+    spec = (data.get("spec") or "").strip()
+    if not kind or not spec:
+        return {"ok": False, "error": "质量门 kind/spec 不能为空"}
+    conn = get_db()
+    task = conn.execute("SELECT id,goal_gates FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        conn.close()
+        return {"ok": False, "error": "任务不存在"}
+    gates = _parse_goal_json(task["goal_gates"], [])
+    gates.append({"id": uuid.uuid4().hex[:8], "kind": kind, "spec": spec,
+                  "required_exit": int(data.get("required_exit", 0) or 0)})
+    conn.execute("UPDATE tasks SET goal_gates=? WHERE id=?", (json.dumps(gates, ensure_ascii=False), task_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "gates": gates}
+
+
+@app.get("/api/tasks/{task_id}/goal/runs")
+async def goal_runs(task_id: str):
+    """返回逐轮 worker 产物 + judge 判定，供前端进度抽屉查看（保留 pause 看进度口子）。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT turn,worker_out,verdict,reason,created_at FROM goal_runs WHERE task_id=? ORDER BY turn",
+        (task_id,),
+    ).fetchall()
+    conn.close()
+    return {"ok": True, "runs": [dict(r) for r in rows]}
 
 
 # ── 批次A D3：确定性质量门 API ───────────────────────────────────────────────
