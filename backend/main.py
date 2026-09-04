@@ -1504,9 +1504,54 @@ def restore_model_configs_from_store():
         conn.close()
 
 
+# 历史数据迁移：曾把空/非法 DeepSeek 模型名回落到不存在的占位模型 "deepseek-v4-flash" 等，
+# 导致「测试通过、实际对话 404 连接失败」。启动时把这些假模型名修正为官方真实默认模型。
+_PHANTOM_DS_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"}
+def migrate_phantom_models():
+    fixed = 0
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT agent_id,model_name FROM model_configs WHERE model_name IN (?,?,?)",
+            tuple(_PHANTOM_DS_MODELS)).fetchall()
+        for r in rows:
+            conn.execute("UPDATE model_configs SET model_name=? WHERE agent_id=?",
+                         (PROVIDER_PRESETS["deepseek"]["default_model"], r["agent_id"]))
+            fixed += 1
+        conn.commit()
+    finally:
+        conn.close()
+    # 同步修正冗余 store 文件（含备用模型）
+    try:
+        path = _model_store_path()
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as _f:
+                data = json.load(_f)
+            changed = False
+            for agent_id, rec in data.items():
+                if not isinstance(rec, dict):
+                    continue
+                if (rec.get("model_name") or "") in _PHANTOM_DS_MODELS:
+                    rec["model_name"] = PROVIDER_PRESETS["deepseek"]["default_model"]
+                    changed = True
+                for b in (rec.get("backups") or []):
+                    if isinstance(b, dict) and (b.get("model_name") or "") in _PHANTOM_DS_MODELS:
+                        b["model_name"] = PROVIDER_PRESETS["deepseek"]["default_model"]
+                        changed = True
+            if changed:
+                with open(path, "w", encoding="utf-8") as _f:
+                    json.dump(data, _f, ensure_ascii=False, indent=2)
+                fixed += 1
+    except Exception:
+        pass
+    if fixed:
+        print("[migrate] 已修正 %d 处占位模型名为 deepseek-chat" % fixed)
+
+
 # 启动自愈：若 DB 缺失模型 key（被清/升级残留），从应用支持目录冗余文件恢复。
 # 放在函数定义之后调用，避免模块自上而下执行时的 NameError。
 restore_model_configs_from_store()
+migrate_phantom_models()
 
 
 def resolve_provider_cfg(agent_id: str):
@@ -3865,12 +3910,16 @@ async def set_model(agent_id: str, req: Request):
                 api_key = _cur["api_key"]
         except Exception:
             pass
-    # P0-归一化：deepseek 供应商模型名大小写/别名容错，非法名（如用户误填 "Deepseek"）
-    # 一律回落到官方真实通用模型 deepseek-v4-flash，避免 400 Bad Request 致连不上大模型。
+    # 模型名归一化：缺省回落到【官方真实通用模型 deepseek-chat】；
+    # 仅做大小写/首尾空白容错，保留用户填写的真实模型名（如 deepseek-reasoner / deepseek-coder）。
+    # ⚠️ 历史 bug：曾把空/非法名回落到不存在的占位模型 "deepseek-v4-flash"，
+    #    导致「测试用 deepseek-chat 通过、实际对话用假模型 404 失败」的「连接失败」假象。
     if provider == "deepseek":
-        _DS_VALID = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp", "deepseek-chat", "deepseek-reasoner"}
-        _mn = (model_name or "").strip().lower()
-        model_name = _mn if _mn in _DS_VALID else "deepseek-v4-flash"
+        _mn = (model_name or "").strip()
+        if not _mn:
+            model_name = PROVIDER_PRESETS["deepseek"]["default_model"]
+        else:
+            model_name = _mn.lower()
     conn = get_db()
     conn.execute(
         "INSERT OR REPLACE INTO model_configs (agent_id,provider,base_url,api_key,model_name) VALUES (?,?,?,?,?)",
@@ -3931,9 +3980,8 @@ async def test_model(agent_id: str, req: Request):
     base = base or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["base"]
     model = model or PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["deepseek"])["default_model"]
     if provider == "deepseek":
-        _DS_VALID = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp", "deepseek-chat", "deepseek-reasoner"}
         _mn = (model or "").strip().lower()
-        model = _mn if _mn in _DS_VALID else "deepseek-v4-flash"
+        model = _mn or PROVIDER_PRESETS["deepseek"]["default_model"]
     if not key and provider != "ollama":
         return {"ok": False, "error": "缺少 API Key"}
     try:
