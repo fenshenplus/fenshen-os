@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.64.57] — 2026-09-04
+### Added
+- （待补条目）
+
 ## [v0.64.56] — 2026-09-04
 ### Added
 - Goal-Mode(Ralph loop)+原生质量门：看板卡自主迭代、独立judge验收、native gate优先

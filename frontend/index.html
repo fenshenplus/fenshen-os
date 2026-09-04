@@ -350,8 +350,11 @@
   .out-panel{position:relative;width:340px;flex:0 0 auto;align-self:stretch;background:var(--bg);border-left:.5px solid var(--gray-200);box-shadow:-4px 0 16px rgba(0,0,0,.06);display:flex;flex-direction:column;overflow:hidden;transition:width .18s ease}
   .out-panel .op-h{padding:12px 14px;font-size:13px;font-weight:500;border-bottom:.5px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center;gap:8px;user-select:none;flex:0 0 auto}
   .out-panel .op-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .out-panel .split-close{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:transparent;border:none;color:var(--gray-500);cursor:pointer;font-size:15px;line-height:1}
+  .out-panel .split-close{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:transparent;border:none;color:var(--gray-500);cursor:pointer;font-size:15px;line-height:1;padding:0}
   .out-panel .split-close:hover{background:var(--gray-100);color:var(--fg)}
+  .out-panel .split-close .icon-toggle{width:16px;height:16px;opacity:.75;transition:transform .18s ease}
+  .out-panel .split-close:hover .icon-toggle{opacity:1}
+  .out-panel.collapsed .split-close .icon-toggle{transform:rotate(180deg)}
   /* 收起态：右侧窄条，整体可点击展开，保留竖排标题提示；文字不再倒转 */
   .out-panel.collapsed{width:44px;cursor:pointer;box-shadow:none}
   .out-panel.collapsed:hover{background:var(--gray-50)}
@@ -1375,7 +1378,7 @@
     <div class="out-panel hidden" id="metaOutputPanel" onclick="onMetaOutputPanelClick(event)">
       <div class="op-h">
         <span class="op-title">📦 元神产出展示区</span>
-        <button class="split-close" id="btnMetaCollapse" onclick="toggleMetaOutput(event)" title="展开 / 收起">«</button>
+        <button class="split-close" id="btnMetaCollapse" onclick="toggleMetaOutput(event)" title="收起产出栏"><img src="icons/icon-sidebar-toggle.png" alt="toggle" class="icon-toggle"></button>
       </div>
       <div class="out-body" id="metaOutputBody"><div class="out-empty">元神会在各项目产出 site / dist / build / out 后，自动在这里汇总展示。</div></div>
     </div>
@@ -2738,7 +2741,7 @@ const META_OUTPUT_WIDTH='340px', META_OUTPUT_COL_WIDTH='44px';
 function syncMetaOutputButton(collapsed){
   const bm=document.getElementById('btnMetaOutputMain');
   const cb=document.getElementById('btnMetaCollapse');
-  if(cb) cb.textContent=collapsed?'»':'«';
+  if(cb){ cb.title=collapsed?'展开产出栏':'收起产出栏'; }
   if(bm){ bm.classList.toggle('active', !collapsed); bm.textContent=collapsed?'展开产出区':'收起产出区'; bm.title=collapsed?'展开右侧元神产出展示区':'收起右侧元神产出展示区'; }
 }
 function showMetaOutput(collapsed){
