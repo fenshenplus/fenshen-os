@@ -1671,7 +1671,7 @@ const IN_APP_GUIDE = {
   models: {
     name:'模型设置', tagline:'为元神与每个角色指定 LLM 供应商',
     empty:null,
-    help:{ title:'模型设置', body:'为元神和每个角色单独指定供应商（DeepSeek / OpenAI / Claude / 通义千问 / 本地 Ollama 等）与密钥，存于本机。不同角色可用不同模型，平衡成本与能力。', tips:['元神默认用 deepseek-v4-flash','为编码角色配更强模型提质量','密钥仅存本机，不上传'], docUrl:null }
+    help:{ title:'模型设置', body:'为元神和每个角色单独指定供应商（DeepSeek / OpenAI / Claude / 通义千问 / 本地 Ollama 等）与密钥，存于本机。不同角色可用不同模型，平衡成本与能力。', tips:['元神默认用 deepseek-chat','为编码角色配更强模型提质量','密钥仅存本机，不上传'], docUrl:null }
   },
   terminal: {
     name:'终端', tagline:'元神以你的最高权限在本机执行命令',
@@ -6147,7 +6147,7 @@ async function openMetaProfile(){
     soul: window.__metaSoul || '绝对站本机用户本人利益。唯一委托人=本机用户；冲突护用户；钱/隐私/声誉保守；用户完全控制权；蒸馏他人须明示授权。',
     eng_spec: window.__metaEng || 'R8 清爽规则：函数≤50行，嵌套≤3层；真实 API 集成不接受 mock；优先交付可交互产物。',
     skills: window.__metaSkills || ['任务调度','团队搭建','验收门禁','长期记忆','进化复盘','模型路由'],
-    model_cfg: metaCfg || {provider:'deepseek', model_name:'deepseek-v4-flash'},
+    model_cfg: metaCfg || {provider:'deepseek', model_name:'deepseek-chat'},
     rule: window.__metaRule || ['用户完全控制权','冲突时护用户','钱/隐私/声誉保守'],
     current_task: window.__metaTask || '统筹所有项目与 Agent 团队',
     memory: window.__metaMemory || [],
@@ -6207,7 +6207,7 @@ function _renderProfileBody(d, isMeta){
       <div class="md-row"><label>全局规则（一行一条）</label><textarea id="mdRule" rows="3">${escapeHtml((d.rule||[]).join('\n'))}</textarea></div>
       <div class="md-row"><label>元神秘钥 / 全局模型</label>
         供应商 <select id="mdProvider">${_providerOptions(mc.provider)}</select>
-        模型 <input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-v4-flash')}" style="width:160px" placeholder="如 deepseek-chat / deepseek-v4-flash">
+        模型 <input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-chat')}" style="width:160px" placeholder="如 deepseek-chat / deepseek-reasoner">
         Key <input id="mdKey" type="password" value="" style="width:160px" placeholder="${(mc.has_key||mc.api_key)?'已保存（重填覆盖）':'全局 Key'}">
       </div>
       <div class="md-row"><label>记忆空间（仅你可见，跨项目共享）</label><textarea id="mdMemory" rows="4" placeholder="记录你的偏好、习惯、决策…">${escapeHtml((d.memory||[]).join('\n'))}</textarea></div>
@@ -6237,7 +6237,7 @@ function _renderProfileBody(d, isMeta){
         <label>供应商</label>
         <select id="mdProvider">${_providerOptions(mc.provider)}</select>
       </div>
-      <div class="md-row"><label>模型名</label><input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-v4-flash')}" placeholder="如 gpt-4o-mini"/></div>
+      <div class="md-row"><label>模型名</label><input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-chat')}" placeholder="如 gpt-4o-mini"/></div>
       <div class="md-row"><label>API Key</label><input id="mdKey" type="password" value="${escapeHtml(mc.api_key||'')}" placeholder="${mc.api_key?'已保存（重填覆盖）':'专属模型才填'}"/></div>
       <div class="md-row"><label>Base URL</label><input id="mdBase" value="${escapeHtml(mc.base_url||'')}" placeholder="留空=官方"/></div>
       <div class="md-row" style="display:flex;gap:12px;align-items:flex-end">
@@ -6321,8 +6321,8 @@ async function saveMember(){
       provider: el('mdProvider')?.value || '',
       api_key: el('mdKey')?.value.trim() || '',
       base_url: el('mdBase')?.value.trim() || '',
-      model_name: (el('mdModel')?.value.trim() || 'deepseek-v4-flash'),
-      model: (el('mdModel')?.value.trim() || 'deepseek-v4-flash'),
+      model_name: (el('mdModel')?.value.trim() || 'deepseek-chat'),
+      model: (el('mdModel')?.value.trim() || 'deepseek-chat'),
       temp: el('mdTemp') ? +(el('mdTemp').value||0.3) : 0.3,
       reason: el('mdReason') ? el('mdReason').checked : false,
       max_tokens: el('mdTok') ? +(el('mdTok').value||8000) : 8000
