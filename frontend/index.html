@@ -219,6 +219,9 @@
   .bubble.meta { background:var(--meta-50); color:var(--meta-900); border-bottom-left-radius:4px; border:0.5px solid var(--line-2); }
   .bubble .sender { font-size:10px; margin-bottom:2px; opacity:.7; font-weight:500; }
   .bubble .acts { margin-top:6px; display:flex; gap:6px; }
+  .msg-act { font-size:11px; line-height:1; padding:3px 7px; border:0.5px solid var(--line-2); background:var(--gray-100); color:var(--gray-600); border-radius:6px; cursor:pointer; transition:.15s; }
+  .msg-act:hover { background:var(--gray-200); color:var(--gray-900); }
+  .msg-act.on { background:var(--meta-50); color:var(--meta-900); border-color:var(--meta-200); }
   .tag { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; margin-bottom:3px; font-weight:500; }
   .tag.progress { background:rgba(34,197,94,.15); color:var(--success-strong); }
   .tag.done { background:rgba(0,122,255,.12); color:var(--accent-strong); }
@@ -230,7 +233,7 @@
   .task-jump:hover { background:var(--accent); color:var(--on-accent); }
   /* ── 输入框（WorkBuddy 风格：圆角卡片 + 图标工具栏 + 发送）── */
   /* 输入框固定底部，禁止被 flex 压缩/裁切（参考 WorkBuddy 紧凑风格） */
-  .chat-input { display:flex; flex-direction:column; gap:8px; margin:10px 14px; padding:10px 12px; border:.5px solid var(--gray-200); border-radius:16px; background:var(--bg); flex:0 0 auto; min-height:58px; box-shadow:0 1px 3px rgba(20,20,40,.04); }
+  .chat-input { display:flex; flex-direction:column; gap:8px; margin:10px 14px; padding:12px 14px; border:.5px solid var(--gray-200); border-radius:18px; background:var(--bg); flex:0 0 auto; min-height:96px; box-shadow:0 1px 3px rgba(20,20,40,.04); }
   .chat-input.drag { border-color:var(--blue-400); box-shadow:0 0 0 3px var(--blue-50); }
   .ico-btn { width:32px; height:32px; border-radius:9px; border:none; background:transparent; cursor:pointer; flex-shrink:0; font-size:16px; display:flex; align-items:center; justify-content:center; }
   .ci-bar { display:flex; align-items:center; gap:2px; }
@@ -251,14 +254,16 @@
   .msg-imgs { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
   .msg-img { width:120px; height:120px; object-fit:cover; border-radius:8px; cursor:pointer; border:0.5px solid var(--gray-300); }
   .ci-row { display:flex; align-items:flex-end; gap:8px; }
-  .chat-input textarea, .chat-input input { flex:1; padding:8px 6px; border:none; background:transparent; font-size:14px; line-height:1.5; outline:none; resize:none; min-height:26px; max-height:200px; font-family:inherit; box-sizing:border-box; }
+  .chat-input textarea, .chat-input input { flex:1; padding:10px 8px; border:none; background:transparent; font-size:15px; line-height:1.6; outline:none; resize:none; min-height:66px; max-height:220px; font-family:inherit; box-sizing:border-box; }
   .chat-input textarea:focus { box-shadow:none; }
   .chat-input .send { width:38px; height:38px; border-radius:50%; border:none; background:var(--blue-500); color:var(--on-accent); cursor:pointer; flex-shrink:0; font-size:16px; display:flex; align-items:center; justify-content:center; }
   .chat-input .send:hover { background:var(--blue-600); }
-  .ci-send { width:38px; height:38px; border-radius:50%; border:none; background:var(--blue-500); color:#fff; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; transition:background .15s,transform .1s; }
-  .ci-send:hover { background:var(--blue-600); }
-  .ci-send:active { transform:scale(.94); }
-  .ci-send svg { width:20px; height:20px; }
+  .ci-send { height:42px; padding:0 18px; border-radius:12px; border:none; background:linear-gradient(135deg,var(--blue-500),#5b8cff); color:#fff; cursor:pointer; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; gap:6px; font-size:14px; font-weight:600; letter-spacing:.5px; box-shadow:0 3px 10px rgba(45,110,255,.30); transition:transform .1s, box-shadow .15s, filter .15s; }
+  .ci-send:hover { filter:brightness(1.05); box-shadow:0 5px 16px rgba(45,110,255,.42); transform:translateY(-1px); }
+  .ci-send:active { transform:scale(.97); }
+  .ci-send svg { width:17px; height:17px; }
+  .ci-send .lbl { font-size:14px; line-height:1; }
+  .ci-send.disabled { opacity:.45; pointer-events:none; }
   .ci-stop { height:38px; padding:0 12px; border-radius:10px; border:.5px solid var(--gray-300); background:var(--bg); color:var(--gray-600); cursor:pointer; font-size:13px; flex-shrink:0; }
   .ci-stop:hover { background:var(--gray-100); }
   .voice-on { color:var(--danger-strong)!important; }
@@ -887,9 +892,9 @@
               </button>
             </div>
             <div class="ci-row">
-              <textarea id="msgInput" placeholder="发消息给团队…（Enter 发送 · Shift+Enter 换行）" rows="1" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
+              <textarea id="msgInput" placeholder="发消息给团队…（Enter 换行 · 点「发送」发送）" rows="2" oninput="autoResizeInput(this)"></textarea>
               <button class="ci-send" id="btnSendMsg" onclick="sendMsg()" title="发送">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg><span class="lbl">发送</span>
               </button>
               <input type="file" id="msgFile" accept="image/*" multiple hidden onchange="onImgPick('msgInput',this)">
             </div>
@@ -1047,10 +1052,10 @@
               </button>
             </div>
             <div class="ci-row">
-              <textarea id="metaInput" placeholder="和元神说点什么…（Enter 发送 · Shift+Enter 换行）" rows="1" oninput="autoResizeInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMeta();}"></textarea>
+              <textarea id="metaInput" placeholder="和元神说点什么…（Enter 换行 · 点「发送」发送）" rows="2" oninput="autoResizeInput(this)"></textarea>
               <button class="ci-stop" id="btnMetaStop2" onclick="metaStop()">中止</button>
               <button class="ci-send" id="btnSendMeta" onclick="sendMeta()" title="发送">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg><span class="lbl">发送</span>
               </button>
               <input type="file" id="metaFile" accept="image/*" multiple hidden onchange="onImgPick('metaInput',this)">
             </div>
@@ -1652,7 +1657,7 @@ const IN_APP_GUIDE = {
   chat: {
     name:'项目群聊', tagline:'项目 = 单人任务或群聊，元神按复杂度选择形态',
     empty:{ title:'还没有项目', desc:'和元神说目标，它会判断开单人任务还是群聊模式，自动拆任务、派角色并跟踪进度。', action:{label:'＋ 成立第一个项目', fn:'openWizard'} },
-    help:{ title:'项目群聊怎么用', body:'分身里，项目可以是「单人任务」（默认，和 WorkBuddy 一样）或「群聊模式」（复杂协作）。在元神窗口说目标，元神会按复杂度选择形态、建项目、拆任务、派单，进度同步到「项目看板」。@元神 随时下达指令；顶部可切换阶段 / 冻结 / 修改单 / 快照。', tips:['点元神置顶卡「＋新建工作」开单人任务','复杂协作才开团队任务（群聊模式）','消息即项目上下文，刷新不丢'], docUrl:null }
+    help:{ title:'项目群聊怎么用', body:'分身里，项目可以是「单人任务」（默认，代表你快速交付）或「群聊模式」（复杂协作）。在元神窗口说目标，元神会按复杂度选择形态、建项目、拆任务、派单，进度同步到「项目看板」。@元神 随时下达指令；顶部可切换阶段 / 冻结 / 修改单 / 快照。', tips:['点元神置顶卡「＋新建工作」开单人任务','复杂协作才开团队任务（群聊模式）','消息即项目上下文，刷新不丢'], docUrl:null }
   },
   cockpit: {
     name:'元神驾驶舱', tagline:'元神状态总览：续航 / 战队 / 项目 / 自进化',
@@ -2434,7 +2439,7 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
     }
     else { row.className='msg '+(m.kind==='self'?'right':'left');
       const cls=escapeHtml(m.kind==='meta'?'meta':m.kind); const tag=m.tag?`<span class="tag ${escapeHtml(m.tag)}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
-      let acts='';
+      let acts=`<div class="acts"><button class="msg-act" title="复制" onclick="msgAct(this,'copy')">⎘ 复制</button><button class="msg-act" title="点赞" onclick="msgAct(this,'like')">♥ 赞</button><button class="msg-act" title="朗读" onclick="msgAct(this,'read')">🔊 阅读</button><button class="msg-act" title="转发" onclick="msgAct(this,'forward')">↪ 转发</button></div>`;
       // 图片附件（v6.5 多模态）
       let imgs='';
       if(m.images){ try{ const arr=JSON.parse(m.images); if(Array.isArray(arr)&&arr.length){ imgs='<div class="msg-imgs">'+arr.map(im=>`<img class="msg-img" src="data:${im.mime};base64,${im.data}" onclick="openImg(this.src)" alt="${escapeHtml(im.name||'图片')}">`).join('')+'</div>'; } }catch(e){} }
@@ -2451,6 +2456,11 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
     b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; });
   b.scrollTop=b.scrollHeight;
   if(window.__DEMO_STREAM__ && window.__LAST_SENT__ && lastRow){ streamText(lastRow); window.__LAST_SENT__=false; } }
+function msgAct(btn, type){ const bubble=btn.closest('.bubble'); const t=bubble?bubble.querySelector('.btext'):null; const text=t?t.innerText:'';
+  if(type==='copy'){ (navigator.clipboard?navigator.clipboard.writeText(text):Promise.reject()).then(()=>toast('✅ 已复制'),()=>toast('复制失败')); }
+  else if(type==='like'){ const on=btn.classList.toggle('on'); btn.textContent=on?'♥ 已赞':'♥ 赞'; }
+  else if(type==='read'){ try{ if(window.speechSynthesis&&window.speechSynthesis.speaking) window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); u.lang='zh-CN'; window.speechSynthesis.speak(u); }catch(e){ toast('朗读不可用'); } }
+  else if(type==='forward'){ (navigator.clipboard?navigator.clipboard.writeText(text):Promise.reject()).then(()=>toast('✅ 已复制，可粘贴转发'),()=>toast('转发失败')); } }
 function selectRoom(id){ curRoom=id; setView('project');
   if(window.innerWidth<=768){ document.getElementById('sec-chat').classList.add('chat-open'); } }
 function backToRooms(){ document.getElementById('sec-chat').classList.remove('chat-open'); }
@@ -2527,7 +2537,7 @@ async function attachThinking(){
   }catch(e){ /* 思考过程为增强展示，失败静默 */ }
 }
 function autoResizeInput(el){
-  el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,200)+'px';
+  el.style.height='auto'; el.style.height=Math.min(Math.max(el.scrollHeight,66),220)+'px';
 }
 /* v6.5 多模态输入：图片附件（选择/拖拽/粘贴/截图）+ 待发送预览 */
 const _pendingImages = { metaInput: [], msgInput: [] };
@@ -2601,12 +2611,12 @@ async function sendMsg(){
   try{
     const j=await apiJson('/api/projects/'+curRoom+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({text:v, images:imgs, audio_clip_id: window.__pendingVoiceClip||null})});
-    if(!j.ok && j.error){ toast('元神没能处理这条消息：'+j.error,'err'); inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false; return; }
+    if(!j.ok && j.error){ toast('元神没能处理这条消息：'+j.error,'err'); inp.placeholder='发消息给团队…（Enter 换行 · 点「发送」发送）'; inp.disabled=false; return; }
     if(j.job_id) jobId=j.job_id;
-  }catch(e){ toast('发送失败：'+errText(e),'err'); inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false; return; }
-  if(!jobId){ inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false; await loadChat(curRoom); return; }
+  }catch(e){ toast('发送失败：'+errText(e),'err'); inp.placeholder='发消息给团队…（Enter 换行 · 点「发送」发送）'; inp.disabled=false; return; }
+  if(!jobId){ inp.placeholder='发消息给团队…（Enter 换行 · 点「发送」发送）'; inp.disabled=false; await loadChat(curRoom); return; }
   await pollJob(jobId,(res)=>{
-    inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false;
+    inp.placeholder='发消息给团队…（Enter 换行 · 点「发送」发送）'; inp.disabled=false;
     loadChat(curRoom);
     // P1-A：展示本次调度的爆炸半径（团队级精准路由聚焦的模块），让用户直观看到"不广播全群"
     if(res && res.blast_radius && res.blast_radius.length){
@@ -2651,7 +2661,7 @@ async function continueBoard(){
       body:JSON.stringify({text:'团队自主推进：继续按看板顺序完成剩余任务，自主决策，不要向用户提问。'})});
     if(j.ok && j.job_id){
       const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder='团队继续推进中…（自动刷新）'; inp.disabled=true; }
-      await pollJob(j.job_id,()=>{ if(inp){ inp.placeholder='发消息给团队…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false; } if(typeof loadBoard==='function') loadBoard(); loadChat(curRoom); });
+      await pollJob(j.job_id,()=>{ if(inp){ inp.placeholder='发消息给团队…（Enter 换行 · 点「发送」发送）'; inp.disabled=false; } if(typeof loadBoard==='function') loadBoard(); loadChat(curRoom); });
     } else toast('❌ '+(j.error||'派单失败'),'err');
   }catch(e){ toast('请求失败：'+errText(e),'err'); }
 }
@@ -2957,7 +2967,7 @@ async function sendMeta(){
         body:JSON.stringify({text:v, images:imgs, audio_clip_id: window.__pendingVoiceClip||null}), signal:activeChatAbort.signal});
     } finally { activeChatAbort=null; }
   });
-  inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）'; inp.disabled=false;
+  inp.placeholder='和元神说点什么…（Enter 换行 · 点「发送」发送）'; inp.disabled=false;
   await loadMeta(); }
 /* ── v0.64.43 资料蒸馏（替代原 prompt() 交互）──
    保守采集：只支持用户主动上传的文本文件与粘贴文本，不读取任何平台私有数据。 */
@@ -3083,7 +3093,7 @@ function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元�
 /* ── 群聊内元神置顶卡：双模式（访谈 / 工作）── */
 let curView='meta';
 let metaMode=localStorage.getItem('fenshen_meta_mode_v2')||'work';
-function setMetaMode(m){ metaMode=m; try{localStorage.setItem('fenshen_meta_mode_v2',m);}catch(e){} renderMetaPin(); if(curView==='meta'){ const s=document.getElementById('mpSub'); if(s) s.textContent=(m==='interview'?'主动了解你 · 蒸馏成长':'驾驶 WorkBuddy · 默认单人任务，复杂才开群聊'); } }
+function setMetaMode(m){ metaMode=m; try{localStorage.setItem('fenshen_meta_mode_v2',m);}catch(e){} renderMetaPin(); if(curView==='meta'){ const s=document.getElementById('mpSub'); if(s) s.textContent=(m==='interview'?'主动了解你 · 蒸馏成长':'代表你 · 帮你管理 agent 完成指令'); } }
 function updateChatHead(){
   const isMeta=curView==='meta';
   ['phaseBadge','freezeBadge','btnSplit','btnMore'].forEach(id=>{const e=document.getElementById(id); if(e) e.style.display=isMeta?'none':'';});
@@ -3114,7 +3124,7 @@ async function loadMetaView(){
     banner.innerHTML='🧠 <b>先为元神配置大模型 API</b>，否则元神无法对话。<button class="btn sm meta" style="margin-left:8px" onclick="openModelSetup()">去配置</button>';
     b.insertBefore(banner, b.firstChild);
   }
-  const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder=pinInterviewActive?'回答元神访谈题…（Enter 提交 · Shift+Enter 换行）':'和元神说点什么…（Enter 发送）'; inp.style.height='auto'; autoResizeInput(inp); }
+  const inp=document.getElementById('msgInput'); if(inp){ inp.placeholder=pinInterviewActive?'回答元神访谈题…（Enter 提交 · Shift+Enter 换行）':'和元神说点什么…（Enter 换行 · 点「发送」发送）'; inp.style.height='auto'; autoResizeInput(inp); }
 }
 async function sendMetaInChat(){
   if(!(await ensureMetaModelReady())) return;
@@ -3124,13 +3134,13 @@ async function sendMetaInChat(){
   inp.value=''; autoResizeInput(inp); _pendingImages['msgInput']=[]; renderImgPreview('msgInput'); window.__LAST_SENT__=true;
   inp.placeholder='元神思考中…'; inp.disabled=true; activeChatAbort=new AbortController();
   try{ await withBusy('btnSendMsg','…',async()=>{ await apiJson('/api/meta/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v, images:imgs}),signal:activeChatAbort.signal}); }); }
-  finally{ activeChatAbort=null; inp.placeholder='和元神说点什么…（Enter 发送）'; inp.disabled=false; }
+  finally{ activeChatAbort=null; inp.placeholder='和元神说点什么…（Enter 换行 · 点「发送」发送）'; inp.disabled=false; }
   await loadMetaView();
 }
 function renderMetaPin(){
   const mp=document.getElementById('metaPin'); if(!mp) return;
   mp.querySelectorAll('.seg').forEach(b=>b.classList.toggle('active', b.dataset.mode===metaMode));
-  const sub=document.getElementById('mpSub'); if(sub) sub.textContent=(metaMode==='interview'?'主动了解你 · 蒸馏成长':'驾驶 WorkBuddy · 默认单人任务，复杂才开群聊');
+  const sub=document.getElementById('mpSub'); if(sub) sub.textContent=(metaMode==='interview'?'主动了解你 · 蒸馏成长':'代表你 · 帮你管理 agent 完成指令');
   const body=document.getElementById('mpBody'); if(!body) return;
   body.innerHTML = (metaMode==='interview') ? mpInterviewHTML() : mpWorkHTML();
   if(metaMode==='interview'){ mpLoadInterview(); fillMetaPinStats(); updateDistillProgress(); }
@@ -3185,7 +3195,7 @@ async function startPinInterview(){
 }
 function stopPinInterview(){
   pinInterviewActive=false; pinInterviewState=null;
-  const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）';
+  const inp=document.getElementById('msgInput'); if(inp) inp.placeholder='和元神说点什么…（Enter 换行 · 点「发送」发送）';
   mpRenderInterview({phase:'complete'});
 }
 async function skipPinInterview(){ await startPinInterview(); }
@@ -3268,7 +3278,7 @@ async function stopMetaInterview(){
   const b=document.getElementById('metaChat');
   if(b) b.querySelectorAll('.meta-interview-bubble').forEach(el=>el.remove());
   const inp=document.getElementById('metaInput');
-  if(inp) inp.placeholder='和元神说点什么…（Enter 发送 · Shift+Enter 换行）';
+  if(inp) inp.placeholder='和元神说点什么…（Enter 换行 · 点「发送」发送）';
   // v0.64.47：给用户明确反馈，否则会以为按钮没生效
   toast('✅ 访谈已结束，可以正常和元神对话了','ok');
   // 同时在对话里留一条小结
@@ -4589,8 +4599,8 @@ function renderTour(){
 }
 // v6.5 新手导览：覆盖 6 大核心模块（首次使用自动触发，受 in_app_guide_enabled 门控）
 const ONBOARD_TOUR_STEPS=[
-  {t:'① 元神：你的数字分身总管', d:'元神是蒸馏自你的唯一数字克隆体，驾驶 WorkBuddy 替你干活。默认就是能干活的技术 PM；你越喂它（访谈 / 上传资料），它越像你。'},
-  {t:'② 单人任务（默认）：和 WorkBuddy 一样快', d:'大部分事情开「单人任务」，元神会像 WorkBuddy 一样快速交付。只有复杂协作才需要群聊模式。'},
+  {t:'① 元神：你的数字分身总管', d:'元神是蒸馏自你的唯一数字克隆体，代表你、帮你管理 agent 完成你的指令。默认就是能干活的技术 PM；你越喂它（访谈 / 上传资料），它越像你。'},
+  {t:'② 单人任务（默认）：代表你快速交付', d:'大部分事情开「单人任务」，元神会代表你快速交付。只有复杂协作才需要群聊模式。'},
   {t:'③ 团队任务（群聊模式）：复杂协作才开', d:'需要多角色协作时，元神会建项目群聊、拆任务、派给精选角色并跟踪进度。所有进度同步到「项目看板」。'},
   {t:'④ 精选角色库：少而精的专才', d:'架构 / 后端 / 前端 / 测试……每个精选角色有专属技能与门禁。元神派单时自动选人，你也能手动加角色。'},
   {t:'⑤ 精选技能库：只留高频复用件', d:'对话中重复出现的流程会被自动提炼成技能；手动也能加。技能位有限，不堆量，只保留精选件。'},
