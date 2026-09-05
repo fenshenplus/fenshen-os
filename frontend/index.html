@@ -3082,8 +3082,8 @@ function showMetaInfo(){ (async()=>{ await postMsg(META_PID,'system','sys','元�
 
 /* ── 群聊内元神置顶卡：双模式（访谈 / 工作）── */
 let curView='meta';
-let metaMode=localStorage.getItem('fenshen_meta_mode')||'work';
-function setMetaMode(m){ metaMode=m; try{localStorage.setItem('fenshen_meta_mode',m);}catch(e){} renderMetaPin(); if(curView==='meta'){ const s=document.getElementById('mpSub'); if(s) s.textContent=(m==='interview'?'主动了解你 · 蒸馏成长':'驾驶 WorkBuddy · 默认单人任务，复杂才开群聊'); } }
+let metaMode=localStorage.getItem('fenshen_meta_mode_v2')||'work';
+function setMetaMode(m){ metaMode=m; try{localStorage.setItem('fenshen_meta_mode_v2',m);}catch(e){} renderMetaPin(); if(curView==='meta'){ const s=document.getElementById('mpSub'); if(s) s.textContent=(m==='interview'?'主动了解你 · 蒸馏成长':'驾驶 WorkBuddy · 默认单人任务，复杂才开群聊'); } }
 function updateChatHead(){
   const isMeta=curView==='meta';
   ['phaseBadge','freezeBadge','btnSplit','btnMore'].forEach(id=>{const e=document.getElementById(id); if(e) e.style.display=isMeta?'none':'';});

@@ -5,7 +5,7 @@
   <key>CFBundleName</key><string>分身</string>
   <key>CFBundleDisplayName</key><string>分身</string>
   <key>CFBundleIdentifier</key><string>com.fenshen.app</string>
-  <key>CFBundleVersion</key><string>0.65.2</string>
+  <key>CFBundleVersion</key><string>0.65.4</string>
   <key>CFBundleShortVersionString</key><string>6.4</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>分身</string>
