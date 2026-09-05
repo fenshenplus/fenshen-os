@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.65.2] — 2026-09-05
+### Added
+- 模型名下拉选择：元神资料卡/首次配置弹窗/模型页改下拉+自定义兜底
+
 ## [v0.65.1] — 2026-09-05
 ### Added
 - hotfix: 修复 meta_distill.interview_answer 中 sqlite3.Row 误用 .get() 导致的 500（录入后使用分身崩溃）

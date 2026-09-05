@@ -570,7 +570,7 @@
       <div id="modelSetupTest" style="font-size:12px;min-height:16px;margin-bottom:10px;color:var(--fg)"></div>
       <div class="field" style="margin-bottom:8px">
         <label style="font-size:12px;color:var(--gray-500)">模型供方</label>
-        <select id="setupModelProvider" style="width:100%;padding:9px 10px;border:.5px solid #e3e3ec;border-radius:9px;font-size:13px;background:#fff">
+        <select id="setupModelProvider" style="width:100%;padding:9px 10px;border:.5px solid #e3e3ec;border-radius:9px;font-size:13px;background:#fff" onchange="populateSetupModel(this.value,'')">
           <option value="deepseek">DeepSeek（推荐，高性价比）</option>
           <option value="openai">OpenAI</option>
           <option value="claude">Claude</option>
@@ -590,7 +590,13 @@
       </div>
       <div class="field" style="margin-bottom:12px">
         <label style="font-size:12px;color:var(--gray-500)">模型名</label>
-        <input id="setupModelName" class="auth-input" style="margin-bottom:0" placeholder="如 deepseek-chat / gpt-4o-mini（DeepSeek 留空默认 deepseek-chat）">
+        <select id="setupModelName" class="auth-input" style="margin-bottom:0" onchange="onSetupModelChange()">
+          <option value="deepseek-chat">deepseek-chat</option>
+          <option value="deepseek-reasoner">deepseek-reasoner</option>
+          <option value="deepseek-coder">deepseek-coder</option>
+          <option value="__other__">其他（手动输入）</option>
+        </select>
+        <input id="setupModelNameCustom" class="auth-input" style="margin-bottom:0;display:none;margin-top:6px" placeholder="输入自定义模型名，如 deepseek-chat">
       </div>
       <div style="margin:10px 0 4px;display:flex;align-items:center;justify-content:space-between">
         <label style="font-size:12px;color:var(--gray-600);font-weight:600">备用模型（可选，主模型失败自动切换）</label>
@@ -1943,9 +1949,8 @@ async function maybeShowModelSetup(model){
   document.getElementById('modelSetupEmpty').style.display = 'block';
   const pSel=document.getElementById('setupModelProvider');
   const baseEl=document.getElementById('setupModelBase');
-  const nameEl=document.getElementById('setupModelName');
   pSel.value = model.provider || 'deepseek';
-  nameEl.value = model.model || '';
+  populateSetupModel(pSel.value, model.model || '');
   baseEl.value = '';
   document.getElementById('modelSetupErr').textContent='';
   // 载入已有备用模型
@@ -1970,8 +1975,8 @@ async function openModelSetup(){
     document.getElementById('modelSetupEmpty').style.display='block';
     const pSel=document.getElementById('setupModelProvider');
     const baseEl=document.getElementById('setupModelBase');
-    const nameEl=document.getElementById('setupModelName');
-    pSel.value=m.provider||'deepseek'; nameEl.value=m.model_name||''; baseEl.value=m.base_url||'';
+    pSel.value=m.provider||'deepseek'; baseEl.value=m.base_url||'';
+    populateSetupModel(pSel.value, m.model_name||'');
     const keyEl=document.getElementById('setupModelKey');
     window.__metaHasKey = !!m.has_key;
     const tip=document.getElementById('modelSetupRemembered');
@@ -2057,7 +2062,7 @@ async function submitModelSetup(){
   const provider=document.getElementById('setupModelProvider').value;
   const base_url=document.getElementById('setupModelBase').value.trim();
   const key=document.getElementById('setupModelKey').value.trim();
-  const model_name=document.getElementById('setupModelName').value.trim();
+  const model_name=_getModelValue('setupModelName','setupModelNameCustom');
   const errEl=document.getElementById('modelSetupErr');
   // 主模型：分身不内置模型，除本地 Ollama 外必须填写 API Key；
   // 但若本就已有 Key（window.__metaHasKey）且本次留空 → 视为"保留现有"，允许。
@@ -2106,7 +2111,7 @@ async function testSetupModel(btn){
   const provider=document.getElementById('setupModelProvider').value;
   const base_url=document.getElementById('setupModelBase').value.trim();
   const key=document.getElementById('setupModelKey').value.trim();
-  const model_name=document.getElementById('setupModelName').value.trim();
+  const model_name=_getModelValue('setupModelName','setupModelNameCustom');
   const errEl=document.getElementById('modelSetupErr');
   const t=document.getElementById('modelSetupTest');
   if(provider!=='ollama' && !key && !window.__metaHasKey){ errEl.textContent='请先填写 API Key 再测试（留空保留现有 Key 时无需本按钮）。'; return; }
@@ -2125,7 +2130,7 @@ async function testSetupModel(btn){
 async function testSetupStored(btn){
   const provider=document.getElementById('setupModelProvider').value;
   const base_url=document.getElementById('setupModelBase').value.trim();
-  const model_name=document.getElementById('setupModelName').value.trim();
+  const model_name=_getModelValue('setupModelName','setupModelNameCustom');
   const errEl=document.getElementById('modelSetupErr');
   const t=document.getElementById('modelSetupTest');
   errEl.textContent='';
@@ -6206,10 +6211,16 @@ function _renderProfileBody(d, isMeta){
       <div class="md-row"><label>调度范围</label><input id="mdTask" value="${escapeHtml(d.current_task||'')}" placeholder="例如：统筹所有项目与 Agent 团队"></div>
       <div class="md-row"><label>全局规则（一行一条）</label><textarea id="mdRule" rows="3">${escapeHtml((d.rule||[]).join('\n'))}</textarea></div>
       <div class="md-row"><label>元神秘钥 / 全局模型</label>
-        供应商 <select id="mdProvider">${_providerOptions(mc.provider)}</select>
-        模型 <input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-chat')}" style="width:160px" placeholder="如 deepseek-chat / deepseek-reasoner">
+        供应商 <select id="mdProvider" onchange="_refreshMdModel()">${_providerOptions(mc.provider)}</select>
+        模型 <select id="mdModel" style="width:160px" onchange="_onMdModelSelect()">${_modelOptions(mc.provider||'deepseek', mc.model_name||mc.model||'deepseek-chat')}</select><input id="mdModelCustom" style="width:120px;display:none;margin-left:6px" placeholder="自定义">
         Key <input id="mdKey" type="password" value="" style="width:160px" placeholder="${(mc.has_key||mc.api_key)?'已保存（重填覆盖）':'全局 Key'}">
       </div>
+      <div class="md-row" style="align-items:center">
+        <label>密钥状态</label>
+        <span id="mdKeyStatus" style="font-size:12px;font-weight:600;color:${mc.has_key?'var(--green)':'var(--gray-500)'}">${mc.has_key?('✅ 已配置：'+escapeHtml(mc.key_mask||'已保存')):'⚪ 尚未配置 Key'}</span>
+        <button class="btn sm" type="button" onclick="testMetaModel()" style="margin-left:auto">🧪 测试连接（探活）</button>
+      </div>
+      <div id="mdTestResult" style="font-size:12px;min-height:16px;color:var(--gray-500)"></div>
       <div class="md-row"><label>记忆空间（仅你可见，跨项目共享）</label><textarea id="mdMemory" rows="4" placeholder="记录你的偏好、习惯、决策…">${escapeHtml((d.memory||[]).join('\n'))}</textarea></div>
     `,
     role: `
@@ -6235,9 +6246,12 @@ function _renderProfileBody(d, isMeta){
       <div class="profile-hint">绑定专属模型 = 真·多模型（该角色独立供方+Key）；留空 = 跟随全局链（单模型角色扮演）。Key 只存本机。</div>
       <div class="md-row">
         <label>供应商</label>
-        <select id="mdProvider">${_providerOptions(mc.provider)}</select>
+        <select id="mdProvider" onchange="_refreshMdModel()">${_providerOptions(mc.provider)}</select>
       </div>
-      <div class="md-row"><label>模型名</label><input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-chat')}" placeholder="如 gpt-4o-mini"/></div>
+      <div class="md-row"><label>模型名</label>
+        <select id="mdModel" onchange="_onMdModelSelect()">${_modelOptions(mc.provider||'deepseek', mc.model_name||mc.model||'deepseek-chat')}</select>
+        <input id="mdModelCustom" style="display:none;margin-left:6px" placeholder="自定义模型名">
+      </div>
       <div class="md-row"><label>API Key</label><input id="mdKey" type="password" value="${escapeHtml(mc.api_key||'')}" placeholder="${mc.api_key?'已保存（重填覆盖）':'专属模型才填'}"/></div>
       <div class="md-row"><label>Base URL</label><input id="mdBase" value="${escapeHtml(mc.base_url||'')}" placeholder="留空=官方"/></div>
       <div class="md-row" style="display:flex;gap:12px;align-items:flex-end">
@@ -6294,9 +6308,93 @@ function _providerOptions(sel){
   const list = [['','跟随全局'],['deepseek','DeepSeek'],['openai','OpenAI'],['claude','Claude'],['qwen','通义千问'],['moonshot','Moonshot'],['zhipu','智谱 GLM'],['ollama','Ollama 本地']];
   return list.map(([v,l])=>`<option value="${v}" ${sel===v?'selected':''}>${l}</option>`).join('');
 }
+/* 各供应商常用模型（下拉选择，避免用户不知道该填哪个模型名） */
+const _MODEL_PRESETS = {
+  deepseek: ['deepseek-chat','deepseek-reasoner','deepseek-coder'],
+  openai:   ['gpt-4o','gpt-4o-mini','gpt-4.1','gpt-4.1-mini','gpt-4-turbo','o3-mini','o1-mini'],
+  claude:   ['claude-sonnet-4','claude-opus-4','claude-3-5-sonnet','claude-3-5-haiku','claude-3-opus'],
+  qwen:     ['qwen-max','qwen-plus','qwen-turbo','qwen-long','qwen2.5-72b-instruct'],
+  moonshot: ['moonshot-v1-8k','moonshot-v1-32k','moonshot-v1-128k','kimi-k2'],
+  zhipu:    ['glm-4-plus','glm-4-airx','glm-4-air','glm-4-flash','glm-4-long'],
+  ollama:   ['llama3.1','llama3','qwen2.5','mistral','deepseek-r1']
+};
+/* 渲染模型下拉选项：provider 空（跟随全局）时回落 deepseek；末尾附「其他（手动输入）」兜底 */
+function _modelOptions(provider, sel){
+  const list = _MODEL_PRESETS[provider] || _MODEL_PRESETS['deepseek'];
+  let opts = list.map(m=>`<option value="${m}" ${sel===m?'selected':''}>${m}</option>`).join('');
+  const isOther = sel && !list.includes(sel);
+  opts += `<option value="__other__" ${isOther?'selected':''}>其他（手动输入）</option>`;
+  return opts;
+}
+/* 读取最终模型名：选中「其他」则取自定义输入框，否则取下拉值 */
+function _getModelValue(selId, customId){
+  const sel = document.getElementById(selId);
+  if(!sel) return '';
+  if(sel.value === '__other__'){
+    const c = document.getElementById(customId);
+    return c ? c.value.trim() : '';
+  }
+  return sel.value.trim();
+}
+/* 资料卡：供应商改变时刷新模型下拉（仅当前 tab 在 DOM 中，id 不冲突） */
+function _refreshMdModel(){
+  const p = document.getElementById('mdProvider');
+  const m = document.getElementById('mdModel');
+  const c = document.getElementById('mdModelCustom');
+  if(!p||!m) return;
+  m.innerHTML = _modelOptions(p.value || 'deepseek', '');
+  if(c){ c.style.display='none'; c.value=''; }
+}
+function _onMdModelSelect(){
+  const m = document.getElementById('mdModel');
+  const c = document.getElementById('mdModelCustom');
+  if(!m||!c) return;
+  c.style.display = (m.value==='__other__')?'':'none';
+  if(m.value==='__other__') c.focus();
+}
+/* 首次配置弹窗：供应商改变时刷新模型下拉 */
+function populateSetupModel(provider, current){
+  const sel = document.getElementById('setupModelName');
+  const custom = document.getElementById('setupModelNameCustom');
+  if(!sel) return;
+  sel.innerHTML = _modelOptions(provider, current||'');
+  const list = _MODEL_PRESETS[provider] || _MODEL_PRESETS['deepseek'];
+  if(current && !list.includes(current)){
+    custom.style.display=''; custom.value = current;
+  } else { custom.style.display='none'; custom.value=''; }
+}
+function onSetupModelChange(){
+  const sel = document.getElementById('setupModelName');
+  const custom = document.getElementById('setupModelNameCustom');
+  if(!sel||!custom) return;
+  custom.style.display = (sel.value==='__other__')?'':'none';
+  if(sel.value==='__other__') custom.focus();
+}
 
 function _switchProfileTab(tab){ mdProfileTab=tab; _renderProfile(); }
 
+/* 元神资料卡「测试连接」：用上方填写的 Key 探活；若留空则用已存 Key（use_stored） */
+async function testMetaModel(){
+  const resEl = document.getElementById('mdTestResult');
+  const p = document.getElementById('mdProvider');
+  const provider = p ? p.value : 'deepseek';
+  const model_name = _getModelValue('mdModel','mdModelCustom') || 'deepseek-chat';
+  const be = document.getElementById('mdBase');
+  const base_url = be ? (be.value||'').trim() : '';
+  const ke = document.getElementById('mdKey');
+  const key = ke ? (ke.value||'').trim() : '';
+  if(resEl){ resEl.textContent='正在测试连接…'; resEl.style.color='var(--gray-500)'; }
+  try{
+    const body = {provider, base_url, model_name};
+    if(key) body.api_key = key; else body.use_stored = true;
+    const j = await apiJson('/api/models/'+META_PID+'/test', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if(resEl){
+      if(j.ok){ resEl.textContent='✅ 连接成功：'+(j.reply||'模型可用'); resEl.style.color='var(--green)'; }
+      else { resEl.textContent='❌ 连接失败：'+(j.error||'未知错误'); resEl.style.color='var(--red)'; }
+    }
+    toast(j.ok?'✅ 连接有效，API Key 可用':'❌ 连接失败：'+(j.error||'未知错误'), j.ok?'ok':'err');
+  }catch(e){ if(resEl){ resEl.textContent='❌ 请求失败：'+errText(e); resEl.style.color='var(--red)'; } }
+}
 function closeMemberDrawer(){ document.getElementById('memberMask').style.display = 'none'; mdProfileData=null; mdProfileTab='role'; }
 
 async function saveMember(){
@@ -6321,8 +6419,8 @@ async function saveMember(){
       provider: el('mdProvider')?.value || '',
       api_key: el('mdKey')?.value.trim() || '',
       base_url: el('mdBase')?.value.trim() || '',
-      model_name: (el('mdModel')?.value.trim() || 'deepseek-chat'),
-      model: (el('mdModel')?.value.trim() || 'deepseek-chat'),
+      model_name: (_getModelValue('mdModel','mdModelCustom') || 'deepseek-chat'),
+      model: (_getModelValue('mdModel','mdModelCustom') || 'deepseek-chat'),
       temp: el('mdTemp') ? +(el('mdTemp').value||0.3) : 0.3,
       reason: el('mdReason') ? el('mdReason').checked : false,
       max_tokens: el('mdTok') ? +(el('mdTok').value||8000) : 8000
