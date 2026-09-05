@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.65.1] — 2026-09-05
+### Added
+- hotfix: 修复 meta_distill.interview_answer 中 sqlite3.Row 误用 .get() 导致的 500（录入后使用分身崩溃）
+
 ## [v0.65.0] — 2026-09-05
 ### Added
 - 产品端反馈闭环 + 官网即时反馈（六能力评判口径固化）

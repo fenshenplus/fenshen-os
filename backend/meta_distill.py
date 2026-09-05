@@ -803,9 +803,10 @@ async def interview_answer(req: Request):
     asked = json.loads(st["asked"]) if st and st["asked"] else []
     answers = json.loads(st["answers"]) if st and st["answers"] else {}
     audio_clips = {}
-    if st and st.get("audio_clips"):
+    _ac_raw = st["audio_clips"] if (st and "audio_clips" in st.keys()) else None
+    if _ac_raw:
         try:
-            audio_clips = json.loads(st["audio_clips"])
+            audio_clips = json.loads(_ac_raw)
         except Exception:
             audio_clips = {}
     if qid not in asked:
