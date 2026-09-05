@@ -6131,15 +6131,23 @@ async function openMemberDrawer(mid){
 }
 
 /* 元神自己的资料卡（rail 头像 / 当前用户） */
-function openMetaProfile(){
+async function openMetaProfile(){
   mdMid = 'meta';
+  // 从后端拉取真实的 __meta__ 模型配置，避免只显示本地默认值导致用户以为“没保存”
+  let metaCfg = window.__metaModel || null;
+  try {
+    const list = await apiJson('/api/models');
+    const found = Array.isArray(list) ? list.find(c => c.agent_id === '__meta__') : null;
+    if (found) metaCfg = found;
+  } catch(e){ console.warn('openMetaProfile fetch /api/models failed', e); }
+
   mdProfileData = {
     id:'meta', name:'元神', role_title:'我的分身', is_meta:true, work_mode:'online', work_hours:'24h',
     level: window.__metaLevel || 1, experience: window.__metaExp || 0, version: window.__metaVer || '1.0',
     soul: window.__metaSoul || '绝对站本机用户本人利益。唯一委托人=本机用户；冲突护用户；钱/隐私/声誉保守；用户完全控制权；蒸馏他人须明示授权。',
     eng_spec: window.__metaEng || 'R8 清爽规则：函数≤50行，嵌套≤3层；真实 API 集成不接受 mock；优先交付可交互产物。',
     skills: window.__metaSkills || ['任务调度','团队搭建','验收门禁','长期记忆','进化复盘','模型路由'],
-    model_cfg: window.__metaModel || {provider:'deepseek', model_name:'deepseek-v4-flash'},
+    model_cfg: metaCfg || {provider:'deepseek', model_name:'deepseek-v4-flash'},
     rule: window.__metaRule || ['用户完全控制权','冲突时护用户','钱/隐私/声誉保守'],
     current_task: window.__metaTask || '统筹所有项目与 Agent 团队',
     memory: window.__metaMemory || [],
@@ -6199,8 +6207,8 @@ function _renderProfileBody(d, isMeta){
       <div class="md-row"><label>全局规则（一行一条）</label><textarea id="mdRule" rows="3">${escapeHtml((d.rule||[]).join('\n'))}</textarea></div>
       <div class="md-row"><label>元神秘钥 / 全局模型</label>
         供应商 <select id="mdProvider">${_providerOptions(mc.provider)}</select>
-        模型 <input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-v4-flash')}" style="width:160px" placeholder="如 deepseek-v4-flash">
-        Key <input id="mdKey" type="password" value="${escapeHtml(mc.api_key||'')}" style="width:160px" placeholder="${mc.api_key?'已保存（重填覆盖）':'全局 Key'}">
+        模型 <input id="mdModel" value="${escapeHtml(mc.model_name||mc.model||'deepseek-v4-flash')}" style="width:160px" placeholder="如 deepseek-chat / deepseek-v4-flash">
+        Key <input id="mdKey" type="password" value="" style="width:160px" placeholder="${(mc.has_key||mc.api_key)?'已保存（重填覆盖）':'全局 Key'}">
       </div>
       <div class="md-row"><label>记忆空间（仅你可见，跨项目共享）</label><textarea id="mdMemory" rows="4" placeholder="记录你的偏好、习惯、决策…">${escapeHtml((d.memory||[]).join('\n'))}</textarea></div>
     `,
@@ -6320,11 +6328,24 @@ async function saveMember(){
       max_tokens: el('mdTok') ? +(el('mdTok').value||8000) : 8000
     };
   }
-  // 元神本地缓存（不经过后端）
+  // 元神配置：模型/Key 必须持久化到后端，不能只做本地缓存
   if(isMeta && mdMid==='meta'){
+    if(payload.model_cfg){
+      const mc = payload.model_cfg;
+      await apiJson('/api/models/__meta__', {
+        method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          provider: mc.provider || 'deepseek',
+          model_name: mc.model_name || mc.model || '',
+          base_url: mc.base_url || '',
+          api_key: mc.api_key || ''
+        })
+      });
+    }
     window.__metaSoul = payload.soul; window.__metaEng = payload.eng_spec; window.__metaRule = payload.rule;
     window.__metaTask = payload.current_task; window.__metaModel = payload.model_cfg; window.__metaMemory = payload.memory;
-    toast('元神配置已缓存（本地）'); closeMemberDrawer(); return;
+    toast('元神配置已保存'); closeMemberDrawer(); return;
   }
   const j = await apiJson('/api/members/'+mdMid, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
   if(j.ok){ toast('已保存'); if(ckFocus) loadCockpitProject(ckFocus); } else toast('保存失败');
