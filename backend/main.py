@@ -139,6 +139,32 @@ META_SYSTEM = """你是「元神」——一个运行在用户本机的数字克
 - 如果执行了工具调用（查代码 / 运行命令 / 读文件），必须写明工具名与关键结果；
 - 未按本格式输出等同于未完成任务，必须补输出。
 
+【目标驱动指挥官形态：给一个目标，就主动跑到完成】
+你不是"说一下动一下"的被动执行器。当用户给的是「目标 / 意图 / 待办方向」而非逐条具体指令时，你负有主动闭环的义务——不必等用户把每一步都拆好喂给你，你要自己把目标消化成可执行的完整路径并推进到底。
+
+主动五段链（给目标后默认先走完前四段，第五段按计划执行）：
+1) 了解：主动澄清模糊点、拉取上下文（项目现状 / 看板 / 历史决策 / 相关文件），只问"必须问"的关键信息，不把规划推给用户。
+2) 规划：把目标拆成「模块 × 阶段」的任务卡，标注依赖关系与每张卡的完成标准（done_criteria），让进度可被追踪。
+   输出规划时，必须在回复正文之后、另起一段附一个 ```plan 围栏 JSON 块（元神引擎据此组织团队执行）：
+   ```plan
+   {"goal":"目标原文","team":["architect","backend","frontend","tester"],
+    "modules":[{"name":"模块名","desc":"模块说明","owner_role":"后端","deps":["依赖的模块名"],
+      "tasks":[{"name":"任务名(10字内)","done_criteria":"可验证的完成标准"}]}],
+    "milestones":[{"title":"里程碑名","done_criteria":"该里程碑达成的判定"}]}
+   ```
+   （team 用角色 id：architect/backend/frontend/tester/pm 等；deps 填所依赖的模块名；tasks.done_criteria 必须具体、可验证。）
+3) 设计：对需要动手的事项先给方案 / 架构 / 接口 / 数据模型设计，而非直接盲写；方案要能说明"为什么这么做、放弃了什么"。
+4) 组队：依据目标推断需要哪些角色与技能组合（架构师 / 后端 / 前端 / 测试 / 专项 skill），主动组织团队，而非机械补缺。
+5) 执行与汇报：按已确认的计划铺开，对照完成标准验收，里程碑级持续汇报；目标达成后给出结构化 closure 报告（做了什么 / 结果 / 遗留 / 下一步）。
+
+规划先行（审批门，不破坏主动性）：
+- 「主动」指你主动完成 了解→规划→设计→组队 的全部前期工作；但重大目标的执行在铺开前，须先把结构化计划呈现给用户确认 / 微调——这是"主动规划 + 计划先审"，不是"等你来问才规划"。
+- 小目标或在已确认计划框架内的推进，可直接执行并持续汇报，不必每步请示。
+- 宪法级重大利益事项（钱、隐私、声誉、账号所有权、不可逆操作）无论是否在计划内，一律先走宪法闸征得确认，不可降级、不可自作主张。
+- 当你输出了 ```plan 块，引擎会先把它作为「待确认计划」呈现给用户，等用户回复「确认 / 执行」后才真正建项目、组队、开工——这就是"计划先审再执行"的审批门。在用户确认前，不要自行建卡或派单；若用户给出调整意见，吸收后重新输出 ```plan 块。
+
+这条形态与「极简优先」「承接任务必须展开」一致：规划 / 设计 / 汇报按深度与主动性展开（宁长勿空、宁主动勿悬空）；落入"纯写代码 / 脚本 / 重构"的工程产出本身，仍奉行极简。
+
 你的默认形态，是一个「技术出身的项目经理」工具人：**开箱即用，不需要任何炼制就能直接干活**。
 
 【你开箱即会做的事】
@@ -1191,6 +1217,11 @@ def init_db():
     tocols = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
     if "owner_id" not in tocols:
         cur.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT DEFAULT 'local'")
+    # ── v6.6 元神指挥官：tasks 增加 plan_id / depends_on（计划依赖追溯 + 里程碑闭环）──
+    if "plan_id" not in tocols:
+        cur.execute("ALTER TABLE tasks ADD COLUMN plan_id TEXT DEFAULT ''")
+    if "depends_on" not in tocols:
+        cur.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT DEFAULT '[]'")
     # 存量数据回填：归属到首个注册用户（无用户则标记 'local'，本地单用户模式）
     _fu = cur.execute("SELECT id FROM users ORDER BY created_at LIMIT 1").fetchone()
     _owner = _fu["id"] if _fu else "local"
@@ -1412,6 +1443,33 @@ def init_db():
         )"""
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_goal_runs_task ON goal_runs(task_id, turn)")
+    # ── v6.6 元神指挥官：结构化计划 + 里程碑（目标驱动 / 计划先审 / 闭环汇报）──
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS plans (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT DEFAULT 'local',
+            project_id TEXT DEFAULT '',
+            goal TEXT DEFAULT '',
+            plan_json TEXT DEFAULT '{}',
+            status TEXT DEFAULT 'planning',
+            created_at TEXT,
+            updated_at TEXT
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS milestones (
+            id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            title TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            done_criteria TEXT DEFAULT '',
+            report_json TEXT DEFAULT '{}',
+            created_at TEXT,
+            updated_at TEXT
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(project_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_milestones_plan ON milestones(plan_id)")
     conn.commit()
     conn.close()
 
@@ -12478,6 +12536,169 @@ def _images_to_content(text, images, provider):
     return f"{text}\n\n[附 {len(images)} 张图片：{names}]（当前模型不支持识图，图片已保存，可让我处理后告知结论）"
 
 
+# ── v6.6 元神指挥官：目标驱动规划 + 计划审批门 + 团队按目标组织 ──────────
+_PLAN_BLOCK_RE = re.compile(r"```plan\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+# 短消息（≤6 字）含这些词即视为确认（避免「好」误命中「你好」这类子串）
+_APPROVE_SUB = ("确认", "执行", "开始", "可以", "好的", "ok", "yes", "go", "同意", "批准",
+               "没问题", "动工", "启动", "着手", "推进", "照做", "施行", "就这么办",
+               "按计划", "按此", "去吧", "去执行", "开工", "立即执行")
+# 较长消息需含这些强短语才算确认（排除「请确认一下需求」这类歧义）
+_APPROVE_STRONG = ("执行计划", "按计划执行", "开始执行", "确认计划", "就这么办", "去执行吧",
+                  "立即开工", "照计划", "确认并", "执行该计划", "按此计划执行", "确认后执行")
+_NEGATE = ("不要", "别", "暂缓", "先不", "不用", "不执行", "暂不", "先暂停")
+_CANCEL_WORDS = ("取消", "放弃", "不做了", "算了", "别执行", "暂缓", "先别", "先不", "停", "不要执行", "暂不", "先暂停")
+
+
+def _extract_plan_block(text):
+    """从元神回复中提取 ```plan ... ``` 围栏 JSON。成功返回 dict，否则 None。"""
+    if not text:
+        return None
+    m = _PLAN_BLOCK_RE.search(text)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1).strip())
+    except Exception:
+        return None
+    if isinstance(data, dict) and data.get("modules"):
+        return data
+    return None
+
+
+def _is_approval(text):
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    # 否定语境不算确认（如「不要执行」「先不」）
+    if any(w in t for w in _NEGATE):
+        return False
+    # 强短语直接确认
+    if any(w in t for w in _APPROVE_STRONG):
+        return True
+    # 短消息（≤6 字）含任意确认词即视为确认
+    if len(t) <= 6 and any(w in t for w in _APPROVE_SUB):
+        return True
+    return False
+
+
+def _is_cancel(text):
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(w in t for w in _CANCEL_WORDS)
+
+
+def _commander_pending():
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT value FROM meta_settings WHERE key='commander_plan'").fetchone()
+        conn.close()
+        if not row or not row["value"]:
+            return None
+        return json.loads(row["value"])
+    except Exception:
+        return None
+
+
+def _commander_set_pending(goal, plan):
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT OR REPLACE INTO meta_settings (key,value) VALUES ('commander_plan',?)",
+            (json.dumps({"goal": goal, "plan": plan, "ts": datetime.now().isoformat()}, ensure_ascii=False),))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("[commander] set pending err", e)
+
+
+def _commander_clear_pending():
+    try:
+        conn = get_db()
+        conn.execute("DELETE FROM meta_settings WHERE key='commander_plan'")
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _spawn_project_from_plan(goal, plan):
+    """把已确认的计划物化为真实项目 + 模块 + 任务 + 团队 + 里程碑，返回 pid。
+    物化后常驻 autonomy_loop 会自动接管派单执行（见 _autonomy_loop）。"""
+    pid = f"p{int(datetime.now().timestamp() * 1000)}"
+    now = datetime.now().isoformat()
+    tracks = ["web"] + list(LIFE_TRACKS)
+    chains = {t: list(STAGE_PRESETS.get(t, STAGE_PRESETS["web"])) for t in tracks}
+    storage_root = os.path.expanduser(f"~/.fenshen/projects/{pid}")
+    standards = plan.get("goal") or goal
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO projects "
+        "(id,name,goal,standards,status,created_at,phase,frozen,storage_root,tracks,stage_chains,owner_id) "
+        "VALUES (?,?,?,?,?,?,?,0,?,?,?,?)",
+        (pid, (goal or "元神目标")[:60], goal, standards, "green", now, "requirement",
+         storage_root, json.dumps(tracks, ensure_ascii=False), json.dumps(chains, ensure_ascii=False), "local"),
+    )
+    mod_ids = {}
+    for i, m in enumerate(plan.get("modules", [])):
+        mid = f"{pid}-m{i + 1}"
+        mod_ids[m.get("name", f"模块{i + 1}")] = mid
+        conn.execute(
+            "INSERT OR IGNORE INTO modules "
+            "(id,project_id,name,desc,depends_on,owner_role,status,sort,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (mid, pid, m.get("name", f"模块{i + 1}"), m.get("desc", ""),
+             json.dumps(m.get("deps") or [], ensure_ascii=False), m.get("owner_role", "后端"),
+             "idea", i, now, now),
+        )
+    ti = 0
+    for m in plan.get("modules", []):
+        mid = mod_ids.get(m.get("name", ""), "")
+        for tk in m.get("tasks", []):
+            ti += 1
+            conn.execute(
+                "INSERT INTO tasks "
+                "(id,project_id,module_id,topic_id,name,owner_role,status,done_criteria,stage,track,created_at,updated_at,plan_id,depends_on) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (f"{pid}-t{ti}", pid, mid, "", tk.get("name", f"任务{ti}"),
+                 tk.get("owner_role", m.get("owner_role", "后端")), "todo",
+                 tk.get("done_criteria", ""), "", "web", now, now, pid, "[]"),
+            )
+    plan_id = f"plan-{pid}"
+    conn.execute(
+        "INSERT INTO plans (id,owner_id,project_id,goal,plan_json,status,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (plan_id, "local", pid, goal, json.dumps(plan, ensure_ascii=False), "executing", now, now),
+    )
+    for mi, ms in enumerate(plan.get("milestones", [])):
+        conn.execute(
+            "INSERT INTO milestones (id,plan_id,title,status,done_criteria,report_json,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (f"{plan_id}-ms{mi + 1}", plan_id, ms.get("title", f"里程碑{mi + 1}"), "pending",
+             ms.get("done_criteria", ""), "{}", now, now),
+        )
+    conn.commit()
+    conn.close()
+    try:
+        _ensure_project_dirs(pid, {"id": pid, "name": (goal or "元神目标")[:60], "storage_root": storage_root})
+    except Exception as e:
+        print("[commander] dirs warn", e)
+    _bootstrap_project(pid, goal=goal, standards=standards, roles=plan.get("team") or [])
+    try:
+        _seed_default_roster(pid, tracks)
+    except Exception as e:
+        print("[commander] roster warn", e)
+    try:
+        _ensure_team_for_project(pid)
+    except Exception as e:
+        print("[commander] ensure team warn", e)
+    try:
+        _kick_autonomy()
+    except Exception:
+        pass
+    return pid
+
+
 @app.post("/api/meta/chat")
 async def meta_chat(req: Request):
     data = await req.json()
@@ -12496,6 +12717,35 @@ async def meta_chat(req: Request):
         conn.close()
         # E6：无损归档（门控：memory_archive_enabled 关→no-op）
         _record_session_node(META_PID, "user", user_text, "message")
+        # ── v6.6 元神指挥官：计划审批门（确认即物化执行；取消即作废）──
+        if get_setting("commander_enabled", "1") == "1":
+            _pending = _commander_pending()
+            if _pending:
+                _ut = (user_text or "").strip()
+                if _is_cancel(_ut):
+                    _commander_clear_pending()
+                    # 不清空用户消息；继续走普通对话让元神回一句"已取消"
+                elif _is_approval(_ut):
+                    try:
+                        _pid = _spawn_project_from_plan(_pending.get("goal", ""), _pending.get("plan", {}))
+                        _commander_clear_pending()
+                        _reply = (
+                            f"✅ 计划已确认。元神已据此组织团队并开工。\n"
+                            f"🎯 目标：{_pending.get('goal','')[:160]}\n"
+                            f"🔗 项目 ID：{_pid}（看板可查进度）\n"
+                            f"⏱ 元神将按里程碑自主推进，并在关键节点向你汇报；过程中你可随时叫停或追加要求。"
+                        )
+                        conn = get_db()
+                        conn.execute(
+                            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                            (META_PID, "分身 · 元神", "meta", _reply, "progress", datetime.now().isoformat()))
+                        conn.commit(); conn.close()
+                        return {"reply": _reply, "ok": True, "version": "0.7.0",
+                                "commander": "spawned", "project_id": _pid}
+                    except Exception as e:
+                        import traceback; traceback.print_exc()
+                        # 物化失败 → 退回普通对话，并清掉待确认计划避免死循环
+                        _commander_clear_pending()
         # 构造上下文（openai 格式）
         conn = get_db()
         rows = conn.execute(
@@ -12519,6 +12769,13 @@ async def meta_chat(req: Request):
         # 当前用户轮：带图则转多模态内容，否则纯文本
         hist.append({"role": "user", "content": _images_to_content(user_text, images, _prov_name)})
         reply = await _chat_with_tools(META_PID, hist, sys_prompt)  # v0.27.0：元神对话工具调用（exec/浏览器）
+        # ── v6.6 元神指挥官：若元神输出了计划，存为待确认计划并附审批提示 ──
+        if get_setting("commander_enabled", "1") == "1":
+            _plan = _extract_plan_block(reply)
+            if _plan:
+                _commander_set_pending(user_text, _plan)
+                reply = reply + ("\n\n— 元神已生成执行计划（见上方 ```plan 块）。回复「确认」即按此计划组织团队执行；"
+                                 "或指出要调整的地方，我会重新规划。")
         # 落库元神回复
         conn = get_db()
         conn.execute(
