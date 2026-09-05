@@ -19,6 +19,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import threading
 import hmac
 import base64
 import uuid
@@ -1033,6 +1034,28 @@ def init_db():
             task_id TEXT DEFAULT ''
         )"""
     )
+    # ── 用户即时反馈（产品端 + 官网统一表；capability 按 D0~D5 六能力归类，
+    #     作为「六能力唯一评判口径」的补充输入源 —— 用户抱怨集中在哪个能力，
+    #     下一个版本就优先补哪个能力）──
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS user_feedback (
+            id TEXT PRIMARY KEY,
+            ts REAL,
+            source TEXT DEFAULT 'desktop',
+            category TEXT DEFAULT 'bug',
+            severity TEXT DEFAULT 'medium',
+            capability TEXT DEFAULT '',
+            content TEXT,
+            contact TEXT DEFAULT '',
+            version TEXT DEFAULT '',
+            context TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            reply TEXT DEFAULT '',
+            replied_at REAL DEFAULT 0
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ufb_ts ON user_feedback(ts DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ufb_status ON user_feedback(status)")
     # ── 兼容迁移：dispatch_jobs 表（异步派单 + 进度轮询，v4.2 新）──
     cur.execute(
         """CREATE TABLE IF NOT EXISTS dispatch_jobs (
@@ -3116,6 +3139,144 @@ def market_feedback_list(pid: str):
         (pid,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── 用户即时反馈闭环（产品端 + 官网）：上报 → 即时受理回执 → 回复/状态追踪 ──────
+# 设计要点：
+#   1) 提交即返回受理回执（单号 + 已收到），用户不必等人工回复 —— 满足「即时反馈」。
+#   2) capability 字段按 D0~D5 六能力归类，让真实用户反馈直接成为「六能力评判」的输入源：
+#      哪个能力的抱怨多，下个版本就优先补哪个（呼应评估标准 v2 使用约定第 5 条）。
+#   3) 云端上报失败不影响本地留档 —— 绝不因网络问题吞掉用户声音（宪法红线：不静默失败）。
+FEEDBACK_CLOUD_URL = os.environ.get(
+    "FENSHEN_FEEDBACK_URL", "http://47.111.25.150:8001/api/feedback")
+_FEEDBACK_CATEGORIES = {"bug", "suggestion", "question", "other"}
+_FEEDBACK_SEVERITIES = {"low", "medium", "high", "critical"}
+_FEEDBACK_CAPABILITIES = {"", "D0", "D1", "D2", "D3", "D4", "D5"}
+_FEEDBACK_STATUS = {"pending", "processing", "resolved", "closed"}
+
+
+def _relay_feedback_to_cloud(payload: dict) -> None:
+    """异步上报到云端汇聚点；失败静默跳过（本地已留档，不打扰用户、不拖慢提交响应）。"""
+    def _run():
+        try:
+            requests.post(FEEDBACK_CLOUD_URL, json=payload, timeout=6)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+@app.post("/api/feedback")
+async def submit_feedback(req: Request):
+    """提交反馈 → 立即返回受理回执（单号 + 已收到），实现「即时上报、即时反馈」。"""
+    ip = _client_ip(req)
+    if not _rate_ok("ufb:" + ip, 20, 60):
+        return {"ok": False, "error": "提交太频繁，请稍后再试"}
+    data = await req.json()
+    content = (data.get("content") or "").strip()[:2000]
+    if not content:
+        return {"ok": False, "error": "请填写问题描述"}
+    category = (data.get("category") or "bug").strip()
+    if category not in _FEEDBACK_CATEGORIES:
+        category = "other"
+    severity = (data.get("severity") or "medium").strip()
+    if severity not in _FEEDBACK_SEVERITIES:
+        severity = "medium"
+    capability = (data.get("capability") or "").strip().upper()
+    if capability not in _FEEDBACK_CAPABILITIES:
+        capability = ""
+    contact = (data.get("contact") or "").strip()[:120]
+    context = (data.get("context") or "").strip()[:2000]
+    source = (data.get("source") or "desktop").strip()[:20]
+    fid = "FB" + time.strftime("%Y%m%d") + f"{time.time_ns() % 100000:05d}"
+    now = time.time()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO user_feedback (id,ts,source,category,severity,capability,content,"
+        "contact,version,context,status,reply,replied_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (fid, now, source, category, severity, capability, content, contact,
+         SEMVER, context, "pending", "", 0))
+    conn.commit()
+    conn.close()
+    _relay_feedback_to_cloud({
+        "ticket": fid, "source": source, "category": category, "severity": severity,
+        "capability": capability, "content": content, "contact": contact,
+        "version": SEMVER, "context": context,
+    })
+    return {
+        "ok": True,
+        "ticket": fid,
+        "status": "pending",
+        "message": "已收到你的反馈，谢谢你！",
+        "detail": "受理单号 " + fid + "。严重问题优先修复，一般问题在下个版本跟进。",
+    }
+
+
+@app.get("/api/feedback")
+def list_feedback(status: str = "", capability: str = "", limit: int = 50):
+    """反馈列表（可按状态 / 六能力过滤），最近的在前。"""
+    try:
+        limit = max(1, min(int(limit), 200))
+    except Exception:
+        limit = 50
+    sql = "SELECT * FROM user_feedback"
+    where, args = [], []
+    if status in _FEEDBACK_STATUS:
+        where.append("status=?")
+        args.append(status)
+    cap = (capability or "").strip().upper()
+    if cap in _FEEDBACK_CAPABILITIES and cap:
+        where.append("capability=?")
+        args.append(cap)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY ts DESC LIMIT ?"
+    args.append(limit)
+    conn = get_db()
+    rows = conn.execute(sql, args).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/feedback/stats")
+def feedback_stats():
+    """按 D0~D5 六能力 + 状态聚合反馈数，直接服务于「按六能力排开发优先级」。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT capability, status, COUNT(*) c FROM user_feedback GROUP BY capability, status"
+    ).fetchall()
+    conn.close()
+    by_cap, by_status, total = {}, {}, 0
+    for r in rows:
+        cap = r["capability"] or "未归类"
+        st = r["status"] or "pending"
+        by_cap[cap] = by_cap.get(cap, 0) + r["c"]
+        by_status[st] = by_status.get(st, 0) + r["c"]
+        total += r["c"]
+    return {"ok": True, "total": total, "by_capability": by_cap, "by_status": by_status}
+
+
+@app.post("/api/feedback/{fid}/reply")
+async def reply_feedback(fid: str, req: Request):
+    """回复反馈 / 变更处理状态（本机用户或维护者操作）。"""
+    data = await req.json()
+    reply = (data.get("reply") or "").strip()[:2000]
+    status = (data.get("status") or "").strip()
+    if status not in _FEEDBACK_STATUS:
+        status = ""
+    conn = get_db()
+    row = conn.execute("SELECT id FROM user_feedback WHERE id=?", (fid,)).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "反馈单不存在：" + fid}
+    if reply:
+        conn.execute("UPDATE user_feedback SET reply=?, replied_at=? WHERE id=?",
+                     (reply, time.time(), fid))
+    if status:
+        conn.execute("UPDATE user_feedback SET status=? WHERE id=?", (status, fid))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "ticket": fid, "status": status or None, "replied": bool(reply)}
 
 
 @app.post("/api/market/feedback/{fid}/to-board")

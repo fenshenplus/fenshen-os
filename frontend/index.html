@@ -479,6 +479,7 @@
     <div class="brand">分身 <small>· AI 团队</small></div>
     <div class="spacer"></div>
     <span id="userChip" class="user-chip" style="display:none"></span>
+    <button class="btn" onclick="openFeedback()" title="使用中遇到问题？即时上报，提交后立刻返回受理单号">📣 反馈</button>
     <button class="btn" onclick="openSearchDlg()" title="跨模块/任务/话题/群聊消息语义搜索">🔍 搜索</button>
     <button class="btn hidden" id="btnAnnot">标注模式：关</button>
     <button class="btn hidden" onclick="showAbout()">原型说明</button>
@@ -506,6 +507,46 @@
       </div>
       <button class="btn auth-btn" style="background:#fff;color:var(--gray-600);border:.5px solid var(--gray-200);margin-top:10px" data-i18n="本地模式（暂不登录）" onclick="enterLocalMode()">本地模式（暂不登录）</button>
       <div class="auth-legal">注册即代表同意 <a href="http://47.111.25.150:8001/privacy.html" target="_blank" rel="noopener">隐私政策</a> 与 <a href="http://47.111.25.150:8001/terms.html" target="_blank" rel="noopener">用户协议</a></div>
+    </div>
+  </div>
+
+  <!-- 即时反馈（问题上报）：提交即返回受理回执；可按 D0~D5 六能力归类——
+       用户抱怨集中在哪个能力，下个版本就优先补哪个能力 -->
+  <div id="feedbackMask" class="auth-mask" style="display:none;z-index:10002">
+    <div class="auth-card" style="width:420px;max-width:92vw">
+      <div class="auth-title">📣 问题反馈</div>
+      <div class="auth-sub">使用中遇到任何问题都可随时上报。提交后<b>立即</b>返回受理单号；我们会按问题归属的能力（D0~D5）排优先级跟进。</div>
+      <div style="display:flex;gap:8px">
+        <select id="fbCategory" class="auth-input" style="flex:1">
+          <option value="bug">🐛 功能异常 / Bug</option>
+          <option value="suggestion">💡 改进建议</option>
+          <option value="question">❓ 使用疑问</option>
+          <option value="other">📝 其他</option>
+        </select>
+        <select id="fbSeverity" class="auth-input" style="flex:1">
+          <option value="low">轻微</option>
+          <option value="medium" selected>一般</option>
+          <option value="high">严重</option>
+          <option value="critical">阻断（无法使用）</option>
+        </select>
+      </div>
+      <select id="fbCapability" class="auth-input">
+        <option value="">归属能力（可留空，由我们归类）</option>
+        <option value="D0">D0 大模型能力（连接 / API Key / 上下文 / Token）</option>
+        <option value="D1">D1 蒸馏能力（像不像你）</option>
+        <option value="D2">D2 元神能力（理解 / 调度 / 交付）</option>
+        <option value="D3">D3 Skill 模组能力</option>
+        <option value="D4">D4 工程交付能力（安装 / 构建 / 下载）</option>
+        <option value="D5">D5 生产稳定性（守护 / 数据 / 自愈）</option>
+      </select>
+      <textarea id="fbContent" class="auth-input" style="min-height:96px;resize:vertical;line-height:1.6" placeholder="请描述遇到的问题：你在做什么、期望什么、实际发生了什么（可附上报错信息）"></textarea>
+      <input id="fbContact" class="auth-input" placeholder="联系方式（可选，便于回复你）">
+      <div class="auth-err" id="fbErr"></div>
+      <div id="fbReceipt" style="display:none;margin:10px 0;padding:10px;border-radius:8px;background:#ecfdf5;border:.5px solid #a7f3d0;color:#065f46;font-size:12px;line-height:1.7"></div>
+      <button class="btn meta auth-btn" id="fbSubmit" onclick="submitFeedback()">📤 提交反馈</button>
+      <button class="btn auth-btn" style="background:#fff;color:var(--gray-600);border:.5px solid var(--gray-200);margin-top:8px" onclick="toggleFeedbackHistory()">📋 我的反馈记录</button>
+      <div id="fbHistory" style="display:none;margin-top:10px;max-height:250px;overflow:auto;text-align:left"></div>
+      <button class="btn auth-btn" style="background:#fff;color:var(--gray-600);border:.5px solid var(--gray-200);margin-top:10px" onclick="closeFeedback()">关闭</button>
     </div>
   </div>
 
@@ -1775,6 +1816,79 @@ async function apiJson(url, opts){
   const r=await fetch(url, opts);
   if(!r.ok) throw new Error('接口 '+r.status+' '+(r.statusText||''));
   return await r.json();
+}
+/* ── 即时反馈（问题上报 → 即时受理回执 → 记录追踪）─────────────────────
+   设计要点：提交后立刻给出受理单号，不让用户干等人工回复；capability 按
+   D0~D5 六能力归类，使真实用户反馈成为「六能力评判口径」的输入源。 */
+var _FB_STATUS={pending:'待处理',processing:'处理中',resolved:'已解决',closed:'已关闭'};
+function openFeedback(){
+  var m=document.getElementById('feedbackMask');
+  if(!m) return;
+  m.style.display='flex';
+  document.getElementById('fbErr').textContent='';
+  document.getElementById('fbReceipt').style.display='none';
+  document.getElementById('fbHistory').style.display='none';
+  var b=document.getElementById('fbSubmit');
+  b.disabled=false; b.textContent='📤 提交反馈';
+  try{ track('feedback_open'); }catch(e){}
+}
+function closeFeedback(){ var m=document.getElementById('feedbackMask'); if(m) m.style.display='none'; }
+function _fbContext(){
+  try{ return JSON.stringify({ua:navigator.userAgent, path:location.pathname, ts:Date.now()}); }catch(e){ return ''; }
+}
+async function submitFeedback(){
+  var content=(document.getElementById('fbContent').value||'').trim();
+  var err=document.getElementById('fbErr');
+  var btn=document.getElementById('fbSubmit');
+  if(!content){ err.textContent='请描述你遇到的问题'; return; }
+  err.textContent=''; btn.disabled=true; btn.textContent='提交中…';
+  var payload={
+    content:content,
+    category:document.getElementById('fbCategory').value,
+    severity:document.getElementById('fbSeverity').value,
+    capability:document.getElementById('fbCapability').value,
+    contact:(document.getElementById('fbContact').value||'').trim(),
+    source:'desktop',
+    context:_fbContext()
+  };
+  try{
+    var j=await apiJson('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!j.ok){ err.textContent=j.error||'提交失败，请稍后重试'; btn.disabled=false; btn.textContent='📤 提交反馈'; return; }
+    var rc=document.getElementById('fbReceipt');
+    rc.innerHTML='✅ <b>'+escapeHtml(j.message||'已收到你的反馈')+'</b><br>'+escapeHtml(j.detail||'')+
+      '<br><span style="opacity:.7">单号 '+escapeHtml(j.ticket||'')+' · 状态 '+(_FB_STATUS[j.status]||j.status)+'</span>';
+    rc.style.display='';
+    document.getElementById('fbContent').value='';
+    btn.textContent='已提交 ✓';
+    try{ track('feedback_submit',{category:payload.category,capability:payload.capability}); }catch(e){}
+  }catch(e){
+    err.textContent='提交失败：'+e.message;
+    btn.disabled=false; btn.textContent='📤 提交反馈';
+  }
+}
+async function toggleFeedbackHistory(){
+  var box=document.getElementById('fbHistory');
+  if(!box) return;
+  if(box.style.display!=='none'){ box.style.display='none'; return; }
+  box.style.display='';
+  box.innerHTML='<div style="color:var(--gray-500);font-size:12px">加载中…</div>';
+  try{
+    var rows=await apiJson('/api/feedback?limit=20');
+    if(!rows||!rows.length){ box.innerHTML='<div style="color:var(--gray-500);font-size:12px">暂无反馈记录</div>'; return; }
+    box.innerHTML=rows.map(function(r){
+      var d=new Date((r.ts||0)*1000).toLocaleString('zh-CN');
+      var reply=r.reply?('<div style="margin-top:5px;padding:7px;background:#f5f5f7;border-radius:6px">↳ 回复：'+escapeHtml(r.reply)+'</div>'):'';
+      return '<div style="padding:9px;border-bottom:.5px solid var(--gray-200);font-size:12px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center">'+
+          '<b>'+escapeHtml(r.capability||'未归类')+'</b>'+
+          '<span style="color:var(--gray-500)">'+(_FB_STATUS[r.status]||r.status)+'</span></div>'+
+        '<div style="color:var(--gray-600);margin:3px 0">'+escapeHtml(String(r.content||'').slice(0,90))+'</div>'+
+        '<div style="color:var(--gray-400);font-size:11px">'+escapeHtml(d)+' · '+escapeHtml(r.id||'')+'</div>'+
+        reply+'</div>';
+    }).join('');
+  }catch(e){
+    box.innerHTML='<div style="color:#b91c1c;font-size:12px">加载失败：'+escapeHtml(e.message)+'</div>';
+  }
 }
 /* 监控埋点（v6.4 推广就绪度补齐）：仅上报本机引擎，绝不外传第三方 */
 let _lastMetaChat=0;

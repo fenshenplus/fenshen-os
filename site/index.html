@@ -139,10 +139,10 @@
     <h1>你的<span class="accent">数字分身</span><br/>本地优先的 AI 团队总管</h1>
     <p class="sub">分身跑在你自己的电脑上——它像你一样拥有这台电脑的最高权限：能看所有项目、能派活、能质检，还能亲自上手：执行命令、操作浏览器、读写文件。手机随时远程看板，数据只存本机。</p>
     <div class="actions">
-      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap"><a class="btn primary" href="http://47.111.25.150:8001/fenshen-v6.4-macOS.dmg">下载 macOS（dmg 安装器 · v0.64.60）</a><a class="btn" href="http://47.111.25.150:8001/fenshen-v0.64.56-Windows-exe.zip">Windows 版（v0.64.56 · 未签名预览版 · 首次运行需点"仍要运行"）</a></div>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap"><a class="btn primary" href="http://47.111.25.150:8001/fenshen-v6.4-macOS.dmg">下载 macOS（dmg 安装器 · v0.65.0）</a><a class="btn" href="http://47.111.25.150:8001/fenshen-v0.64.60-Windows-exe.zip">Windows 版（v0.64.60 · 未签名预览版 · 首次运行需点"仍要运行"）</a></div>
       <a class="btn meta" href="#v64">看 v6.4 新能力</a>
     </div>
-    <div class="pill"><span class="dot"></span> v0.64.60 已发布 · D0 大模型能力补齐：① 上下文滑窗（长对话截断保护，系统/首条需求锚点恒保）② Token 预算护栏（每日上限，超额拦截不静默放行）③ 连接状态面板（顶栏实时显示 🟢连通/延迟/今日用量，设置页可设预算）④ 主备路由透明化（/route 可见候选链）</div>
+    <div class="pill"><span class="dot"></span> v0.64.60 已发布 · D0 大模型能力补齐：① 上下文滑窗（长对话截断保护，系统/首条需求锚点恒保）② Token 预算护栏（每日上限，超额拦截不静默放行）③ 连接状态面板（顶栏实时显示 🟢连通/延迟/今日用量，设置页可设预算）④ 主备路由透明化（/route 可见候选链）⑤ <b>即时反馈通道</b>（产品端顶栏「📣 反馈」+ 本页右下角随时上报，提交即返回受理单号）</div>
     <div class="banner">
       <div class="b-ic">⚡</div>
       <div>
@@ -435,7 +435,7 @@
       <a href="./privacy.html">隐私政策</a>
       <a href="./terms.html">用户协议</a>
     </div>
-    <div>SEMVER 0.64.60 · 端口守纪 8002 · © 2026 分身</div>
+    <div>SEMVER 0.65.0 · 端口守纪 8002 · © 2026 分身</div>
     <div style="margin-top:12px;text-align:center;font-size:13px;color:#8e8e93">分身AI助手 · <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener" style="color:#007aff;text-decoration:underline">皖ICP备2025095639号-7</a></div>
   </div>
 </footer>
@@ -450,5 +450,57 @@
   }
 })();
 </script>
+
+<!-- ── 分身 · 即时反馈组件（官网/下载站通用）────────────────────────
+     提交到相对路径 /api/feedback，由 nginx 反代到本机反馈服务。
+     提交即返回受理回执（单号），实现「即时上报、即时反馈」。
+     capability 按 D0~D5 六能力归类，作为「六能力评判口径」的输入源。 -->
+<button id="fbFab" onclick="fbToggle()" title="问题反馈" style="position:fixed;right:18px;bottom:18px;z-index:9998;width:52px;height:52px;border-radius:50%;border:none;background:linear-gradient(135deg,#6d5efc,#4f46e5);color:#fff;font-size:22px;cursor:pointer;box-shadow:0 6px 20px rgba(79,70,229,.35)">📣</button>
+<div id="fbPanel" style="display:none;position:fixed;right:18px;bottom:80px;z-index:9999;width:340px;max-width:92vw;background:#fff;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:16px;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif">
+  <div style="font-size:15px;font-weight:600;margin-bottom:4px;color:#111827">📣 问题反馈</div>
+  <div style="font-size:12px;color:#6b7280;margin-bottom:10px;line-height:1.6">使用中遇到任何问题都可随时告诉我们。提交后<b>立即</b>返回受理单号，我们会按归属能力（D0~D5）排优先级跟进。</div>
+  <select id="fbCap" style="width:100%;padding:8px;margin-bottom:8px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;box-sizing:border-box">
+    <option value="">归属能力（可留空，由我们归类）</option>
+    <option value="D0">D0 大模型能力（连接 / API Key / 上下文 / Token）</option>
+    <option value="D1">D1 蒸馏能力（像不像你）</option>
+    <option value="D2">D2 元神能力（理解 / 调度 / 交付）</option>
+    <option value="D3">D3 Skill 模组能力</option>
+    <option value="D4">D4 工程交付能力（安装 / 构建 / 下载）</option>
+    <option value="D5">D5 生产稳定性（守护 / 数据 / 自愈）</option>
+  </select>
+  <textarea id="fbText" placeholder="请描述遇到的问题：你在做什么、期望什么、实际发生了什么" style="width:100%;min-height:84px;padding:8px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;resize:vertical;box-sizing:border-box;line-height:1.6"></textarea>
+  <input id="fbContact" placeholder="联系方式（可选，便于回复你）" style="width:100%;padding:8px;margin-top:8px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;box-sizing:border-box">
+  <div id="fbMsg" style="display:none;margin-top:10px;padding:9px;border-radius:8px;font-size:12px;line-height:1.7"></div>
+  <button onclick="fbSubmit()" id="fbBtn" style="width:100%;margin-top:10px;padding:10px;border:none;border-radius:9px;background:linear-gradient(135deg,#6d5efc,#4f46e5);color:#fff;font-size:14px;font-weight:600;cursor:pointer">提交反馈</button>
+</div>
+<script>
+function fbToggle(){ var p=document.getElementById('fbPanel'); p.style.display = (p.style.display==='block') ? 'none' : 'block'; }
+async function fbSubmit(){
+  var t=(document.getElementById('fbText').value||'').trim();
+  var m=document.getElementById('fbMsg');
+  var btn=document.getElementById('fbBtn');
+  if(!t){ m.style.display='block'; m.style.background='#fef2f2'; m.style.color='#b91c1c'; m.textContent='请描述你遇到的问题'; return; }
+  m.style.display='none'; btn.disabled=true; btn.textContent='提交中…';
+  try{
+    var r=await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({content:t,capability:document.getElementById('fbCap').value,
+        contact:(document.getElementById('fbContact').value||'').trim(),
+        source:'web',category:'bug',severity:'medium',version:'',context:''})});
+    var j=await r.json();
+    if(j.ok){
+      m.style.display='block'; m.style.background='#ecfdf5'; m.style.color='#065f46';
+      m.innerHTML='✅ <b>'+(j.message||'已收到你的反馈')+'</b><br><span style="opacity:.8">'+(j.detail||'')+'</span>';
+      document.getElementById('fbText').value=''; btn.textContent='已提交 ✓';
+    }else{
+      m.style.display='block'; m.style.background='#fef2f2'; m.style.color='#b91c1c';
+      m.textContent=j.error||'提交失败'; btn.disabled=false; btn.textContent='提交反馈';
+    }
+  }catch(e){
+    m.style.display='block'; m.style.background='#fef2f2'; m.style.color='#b91c1c';
+    m.textContent='提交失败：'+e.message; btn.disabled=false; btn.textContent='提交反馈';
+  }
+}
+</script>
+
 </body>
 </html>
