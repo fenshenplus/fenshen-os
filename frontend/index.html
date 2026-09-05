@@ -227,6 +227,9 @@
   .think-hd::before { content:'▶'; font-size:10px; transition:.15s; }
   .think-block.open .think-hd::before { transform:rotate(90deg); }
   .think-body { font-size:12px; color:var(--gray-600); line-height:1.55; white-space:pre-wrap; margin-top:4px; display:none; }
+  .think-step { display:flex; align-items:flex-start; gap:6px; padding:3px 0; font-size:12px; line-height:1.55; }
+  .think-icon { flex-shrink:0; width:18px; text-align:center; opacity:.9; font-size:13px; }
+  .think-line { color:var(--gray-600); white-space:pre-wrap; word-break:break-word; flex:1; }
   .tag { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; margin-bottom:3px; font-weight:500; }
   .tag.progress { background:rgba(34,197,94,.15); color:var(--success-strong); }
   .tag.done { background:rgba(0,122,255,.12); color:var(--accent-strong); }
@@ -779,6 +782,8 @@
     .think-block{margin-top:6px;border:.5px solid #e6e2f7;border-radius:10px;background:#faf9ff;overflow:hidden}
     .think-hd{font-size:11px;color:#6b5bd0;padding:6px 10px;cursor:pointer;user-select:none;background:#f3f0ff}
     .think-body{padding:8px 10px}
+    .think-step{padding:3px 0;font-size:11px;line-height:1.5}
+    .think-icon{width:16px;font-size:12px}
     /* 轨迹事件（Harness 式彩色时间轴） */
     .traj-ev{display:flex;gap:8px;padding:7px 12px;border-left:2px solid #eee;font-size:12px;line-height:1.5}
     .traj-ev .tk{font-size:10px;font-weight:600;padding:1px 7px;border-radius:6px;flex-shrink:0;height:fit-content;white-space:nowrap}
@@ -2438,6 +2443,36 @@ function extractThinking(text){
   const body = (text.slice(0,m.index).trim() + ' ' + text.slice(m.index+m[0].length).trim()).trim();
   return {body:body||text, think:m[1].trim()};
 }
+function _thinkIcon(line){
+  const t = line.trim();
+  if(!t) return '';
+  if(/^\d+[\).、]\s*[理了认确]./.test(t)) return '🧭';
+  if(/^\d+[\).、]\s*(当前状态|已执行|刚刚|做了|调用|查到)./.test(t)) return '⚙️';
+  if(/^\d+[\).、]\s*(判断|权衡|为什么|风险|放弃|依据)./.test(t)) return '⚖️';
+  if(/^\d+[\).、]\s*(下一步|计划|动作|需要|拍板)./.test(t)) return '📋';
+  if(/查看|读取|read|查看文件|view/.test(t)) return '👁';
+  if(/修改|编辑|edit|写入|write/.test(t)) return '✏️';
+  if(/运行|执行|调用|run|exec|call|command/.test(t)) return '⚙️';
+  if(/任务|todo|待办|issue/.test(t)) return '📋';
+  if(/搜索|查找|find|search/.test(t)) return '🔍';
+  if(/总结|结论|summary|conclude/.test(t)) return '📝';
+  if(/规划|plan|方案/.test(t)) return '🗺';
+  if(/团队|角色|role|成员|member/.test(t)) return '👥';
+  if(/风险|警告|warn|attention/.test(t)) return '⚠️';
+  if(/成功|完成|done|ok|✓|✅/.test(t)) return '✅';
+  if(/失败|错误|error|fail|异常|❌/.test(t)) return '❌';
+  return '•';
+}
+function renderThinkingSteps(thinkText){
+  if(!thinkText) return '';
+  const lines = thinkText.split(/\n/).filter(l => l.trim());
+  if(!lines.length) return '';
+  const steps = lines.map(l => {
+    const icon = _thinkIcon(l);
+    return `<div class="think-step"><span class="think-icon">${icon}</span><span class="think-line">${escapeHtml(l)}</span></div>`;
+  }).join('');
+  return steps;
+}
 function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerHTML='';
   if(!msgs.length){ b.innerHTML='<div class="empty"><div class="ic">💬</div><div>还没有消息，发送第一条指令开始工作</div></div>'; b.scrollTop=b.scrollHeight; return; }
   let lastRow=null;
@@ -2453,7 +2488,9 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
       const cls=escapeHtml(m.kind==='meta'?'meta':m.kind); const tag=m.tag?`<span class="tag ${escapeHtml(m.tag)}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
       let acts=`<div class="acts"><button class="msg-act" title="复制" onclick="msgAct(this,'copy')">⎘</button><button class="msg-act" title="赞赏" onclick="msgAct(this,'like')">👍</button><button class="msg-act" title="朗读" onclick="msgAct(this,'read')">🔊</button><button class="msg-act" title="转发" onclick="msgAct(this,'forward')">↩</button><button class="msg-act" title="更多" onclick="msgAct(this,'more')">⋯</button></div>`;
       const parsed = extractThinking(m.text);
-      const thinkHtml = parsed.think ? `<div class="think-block"><div class="think-hd" onclick="const p=this.parentElement, n=this.nextElementSibling; n.style.display=n.style.display==='none'?'block':'none'; p.classList.toggle('open');">深度思考</div><div class="think-body">${escapeHtml(parsed.think)}</div></div>` : '';
+      const thinkSteps = renderThinkingSteps(parsed.think);
+      const stepCount = parsed.think ? parsed.think.split(/\n/).filter(l => l.trim()).length : 0;
+      const thinkHtml = thinkSteps ? `<div class="think-block"><div class="think-hd" onclick="const p=this.parentElement, n=this.nextElementSibling; n.style.display=n.style.display==='none'?'block':'none'; p.classList.toggle('open');">深度思考${stepCount?'（'+stepCount+' 步）':''}</div><div class="think-body">${thinkSteps}</div></div>` : '';
       // 图片附件（v6.5 多模态）
       let imgs='';
       if(m.images){ try{ const arr=JSON.parse(m.images); if(Array.isArray(arr)&&arr.length){ imgs='<div class="msg-imgs">'+arr.map(im=>`<img class="msg-img" src="data:${im.mime};base64,${im.data}" onclick="openImg(this.src)" alt="${escapeHtml(im.name||'图片')}">`).join('')+'</div>'; } }catch(e){} }
