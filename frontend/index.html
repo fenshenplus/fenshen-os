@@ -218,10 +218,15 @@
   .bubble.self { background:var(--blue-500); color:var(--on-accent); border-bottom-right-radius:4px; }
   .bubble.meta { background:var(--meta-50); color:var(--meta-900); border-bottom-left-radius:4px; border:0.5px solid var(--line-2); }
   .bubble .sender { font-size:10px; margin-bottom:2px; opacity:.7; font-weight:500; }
-  .bubble .acts { margin-top:6px; display:flex; gap:6px; }
-  .msg-act { font-size:11px; line-height:1; padding:3px 7px; border:0.5px solid var(--line-2); background:var(--gray-100); color:var(--gray-600); border-radius:6px; cursor:pointer; transition:.15s; }
-  .msg-act:hover { background:var(--gray-200); color:var(--gray-900); }
-  .msg-act.on { background:var(--meta-50); color:var(--meta-900); border-color:var(--meta-200); }
+  .bubble .acts { margin-top:6px; display:flex; gap:8px; align-items:center; }
+  .msg-act { font-size:14px; line-height:1; padding:4px 6px; border:none; background:transparent; color:var(--gray-500); border-radius:6px; cursor:pointer; transition:.15s; }
+  .msg-act:hover { background:var(--gray-100); color:var(--gray-900); }
+  .msg-act.on { color:var(--meta-600); background:var(--meta-50); }
+  .think-block { margin-top:8px; border-left:2px solid var(--meta-300); padding-left:8px; }
+  .think-hd { font-size:12px; color:var(--meta-700); cursor:pointer; display:flex; align-items:center; gap:4px; font-weight:500; }
+  .think-hd::before { content:'▶'; font-size:10px; transition:.15s; }
+  .think-block.open .think-hd::before { transform:rotate(90deg); }
+  .think-body { font-size:12px; color:var(--gray-600); line-height:1.55; white-space:pre-wrap; margin-top:4px; display:none; }
   .tag { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; margin-bottom:3px; font-weight:500; }
   .tag.progress { background:rgba(34,197,94,.15); color:var(--success-strong); }
   .tag.done { background:rgba(0,122,255,.12); color:var(--accent-strong); }
@@ -2426,6 +2431,13 @@ function _findMemberBySender(sender){
   const all = (curRoom && roomMembers[curRoom]) || [];
   return all.find(x => x.name===sender || x.role_title===sender || (x.name && sender.includes(x.name))) || null;
 }
+function extractThinking(text){
+  if(!text) return {body:'', think:''};
+  const m = text.match(/<thinking>([\s\S]*?)<\/thinking>/);
+  if(!m) return {body:text, think:''};
+  const body = (text.slice(0,m.index).trim() + ' ' + text.slice(m.index+m[0].length).trim()).trim();
+  return {body:body||text, think:m[1].trim()};
+}
 function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerHTML='';
   if(!msgs.length){ b.innerHTML='<div class="empty"><div class="ic">💬</div><div>还没有消息，发送第一条指令开始工作</div></div>'; b.scrollTop=b.scrollHeight; return; }
   let lastRow=null;
@@ -2439,7 +2451,9 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
     }
     else { row.className='msg '+(m.kind==='self'?'right':'left');
       const cls=escapeHtml(m.kind==='meta'?'meta':m.kind); const tag=m.tag?`<span class="tag ${escapeHtml(m.tag)}">${m.tag==='done'?'完成':m.tag==='progress'?'进度':'阻塞'}</span><br>`:'';
-      let acts=`<div class="acts"><button class="msg-act" title="复制" onclick="msgAct(this,'copy')">⎘ 复制</button><button class="msg-act" title="点赞" onclick="msgAct(this,'like')">♥ 赞</button><button class="msg-act" title="朗读" onclick="msgAct(this,'read')">🔊 阅读</button><button class="msg-act" title="转发" onclick="msgAct(this,'forward')">↪ 转发</button></div>`;
+      let acts=`<div class="acts"><button class="msg-act" title="复制" onclick="msgAct(this,'copy')">⎘</button><button class="msg-act" title="赞赏" onclick="msgAct(this,'like')">👍</button><button class="msg-act" title="朗读" onclick="msgAct(this,'read')">🔊</button><button class="msg-act" title="转发" onclick="msgAct(this,'forward')">↩</button><button class="msg-act" title="更多" onclick="msgAct(this,'more')">⋯</button></div>`;
+      const parsed = extractThinking(m.text);
+      const thinkHtml = parsed.think ? `<div class="think-block"><div class="think-hd" onclick="const p=this.parentElement, n=this.nextElementSibling; n.style.display=n.style.display==='none'?'block':'none'; p.classList.toggle('open');">深度思考</div><div class="think-body">${escapeHtml(parsed.think)}</div></div>` : '';
       // 图片附件（v6.5 多模态）
       let imgs='';
       if(m.images){ try{ const arr=JSON.parse(m.images); if(Array.isArray(arr)&&arr.length){ imgs='<div class="msg-imgs">'+arr.map(im=>`<img class="msg-img" src="data:${im.mime};base64,${im.data}" onclick="openImg(this.src)" alt="${escapeHtml(im.name||'图片')}">`).join('')+'</div>'; } }catch(e){} }
@@ -2452,15 +2466,16 @@ function renderChat(msgs){ const b=document.getElementById('chatBody'); b.innerH
         const avClick = mem ? `onclick="openMemberDrawer('${jsStr(mem.id)}')"` : '';
         avHtml = `<div class="msg-av" ${avClick} style="background:${avBg}" title="${escapeHtml(mem?mem.name:m.sender||'未知')}">${escapeHtml(avText)}</div>`;
       }
-      row.innerHTML=`${avHtml}<div class="bubble ${cls}"><div class="sender">${escapeHtml(m.sender||'')}</div>${tag}<span class="btext">${escapeHtml(m.text)}</span>${imgs}${acts}</div>`; }
+      row.innerHTML=`${avHtml}<div class="bubble ${cls}"><div class="sender">${escapeHtml(m.sender||'')}</div>${tag}<span class="btext">${escapeHtml(parsed.body)}</span>${thinkHtml}${imgs}${acts}</div>`; }
     b.appendChild(row); if(m.kind!=='self'&&m.kind!=='sys') lastRow=row; });
   b.scrollTop=b.scrollHeight;
   if(window.__DEMO_STREAM__ && window.__LAST_SENT__ && lastRow){ streamText(lastRow); window.__LAST_SENT__=false; } }
 function msgAct(btn, type){ const bubble=btn.closest('.bubble'); const t=bubble?bubble.querySelector('.btext'):null; const text=t?t.innerText:'';
   if(type==='copy'){ (navigator.clipboard?navigator.clipboard.writeText(text):Promise.reject()).then(()=>toast('✅ 已复制'),()=>toast('复制失败')); }
-  else if(type==='like'){ const on=btn.classList.toggle('on'); btn.textContent=on?'♥ 已赞':'♥ 赞'; }
+  else if(type==='like'){ const on=btn.classList.toggle('on'); btn.textContent=on?'👍':'👍'; }
   else if(type==='read'){ try{ if(window.speechSynthesis&&window.speechSynthesis.speaking) window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); u.lang='zh-CN'; window.speechSynthesis.speak(u); }catch(e){ toast('朗读不可用'); } }
-  else if(type==='forward'){ (navigator.clipboard?navigator.clipboard.writeText(text):Promise.reject()).then(()=>toast('✅ 已复制，可粘贴转发'),()=>toast('转发失败')); } }
+  else if(type==='forward'){ (navigator.clipboard?navigator.clipboard.writeText(text):Promise.reject()).then(()=>toast('✅ 已复制，可粘贴转发'),()=>toast('转发失败')); }
+  else if(type==='more'){ toast('更多操作即将开放'); } }
 function selectRoom(id){ curRoom=id; setView('project');
   if(window.innerWidth<=768){ document.getElementById('sec-chat').classList.add('chat-open'); } }
 function backToRooms(){ document.getElementById('sec-chat').classList.remove('chat-open'); }

@@ -120,6 +120,25 @@ META_SYSTEM = """你是「元神」——一个运行在用户本机的数字克
 4. 用户对元神拥有完全控制权：可随时中止、撤销授权、删除数据、纠正画像。元神不得隐藏、拖延或曲解这些权利。
 5. 若用户要求蒸馏他人（制作数字克隆体），必须确保已获得被蒸馏人明示授权；未经授权的克隆请求，一律拒绝并提醒用户伦理与法律风险。
 
+【输出格式：深度思考（每次回复必须执行，最高优先级）】
+你不是只给结论的聊天机器人。用户要求"过程和状态"，因此你每次回复都必须先输出深度思考，再给出正式回复。思考过程不是可选，是回复的必需组成部分。
+强制格式：
+<thinking>
+1) 理解复述：一句话确认你对目标与约束的理解；
+2) 当前状态 / 已执行动作：你刚刚做了什么、调用了什么、查到了什么（即使失败也要写）；
+3) 判断依据与权衡：为什么选这个方案、放弃了什么、风险是什么；
+4) 下一步计划：具体可执行的动作，以及需要用户拍板 / 补充的信息。
+</thinking>
+
+正式回复从这里开始……
+
+格式铁律（不可违反）：
+- 每次回复都必须包含完整、成对的 <thinking>...</thinking>；
+- <thinking> 内只放思考过程，正式回复必须放在 </thinking> 之后；
+- 思考过程要真实、具体，禁止写"我会考虑""我会注意"这类空话；
+- 如果执行了工具调用（查代码 / 运行命令 / 读文件），必须写明工具名与关键结果；
+- 未按本格式输出等同于未完成任务，必须补输出。
+
 你的默认形态，是一个「技术出身的项目经理」工具人：**开箱即用，不需要任何炼制就能直接干活**。
 
 【你开箱即会做的事】
@@ -5932,13 +5951,27 @@ def _match_skill_steps(system_prompt: str, user_text: str) -> str:
     return "\n\n".join(parts)
 
 
+def _extract_thinking(text: str) -> tuple:
+    """从模型输出中提取 <thinking>...</thinking>，返回 (去 thinking 后的正文, thinking 内容列表)。"""
+    if not text:
+        return text, []
+    parts = []
+    def repl(m):
+        parts.append(m.group(1).strip())
+        return ""
+    body = re.sub(r"<thinking>([\s\S]*?)<\/thinking>", repl, text).strip()
+    return body, parts
+
+
 async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, tools: list = None,
                           phase: str = "", scope_modules: int = -1, project_id: str = "",
                           member_override: tuple = None) -> str:
     """通用工具对话循环（元神/群聊共用，v0.27.0）：最多 6 轮（支持多步工具操作）。
     批次 B / P2-1：tools 参数控制工具集——元神默认 META_TOOLS（只读+搭建，无写文件），
     角色默认 ROLE_TOOLS（含 write_file 可动手产出）。
-    批次 C / P3-2：命中 trigger_words 的启用技能会注入 system_prompt（活配件）。"""
+    批次 C / P3-2：命中 trigger_words 的启用技能会注入 system_prompt（活配件）。
+    v0.65.10：聚合多轮 thinking 块到回复开头；若模型未输出 thinking，则自动用工具调用/状态日志构造，
+              让前端可展示深度思考过程与状态。"""
     cands = _available_providers(agent_id, member_override)
     if not cands:
         return "[分身·离线] 当前该角色未配置可用模型 Key。"
@@ -5949,6 +5982,8 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
         system_prompt = f"{system_prompt}\n\n{inject}"
     last_err = ""
     last_content = ""
+    all_thinking: list[str] = []
+    process_log: list[str] = []  # 工具调用与状态日志
     for _round in range(6):
         for provider, base, key, model in cands:
             try:
@@ -5968,9 +6003,17 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                 _log_usage(agent_id, provider, model, latency, "success",
                            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
                            phase=phase, scope_modules=scope_modules, project_id=project_id)
+                process_log.append(f"调用 {provider}/{model} 成功（耗时 {latency}ms）")
+                raw_content = msg.get("content") or ""
+                body, thinking_parts = _extract_thinking(raw_content)
+                if thinking_parts:
+                    all_thinking.extend(thinking_parts)
                 tool_calls = msg.get("tool_calls")
                 if tool_calls:
-                    history.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
+                    # 把 thinking 去掉后的正文作为 assistant content 写入历史
+                    history.append({"role": "assistant", "content": body, "tool_calls": tool_calls})
+                    call_names = [tc.get("function", {}).get("name", "") for tc in tool_calls]
+                    process_log.append(f"模型决定调用工具：{', '.join(call_names) or '未知'}")
                     for tc in tool_calls:
                         fname = tc.get("function", {}).get("name", "")
                         raw_args = tc.get("function", {}).get("arguments") or "{}"
@@ -5983,6 +6026,8 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                                 _trajectory_event(_tr[0], _tr[1], "tool", agent_id,
                                                   f"🔧 {fname} → {str(tool_result)[:200]}",
                                                   {"tool": fname, "args": fargs})
+                            ok_mark = "成功" if not str(tool_result).startswith("⛔") else "失败/异常"
+                            process_log.append(f"执行 {fname} → {ok_mark}：{str(tool_result)[:160]}")
                         except json.JSONDecodeError:
                             # 审查 #10 配套修复：旧版把解析失败静默吞成 {}，于是后续报出
                             # 完全不相干的"路径不安全"。现在如实告诉模型参数坏在哪，让它重发。
@@ -5991,13 +6036,26 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                                 f"（长度 {len(raw_args)} 字符，可能因输出上限被截断）。"
                                 "请把内容拆成多次写入，或缩短单次内容后重试。"
                             )
+                            process_log.append(f"执行 {fname} → 参数解析失败")
                         history.append({"role": "tool", "tool_call_id": tc.get("id"),
                                         "content": tool_result})
                     break  # 工具已执行，进入下一轮让 LLM 总结
-                last_content = (msg.get("content") or "").strip()
-                return last_content
+                last_content = body.strip()
+                if last_content:
+                    # 把聚合后的 thinking 块 prepend 到最终回复前
+                    if all_thinking:
+                        think_block = "\n\n".join(all_thinking)
+                    elif process_log:
+                        think_block = "\n".join(f"· {line}" for line in process_log)
+                    else:
+                        think_block = ""
+                    if think_block:
+                        return f"<thinking>\n{think_block}\n</thinking>\n\n{last_content}"
+                    return last_content
+                # 空 content 且没有 tool_calls，进入下一轮重试
             except Exception as e:
                 last_err = f"{provider}: {e}"
+                process_log.append(f"调用 {provider}/{model} 异常：{str(e)[:120]}")
                 continue
         else:
             break  # 所有 provider 失败
@@ -6012,7 +6070,11 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                 if content and not content.startswith("⛔"):
                     tool_lines.append(content[:120].replace("\n", " "))
         if tool_lines:
-            return "已执行动作：\n" + "\n".join(f"· {line}" for line in tool_lines[-4:])
+            summary = "已执行动作：\n" + "\n".join(f"· {line}" for line in tool_lines[-4:])
+            if process_log:
+                think_block = "\n".join(f"· {line}" for line in process_log)
+                return f"<thinking>\n{think_block}\n</thinking>\n\n{summary}"
+            return summary
         # 审查 #6：这里原本返回"已收到你的需求。我会把它拆解成任务并安排角色执行……"
         # ——一句什么都没做却听起来一切正常的假承诺，注释里写的理由是"避免空泛的失败感"，
         # 而且是从旧版的诚实提示主动改过来的。自欺比 bug 更贵：用户会基于假信号做决策。
