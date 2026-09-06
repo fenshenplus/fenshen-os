@@ -229,6 +229,213 @@ def _ensure_meta_home_scaffold():
         return
     _scaffold_meta_home(META_HOME)
 
+
+# ════════════════════════════════════════════════════════════════════
+# P3：项目文件夹（按「项目名 + 创建时间」命名）+ 四件套（人读真源）
+# P7：指挥中枢 HQ（五件套 + 定时巡检 + 主动汇报落盘）
+# P8：工单流转（inbox→doing→outbox，DB 真源 + 项目内 tickets.md 镜像）
+# P9：验收闭环（worker≠judge / 退回 / 三层完成：执行↔验收↔用户确认）
+# ════════════════════════════════════════════════════════════════════
+
+def _safe_folder_name(name: str) -> str:
+    name = (name or "未命名项目").strip()
+    for ch in '/\\:*?"<>|':
+        name = name.replace(ch, "_")
+    name = name[:40].strip() or "未命名项目"
+    return name
+
+
+def _project_folder_path(folder_name: str) -> str:
+    return os.path.join(META_HOME, "projects", folder_name)
+
+
+def _write_project_core_files(root: str, name: str, goal: str = "", standards: str = "", team: str = "") -> bool:
+    """建项即落四件套（_project.md / plan.md / team.md / context.md），幂等：已存在不覆盖。"""
+    try:
+        os.makedirs(root, exist_ok=True)
+        files = {
+            "_project.md": (
+                f"# 项目卡 · {name}\n\n"
+                f"> 本文件是项目的「人读真源」概览；DB 仅作机器索引。\n\n"
+                f"## 目标\n{goal or '（未填写）'}\n\n"
+                f"## 完成标准\n{standards or '（未填写）'}\n\n"
+                f"## 创建时间\n{datetime.now().isoformat()}\n"
+            ),
+            "plan.md": (
+                f"# 计划 · {name}\n\n"
+                f"## 目标拆解\n- 目标：{goal or '（未填写）'}\n\n"
+                f"## 完成标准\n{standards or '（未填写）'}\n\n"
+                f"> 由元神在指挥官形态下补充里程碑与任务分解。\n"
+            ),
+            "team.md": (
+                f"# 团队 · {name}\n\n"
+                f"## 阵容\n{team or '（待元神组队）'}\n\n"
+                f"> 每个 agent 在 `agents/<角色>/` 下拥有独立 SOUL/MEMORY/standards/experience。\n"
+            ),
+            "context.md": (
+                f"# 上下文 · {name}\n\n"
+                f"- 项目名：{name}\n- 目标：{goal or '（未填写）'}\n"
+                f"- 完成标准：{standards or '（未填写）'}\n\n"
+                f"> 元神每次开工前读此文件对齐上下文；新进展追加于此。\n"
+            ),
+        }
+        for fn, body in files.items():
+            p = os.path.join(root, fn)
+            if not os.path.exists(p):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(body)
+        return True
+    except Exception as e:
+        print(f"[project] core files fail {root}: {e}")
+        return False
+
+
+# ── P7：指挥中枢 HQ ──
+def _hq_dir() -> str:
+    return os.path.join(META_HOME, "HQ")
+
+
+def _write_hq_file(name: str, content: str):
+    try:
+        os.makedirs(_hq_dir(), exist_ok=True)
+        with open(os.path.join(_hq_dir(), name), "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception as e:
+        print(f"[hq] write {name} fail: {e}")
+
+
+def _hq_record_decision(text: str):
+    """决策记录：追加式（不覆盖历史）。"""
+    try:
+        os.makedirs(_hq_dir(), exist_ok=True)
+        p = os.path.join(_hq_dir(), "decisions.md")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(f"\n- [{ts}] {text}\n")
+    except Exception:
+        pass
+
+
+def _hq_scan():
+    """巡检所有项目与任务，刷新 HQ 前四件套（decisions 保留历史，单独追加式记录）。"""
+    try:
+        conn = get_db()
+        projs = conn.execute(
+            "SELECT id,name,goal,status,folder_name,storage_root FROM projects ORDER BY created_at DESC"
+        ).fetchall()
+        dashboard = ["# HQ · 指挥仪表盘\n",
+                     f"> 最近一次巡检：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"]
+        inbox = ["# HQ · 收件箱\n", "> 新到的任务 / 工单 / 待决事项\n"]
+        agenda = ["# HQ · 今日议程\n"]
+        focus_items = []
+        for p in projs:
+            pid = p["id"]; name = p["name"] or "未命名"
+            tasks = conn.execute(
+                "SELECT name,status,acceptance_status FROM tasks WHERE project_id=?", (pid,)
+            ).fetchall()
+            n_total = len(tasks)
+            n_done = sum(1 for t in tasks if t["status"] == "done")
+            n_doing = sum(1 for t in tasks if t["status"] in ("doing", "in_progress", "review"))
+            n_todo = sum(1 for t in tasks if t["status"] == "todo")
+            n_pending = sum(1 for t in tasks if (t["acceptance_status"] or "") == "pending")
+            line = (f"## {name}\n- 目标：{p['goal'] or '（未填）'}\n"
+                    f"- 任务：共 {n_total}（待办 {n_todo} / 进行中 {n_doing} / 完成 {n_done}）")
+            if n_pending:
+                line += f" · 待验收 {n_pending}"
+            line += "\n"
+            dashboard.append(line)
+            for t in tasks:
+                if t["status"] in ("todo", "doing", "in_progress", "review"):
+                    inbox.append(f"- [{name}] {t['name']}（{t['status']}）")
+                if t["status"] in ("doing", "in_progress"):
+                    agenda.append(f"- {name} · {t['name']}")
+                    if len(focus_items) < 3:
+                        focus_items.append(f"{name} · {t['name']}")
+        # 工单（P8）
+        try:
+            tks = conn.execute(
+                "SELECT id,title,status FROM tickets ORDER BY created_at DESC"
+            ).fetchall()
+            if tks:
+                inbox.append("\n## 工单\n")
+                for tk in tks:
+                    inbox.append(f"- [{tk['status']}] {tk['title']}（#{tk['id'][:8]}）")
+        except Exception:
+            pass
+        conn.close()
+        _write_hq_file("dashboard.md", "\n".join(dashboard) + "\n")
+        _write_hq_file("agenda.md", "\n".join(agenda) + "\n")
+        _write_hq_file("inbox.md", "\n".join(inbox) + "\n")
+        _write_hq_file("focus.md",
+                       "# HQ · 当前焦点\n\n" +
+                       ("\n".join(f"- {x}" for x in focus_items) or "（暂无进行中任务）") + "\n")
+    except Exception as e:
+        print(f"[hq] scan fail: {e}")
+
+
+async def _hq_loop():
+    """定时巡检（默认 5 分钟），主动刷新 HQ 五件套。"""
+    await asyncio.sleep(3)
+    while True:
+        try:
+            _hq_scan()
+        except Exception:
+            pass
+        await asyncio.sleep(300)
+
+
+# ── P8：工单流转 ──
+def _mirror_tickets_md(pid: str):
+    """把项目工单镜像到项目文件夹 tickets.md（人读，DB 仍为机器真源）。"""
+    try:
+        conn = get_db()
+        proj = conn.execute(
+            "SELECT folder_name,storage_root,name FROM projects WHERE id=?", (pid,)
+        ).fetchone()
+        if not proj:
+            conn.close(); return
+        root = proj["storage_root"] or _project_folder_path(proj["folder_name"] or "")
+        if not root:
+            conn.close(); return
+        tks = conn.execute(
+            "SELECT id,title,status,assignee,desc,context,created_at FROM tickets "
+            "WHERE project_id=? ORDER BY created_at", (pid,)
+        ).fetchall()
+        conn.close()
+        lines = [f"# 工单 · {proj['name']}\n",
+                 "> inbox→doing→outbox 流转；DB 为机器真源，此文件为镜像。\n"]
+        for tk in tks:
+            lines.append(
+                f"## [{tk['status']}] {tk['title']} (#{tk['id'][:8]})\n"
+                f"- 负责人：{tk['assignee'] or '未分派'}\n"
+                f"- 说明：{tk['desc'] or ''}\n"
+                f"- 上下文：{tk['context'] or ''}\n"
+            )
+        os.makedirs(root, exist_ok=True)
+        with open(os.path.join(root, "tickets.md"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as e:
+        print(f"[ticket] mirror fail: {e}")
+
+
+def _create_ticket(pid: str, title: str, desc: str = "", assignee: str = "", context: str = "") -> str:
+    """创建工单（默认进 inbox），镜像到项目文件夹并刷新 HQ。"""
+    try:
+        conn = get_db()
+        tid = f"tk{int(datetime.now().timestamp() * 1000)}"
+        conn.execute(
+            "INSERT INTO tickets (id,project_id,title,desc,status,assignee,context,created_at,done_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (tid, pid, title, desc, "inbox", assignee, context, datetime.now().isoformat(), ""),
+        )
+        conn.commit(); conn.close()
+        _mirror_tickets_md(pid); _hq_scan()
+        return tid
+    except Exception as e:
+        print(f"[ticket] create fail: {e}")
+        return None
+
+
 # ── 元神人格 grounding ─────────────────────────────────────────────
 DEEPSEEK_KEY = None  # 分身不内置任何大模型；必须由用户登录后自行配置 API Key
 
@@ -1354,6 +1561,24 @@ def init_db():
         cur.execute("ALTER TABLE tasks ADD COLUMN plan_id TEXT DEFAULT ''")
     if "depends_on" not in tocols:
         cur.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT DEFAULT '[]'")
+    # ── v0.68 P3/P7/P8/P9：projects.folder_name（按项目名+创建时间的人读文件夹）
+    #    + tasks 验收三列（acceptance_status / worker / judge，落实 worker≠judge）
+    #    + tickets 表（工单流转 inbox→doing→outbox，DB 真源）──
+    pcols5 = {r[1] for r in cur.execute("PRAGMA table_info(projects)").fetchall()}
+    if "folder_name" not in pcols5:
+        cur.execute("ALTER TABLE projects ADD COLUMN folder_name TEXT DEFAULT ''")
+    tcols3 = {r[1] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "acceptance_status" not in tcols3:
+        cur.execute("ALTER TABLE tasks ADD COLUMN acceptance_status TEXT DEFAULT ''")
+    if "worker" not in tcols3:
+        cur.execute("ALTER TABLE tasks ADD COLUMN worker TEXT DEFAULT ''")
+    if "judge" not in tcols3:
+        cur.execute("ALTER TABLE tasks ADD COLUMN judge TEXT DEFAULT ''")
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS tickets ("
+        "id TEXT PRIMARY KEY, project_id TEXT, title TEXT, desc TEXT, status TEXT DEFAULT 'inbox', "
+        "assignee TEXT DEFAULT '', context TEXT DEFAULT '', created_at TEXT, done_at TEXT DEFAULT '')"
+    )
     # 存量数据回填：归属到首个注册用户（无用户则标记 'local'，本地单用户模式）
     _fu = cur.execute("SELECT id FROM users ORDER BY created_at LIMIT 1").fetchone()
     _owner = _fu["id"] if _fu else "local"
@@ -1647,6 +1872,12 @@ async def _start_patrol():
     _ensure_design_specs()
     # v0.67 元神家：已设置则幂等补全骨架（应对版本升级新增文件）
     _ensure_meta_home_scaffold()
+    # v0.68 P7：指挥中枢 HQ 定时巡检（启动即扫一次 + 常驻每 5 分钟刷新五件套）
+    try:
+        _hq_scan()
+    except Exception:
+        pass
+    asyncio.create_task(_hq_loop())
     # 疗效归因第⑤环：启动时跑一次全量权重维护，保证聚合表就绪
     try:
         _maintain_attribution()
@@ -3727,8 +3958,10 @@ def _seed_default_roster(pid: str, tracks):
 async def create_project(req: Request):
     data = await req.json()
     pid = data.get("id") or f"p{int(datetime.now().timestamp() * 1000)}"
-    # v5.8 P1：双维度存储根目录（~/.fenshen/projects/<pid>）+ 设计规范（P2 用，建项自选）
-    storage_root = os.path.expanduser(f"~/.fenshen/projects/{pid}")
+    # v0.68 P3：项目文件夹按「项目名 + 创建时间」落在元神家 projects/ 下（人读真源，可移植）
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    folder_name = f"{_safe_folder_name(data.get('name', ''))}-{stamp}"
+    storage_root = os.path.join(META_HOME, "projects", folder_name)
     design_std = data.get("design_standard", "") or ""
     # v6.1 矩阵看板：建项即按所选轨道配置阶段链（默认 web）；v6.2 P2 自动补齐生命周期轨道
     tracks = data.get("tracks") or ["web"]
@@ -3746,9 +3979,9 @@ async def create_project(req: Request):
     conn = get_db()
     _owner = _current_user_id(req) or "local"
     conn.execute(
-        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen,storage_root,design_standard,tracks,stage_chains,owner_id) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO projects (id,name,goal,standards,status,created_at,phase,frozen,storage_root,folder_name,design_standard,tracks,stage_chains,owner_id) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?)",
         (pid, data.get("name", ""), data.get("goal", ""), data.get("standards", ""), "green", datetime.now().isoformat(),
-         data.get("phase", "requirement"), storage_root, design_std,
+         data.get("phase", "requirement"), storage_root, folder_name, design_std,
          json.dumps(tracks, ensure_ascii=False), json.dumps(chains, ensure_ascii=False), _owner),
     )
     # 解构引导：projects.modules 数组 → 批量创建模块（支持一次成立项目即拆模块）
@@ -3780,6 +4013,20 @@ async def create_project(req: Request):
     # 批次 B / P2-2：元神搭建基础设施（开场消息定格目标/标准/团队/看板）
     _bootstrap_project(pid, goal=data.get("goal", ""), standards=data.get("standards", ""),
                        roles=data.get("roles") or [])
+    # v0.68 P3：建项即落项目四件套（人读真源）；P8：建项即生成首张工单进入 inbox
+    try:
+        _, role_names = _roles_from_db()
+        _roles = data.get("roles") or list(role_names)
+        team_text = "、".join(role_names.get(r, r) for r in _roles)
+    except Exception:
+        team_text = ""
+    _write_project_core_files(storage_root, data.get("name", ""), data.get("goal", ""),
+                              data.get("standards", ""), team_text)
+    try:
+        _create_ticket(pid, "搭建项目基础设施", "元神初始化项目目标/标准/团队/看板", "元神",
+                       f"项目：{data.get('name', '')}；目标：{data.get('goal', '')}")
+    except Exception as e:
+        print("ticket seed warn:", e)
     # v6.2 战队：建项即生成初始成员阵容
     try:
         _seed_default_roster(pid, tracks)
@@ -5034,19 +5281,20 @@ def _tool_workdir() -> str:
 
 
 def _project_storage_root(proj) -> str:
-    """双维度存储根目录（v5.8 P1）：优先 projects.storage_root（~/.fenshen/projects/<pid>），
-    旧项目无 storage_root 时 fallback ~/Desktop/<项目名>。注意：仅看列值，不依赖目录是否已存在
-    （新建项目目录尚未创建，不应误 fallback）。目录树：
-      <root>/public/        项目公共文件夹
-      <root>/members/<uid>/ 每个群聊成员单独文件夹
-      <root>/modules/<mid>/ 按看板模块组织的成果文件夹"""
+    """双维度存储根目录（v5.8 P1 + v0.68 P3）：
+    优先 projects.storage_root（元神家 projects/<项目名-时间>）；
+    次选 folder_name（新项目库内已知但 storage_root 暂空时拼回）；
+    旧项目二者皆空时 fallback ~/Desktop/<项目名>。注意：仅看列值，不依赖目录是否已存在。"""
     if isinstance(proj, dict):
         sr = (proj.get("storage_root") or "").strip()
         name = (proj.get("name") or "未命名项目").strip().strip("/")
+        folder = (proj.get("folder_name") or "").strip()
     else:
-        sr, name = "", (proj or "未命名项目").strip().strip("/")
+        sr, name, folder = "", (proj or "未命名项目").strip().strip("/"), ""
     if sr:
         return sr
+    if folder:
+        return os.path.join(META_HOME, "projects", folder)
     return os.path.expanduser(f"~/Desktop/{name}")
 
 
@@ -10719,6 +10967,139 @@ async def meta_home_set(req: Request):
     return {"ok": ok, "home": home}
 
 
+# ── P7：指挥中枢 HQ（五件套读取 / 主动巡检刷新）──
+@app.get("/api/meta/hq")
+async def get_hq():
+    d = _hq_dir()
+    out = {}
+    for fn in ("dashboard.md", "agenda.md", "inbox.md", "decisions.md", "focus.md"):
+        p = os.path.join(d, fn)
+        try:
+            out[fn] = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+        except Exception:
+            out[fn] = ""
+    return out
+
+
+@app.post("/api/meta/hq/refresh")
+async def refresh_hq():
+    _hq_scan()
+    return {"ok": True}
+
+
+# ── P8：工单流转（inbox→doing→outbox）──
+@app.post("/api/meta/tickets")
+async def api_create_ticket(req: Request):
+    data = await req.json()
+    pid = data.get("project_id", "")
+    if not pid:
+        return {"ok": False, "error": "project_id 必填"}
+    tid = _create_ticket(pid, data.get("title", ""), data.get("desc", ""),
+                         data.get("assignee", ""), data.get("context", ""))
+    if not tid:
+        return {"ok": False, "error": "工单创建失败（项目是否存在？）"}
+    return {"ok": True, "id": tid, "status": "inbox"}
+
+
+@app.get("/api/meta/tickets")
+async def api_list_tickets(project_id: str = "", status: str = ""):
+    conn = get_db()
+    if project_id:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM tickets WHERE project_id=? AND status=? ORDER BY created_at", (project_id, status)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM tickets WHERE project_id=? ORDER BY created_at", (project_id,)
+            ).fetchall()
+    else:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM tickets WHERE status=? ORDER BY created_at", (status,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM tickets ORDER BY created_at").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+_TICKET_TRANSITIONS = {"inbox": ["doing"], "doing": ["outbox", "inbox"], "outbox": []}
+
+
+@app.post("/api/meta/tickets/{tid}/move")
+async def api_move_ticket(tid: str, req: Request):
+    data = await req.json()
+    to = data.get("to")
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tickets WHERE id=?", (tid,)).fetchone()
+    if not row:
+        conn.close(); return {"ok": False, "error": "工单不存在"}
+    cur = row["status"]
+    allowed = _TICKET_TRANSITIONS.get(cur, [])
+    if to not in allowed:
+        conn.close(); return {"ok": False, "error": f"非法流转：{cur}→{to}"}
+    done_at = datetime.now().isoformat() if to == "outbox" else ""
+    assignee = data.get("assignee", "")
+    conn.execute(
+        "UPDATE tickets SET status=?, assignee=COALESCE(NULLIF(?,''),assignee), done_at=? WHERE id=?",
+        (to, assignee, done_at, tid),
+    )
+    conn.commit(); pid = row["project_id"]; conn.close()
+    _mirror_tickets_md(pid); _hq_scan()
+    return {"ok": True, "status": to}
+
+
+# ── P9：验收闭环（worker≠judge / 退回 / 三层完成）──
+@app.post("/api/projects/{pid}/tasks/{tid}/submit")
+async def api_task_submit(pid: str, tid: str, req: Request):
+    """worker 提交完成 → 进入待验收（acceptance_status='pending'），记录执行人。"""
+    data = await req.json()
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id=? AND project_id=?", (tid, pid)).fetchone()
+    if not row:
+        conn.close(); return {"ok": False, "error": "任务不存在"}
+    worker = data.get("worker") or "agent"
+    conn.execute(
+        "UPDATE tasks SET acceptance_status='pending', worker=?, updated_at=? WHERE id=?",
+        (worker, datetime.now().isoformat(), tid),
+    )
+    conn.commit(); conn.close()
+    _hq_scan()
+    return {"ok": True, "acceptance_status": "pending"}
+
+
+@app.post("/api/projects/{pid}/tasks/{tid}/accept")
+async def api_task_accept(pid: str, tid: str, req: Request):
+    """验收：judge 判定通过/退回；强制 worker≠judge（执行者不能自评）。"""
+    data = await req.json()
+    judge = data.get("judge") or "元神"
+    passed = bool(data.get("passed", False))
+    note = data.get("note", "")
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id=? AND project_id=?", (tid, pid)).fetchone()
+    if not row:
+        conn.close(); return {"ok": False, "error": "任务不存在"}
+    worker = row["worker"] or ""
+    if judge and worker and judge == worker:
+        conn.close(); return {"ok": False, "error": "验收人不能与执行人相同（worker≠judge）"}
+    if passed:
+        conn.execute(
+            "UPDATE tasks SET acceptance_status='passed', judge=?, updated_at=? WHERE id=?",
+            (judge, datetime.now().isoformat(), tid),
+        )
+        new_status = "passed"
+    else:
+        conn.execute(
+            "UPDATE tasks SET acceptance_status='returned', judge=?, status='doing', updated_at=? WHERE id=?",
+            (judge, datetime.now().isoformat(), tid),
+        )
+        new_status = "returned"
+    conn.commit(); conn.close()
+    _hq_scan()
+    return {"ok": True, "acceptance_status": new_status, "note": note}
+
+
 @app.post("/api/meta/settings")
 async def meta_settings_set(req: Request):
     data = await req.json()
@@ -12803,15 +13184,18 @@ def _spawn_project_from_plan(goal, plan):
     now = datetime.now().isoformat()
     tracks = ["web"] + list(LIFE_TRACKS)
     chains = {t: list(STAGE_PRESETS.get(t, STAGE_PRESETS["web"])) for t in tracks}
-    storage_root = os.path.expanduser(f"~/.fenshen/projects/{pid}")
+    # v0.68 P3：项目文件夹按「项目名 + 创建时间」落在元神家 projects/ 下
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    folder_name = f"{_safe_folder_name((goal or '元神目标')[:40])}-{stamp}"
+    storage_root = os.path.join(META_HOME, "projects", folder_name)
     standards = plan.get("goal") or goal
     conn = get_db()
     conn.execute(
         "INSERT OR REPLACE INTO projects "
-        "(id,name,goal,standards,status,created_at,phase,frozen,storage_root,tracks,stage_chains,owner_id) "
-        "VALUES (?,?,?,?,?,?,?,0,?,?,?,?)",
+        "(id,name,goal,standards,status,created_at,phase,frozen,storage_root,folder_name,tracks,stage_chains,owner_id) "
+        "VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?)",
         (pid, (goal or "元神目标")[:60], goal, standards, "green", now, "requirement",
-         storage_root, json.dumps(tracks, ensure_ascii=False), json.dumps(chains, ensure_ascii=False), "local"),
+         storage_root, folder_name, json.dumps(tracks, ensure_ascii=False), json.dumps(chains, ensure_ascii=False), "local"),
     )
     mod_ids = {}
     for i, m in enumerate(plan.get("modules", [])):
@@ -12858,6 +13242,14 @@ def _spawn_project_from_plan(goal, plan):
     except Exception as e:
         print("[commander] dirs warn", e)
     _bootstrap_project(pid, goal=goal, standards=standards, roles=plan.get("team") or [])
+    # v0.68 P3：建项即落项目四件套（人读真源）；P8：建项即生成首张工单进入 inbox
+    _write_project_core_files(storage_root, (goal or "元神目标")[:60], goal, standards,
+                              "、".join(plan.get("team") or []))
+    try:
+        _create_ticket(pid, "搭建项目基础设施", "元神初始化项目目标/标准/团队/看板", "元神",
+                       f"项目：{goal}；模块：{len(plan.get('modules', []))} 个")
+    except Exception as e:
+        print("[commander] ticket warn", e)
     try:
         _seed_default_roster(pid, tracks)
     except Exception as e:

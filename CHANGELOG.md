@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [v0.68.0] — 2026-09-06
+### Added
+- **P3 项目布局**：项目文件夹按「项目名 + 创建时间」落在元神家 `projects/` 下（如 `电商小程序-20260906143000`），建项即落四件套 `_project.md / plan.md / team.md / context.md`（人读真源）；旧项目仍兼容 `~/.fenshen/projects/<pid>` 与 `~/Desktop/<名>`。
+- **P7 指挥中枢 HQ**：定时巡检（启动即扫 + 每 5 分钟）+ 事件触发，主动刷新 `HQ/` 五件套 `dashboard/agenda/inbox/decisions/focus`；新增 `GET /api/meta/hq` 与 `POST /api/meta/hq/refresh`。
+- **P8 工单流转**：新增 `tickets` 表与 `inbox→doing→outbox` 流转端点（建项即生成首张工单）；项目内镜像 `tickets.md`；`POST /api/meta/tickets`、`GET /api/meta/tickets`、`POST /api/meta/tickets/{tid}/move`。
+- **P9 验收闭环**：任务新增 `acceptance_status / worker / judge` 三列，落实「执行者不能自评（worker≠judge）」；`POST /api/projects/{pid}/tasks/{tid}/submit`（进待验收）、`POST /api/projects/{pid}/tasks/{tid}/accept`（通过/退回）。
+
 ## [v0.67.0] — 2026-09-06
 ### Added
 - 元神家（Meta Home）本地文件系统骨架：首次启动询问元神家位置（默认 `~/Desktop/元神`），落 `~/.fenshen/home.json` 指针，并在该文件夹搭建自包含、可移植、人可读的骨架（五个人格文件 SOUL/IDENTITY/USER/CONSTITUTION/MEMORY + HQ 指挥中枢五件套 + soul/standards/skills/agents/projects/data 目录）。
