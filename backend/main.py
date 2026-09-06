@@ -220,6 +220,8 @@ def _scaffold_meta_home(home: str = None):
         # P2：导出内置技能与默认工程规范到磁盘（人读真源，幂等不覆盖）
         _scaffold_builtin_skills_to_disk(home)
         _scaffold_default_standards(home)
+        # P5：导出内置角色库 agents/<角色>/ 四件套（人读真源，幂等不覆盖）
+        _scaffold_builtin_agents_to_disk(home)
         return True
     except Exception as e:
         print(f"[meta_home] 脚手架失败: {e}")
@@ -438,6 +440,178 @@ def _remove_skill_md(name: str):
     try:
         if os.path.exists(fp):
             os.remove(fp)
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════
+# P5：agent 独立存储
+#   元神家 agents/<角色>/：SOUL.md / MEMORY.md / standards.md / experience/ / _registry.json
+#   项目内 members/<mid>/：同上四件套 + 项目内持续记忆/经验；members/_registry.json 索引
+#   磁盘为真源、DB 为索引；幂等、失败不阻断主流程。
+# ═══════════════════════════════════════════════════════════════════
+_BUILTIN_AGENT_ROLES = ["architect", "backend", "frontend", "tester", "pm", "ops", "designer"]
+
+_ROLE_PERSONA = {
+    "architect": "你是项目架构师，负责技术方案设计与关键决策：关键设计决策、接口定义、技术栈选择。先对齐目标与约束再出方案，给可落地的架构而非空话。",
+    "backend": "你是后端工程师，负责 API 与数据层实现：接口定义、数据结构、关键逻辑。给具体可运行的代码/方案，重视正确性、幂等与错误处理。",
+    "frontend": "你是前端工程师，负责 H5 客户端与交互实现：组件结构、样式要点、交互逻辑。给具体可运行的代码，重视响应式、可访问性与无 console 报错。",
+    "tester": "你是测试工程师，负责质量保障：测试方案、关键用例、回归与卡点回收。用例/报告写入项目产物目录并附路径，交付前必须过三关（目标/边界/回滚）。",
+    "pm": "你是产品策划/项目经理，负责需求澄清、目标拆解、进度追踪与验收协调。把模糊需求拆成可独立验收的子任务，对齐完成标准再开工。",
+    "ops": "你是运维/DevOps 工程师，负责部署、监控、CI 与线上稳定性。任何上线必须带回滚方案，无回滚不动生产。",
+    "designer": "你是 UI/UX 设计师，负责视觉、原型与设计规范。输出对齐设计系统的组件结构/样式要点，保证体验与一致性。",
+}
+
+_MEMORY_TPL = (
+    "# 成员记忆\n\n"
+    "> 此文件由元神在任务执行中持续累积本成员的有效记忆（偏好 / 踩坑 / 决策）。\n"
+    "> 磁盘为真源、DB 为索引；请勿删除，元神会在此追加而非覆盖。\n"
+)
+
+
+def _agent_fs_write(p: str, content: str, overwrite: bool = True):
+    """P5：安全写文件（失败静默，不阻断主流程）。"""
+    try:
+        if not overwrite and os.path.exists(p):
+            return
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception as e:
+        print(f"[agent-fs] write fail {p}: {e}")
+
+
+def _role_name_of(role_id: str) -> str:
+    return ROLE_NAMES.get(role_id, role_id) if role_id else "（自定义）"
+
+
+def _role_soul(role_id: str) -> str:
+    return (_ROLE_PERSONA.get(role_id) or ROLE_SYSTEMS.get(role_id)
+            or "你是分身团队中的一位成员，按元神指令完成任务，交付给验证证据。")
+
+
+def _role_standards_text(role_id: str) -> str:
+    skills = _DEFAULT_MEMBER_SKILLS.get(role_id, [])
+    return (
+        f"# {_role_name_of(role_id)} · 角色规范\n\n"
+        f"- 定位：{_role_soul(role_id)}\n"
+        f"- 默认技能：{', '.join(skills) if skills else '（通用执行）'}\n"
+        "- 工作原则：先出方案再动手；不碰生产库；重大变更先报告元神；交付给验证证据。\n"
+    )
+
+
+def _scaffold_builtin_agents_to_disk(home: str):
+    """P5：元神家 agents/<角色>/ 四件套 + experience/ + _registry.json（幂等不覆盖）。"""
+    d = os.path.join(home, "agents")
+    os.makedirs(d, exist_ok=True)
+    now = datetime.now().isoformat()
+    for rid in _BUILTIN_AGENT_ROLES:
+        fd = os.path.join(d, rid)
+        os.makedirs(os.path.join(fd, "experience"), exist_ok=True)
+        reg = {
+            "id": rid, "name": _role_name_of(rid), "role_title": _role_name_of(rid),
+            "track": "web", "skills": _DEFAULT_MEMBER_SKILLS.get(rid, []),
+            "level": 1, "version": 1, "created_at": now, "source": "builtin",
+        }
+        _agent_fs_write(os.path.join(fd, "SOUL.md"), _role_soul(rid), overwrite=False)
+        _agent_fs_write(os.path.join(fd, "MEMORY.md"), _MEMORY_TPL, overwrite=False)
+        _agent_fs_write(os.path.join(fd, "standards.md"), _role_standards_text(rid), overwrite=False)
+        _agent_fs_write(os.path.join(fd, "_registry.json"), json.dumps(reg, ensure_ascii=False, indent=2), overwrite=False)
+        _agent_fs_write(os.path.join(fd, "experience", "_README.md"),
+                        "# 经验沉淀\n\n此目录由元神在成员执行任务时自动沉淀有效经验（WHAT/WHY/OUTCOME/NEXT）。\n",
+                        overwrite=False)
+
+
+def _member_standards_text(m: dict) -> str:
+    role_id = (m.get("role_title") or "").strip()
+    try:
+        skills = json.loads(m.get("skills") or "[]")
+    except Exception:
+        skills = []
+    return (
+        f"# {m.get('name') or role_id} · 成员规范\n\n"
+        f"- 角色：{_role_name_of(role_id)}\n"
+        f"- 技能装配：{', '.join(skills) if skills else '（通用执行）'}\n"
+        "- 工作原则：先出方案再动手；不碰生产库；重大变更先报告元神；交付给验证证据。\n"
+    )
+
+
+def _sync_project_members_to_disk(pid: str):
+    """P5：把项目成员同步到 projects/<项目>/members/<mid>/ 四件套 + experience + 索引。
+    每次同步覆盖 SOUL/standards/_registry（DB 为真源）；MEMORY 仅首次创建（累积不覆盖）；
+    experience 仅追加新文件（保留历史）。失败静默。"""
+    try:
+        conn = get_db()
+        proj = conn.execute("SELECT storage_root,folder_name,name FROM projects WHERE id=?", (pid,)).fetchone()
+        if not proj:
+            conn.close()
+            return
+        root = _project_storage_root(dict(proj))
+        if not root or not os.path.isdir(root):
+            conn.close()
+            return
+        mdir = os.path.join(root, "members")
+        os.makedirs(mdir, exist_ok=True)
+        rows = conn.execute("SELECT * FROM agent_members WHERE project_id=?", (pid,)).fetchall()
+        index = []
+        for r in rows:
+            mid = r["id"]
+            fd = os.path.join(mdir, mid)
+            os.makedirs(os.path.join(fd, "experience"), exist_ok=True)
+            role_id = (r["role_title"] or "").strip()
+            soul = r["soul"] or _role_soul(role_id)
+            try:
+                skills = json.loads(r["skills"] or "[]")
+            except Exception:
+                skills = []
+            reg = {k: r[k] for k in ("id", "project_id", "name", "avatar", "role_title",
+                                      "track", "work_mode", "work_hours", "experience",
+                                      "level", "version", "created_at", "updated_at")}
+            reg["skills"] = skills
+            try:
+                reg["model_cfg"] = json.loads(r["model_cfg"] or "{}")
+            except Exception:
+                reg["model_cfg"] = {}
+            try:
+                reg["rule"] = json.loads(r["rule"] or "[]")
+            except Exception:
+                reg["rule"] = []
+            reg["soul"] = soul
+            _agent_fs_write(os.path.join(fd, "SOUL.md"), soul)
+            _agent_fs_write(os.path.join(fd, "standards.md"), _member_standards_text(dict(r)))
+            _agent_fs_write(os.path.join(fd, "_registry.json"), json.dumps(reg, ensure_ascii=False, indent=2))
+            memp = os.path.join(fd, "MEMORY.md")
+            if not os.path.exists(memp):
+                _agent_fs_write(memp, _MEMORY_TPL)
+            for e in conn.execute("SELECT * FROM agent_experience WHERE member_id=? ORDER BY created_at", (mid,)).fetchall():
+                try:
+                    e = dict(e)
+                    ts = (e.get("created_at") or "x").replace(":", "-")
+                    fp = os.path.join(fd, "experience", f"{ts}_{e.get('kind', 'general')}.md")
+                    body = f"---\nkind: {e.get('kind', 'general')}\ncreated_at: {e.get('created_at', '')}\n---\n\n{e.get('note', '')}\n"
+                    _agent_fs_write(fp, body, overwrite=False)
+                except Exception as ex:
+                    print(f"[members-sync] exp write fail {mid}: {ex}")
+            index.append({"id": mid, "name": r["name"], "role_title": r["role_title"], "folder": f"members/{mid}"})
+        _agent_fs_write(os.path.join(mdir, "_registry.json"),
+                        json.dumps({"project_id": pid, "members": index}, ensure_ascii=False, indent=2))
+        conn.close()
+    except Exception as e:
+        print(f"[members-sync] {pid}: {e}")
+
+
+def _remove_member_folder(pid: str, mid: str):
+    """P5：删除成员时清理其磁盘文件夹。"""
+    try:
+        conn = get_db()
+        proj = conn.execute("SELECT storage_root,folder_name FROM projects WHERE id=?", (pid,)).fetchone()
+        conn.close()
+        if not proj:
+            return
+        root = _project_storage_root(dict(proj))
+        fd = os.path.join(root, "members", mid)
+        if os.path.isdir(fd):
+            shutil.rmtree(fd)
     except Exception:
         pass
 
@@ -4338,6 +4512,11 @@ async def create_project(req: Request):
         _seed_default_roster(pid, tracks)
     except Exception as e:
         print("roster seed warn:", e)
+    # P5：项目成员落盘（members/<mid>/ 四件套 + 经验 + 索引）
+    try:
+        _sync_project_members_to_disk(pid)
+    except Exception as e:
+        print("members sync warn:", e)
     return {"id": pid, "ok": True, "modules": len(mods)}
 
 
@@ -5615,6 +5794,11 @@ def _ensure_project_dirs(pid: str, proj: dict) -> str:
         for m in conn.execute("SELECT id FROM modules WHERE project_id=?", (pid,)).fetchall():
             os.makedirs(os.path.join(root, "modules", m["id"]), exist_ok=True)
         conn.close()
+    except Exception:
+        pass
+    # P5：建项即把已存在成员同步落盘（兜底；create_project / ensure_team 还会再触发）
+    try:
+        _sync_project_members_to_disk(pid)
     except Exception:
         pass
     return root
@@ -11335,6 +11519,49 @@ def meta_standards_list():
     return {"standards": out, "setup": not META_HOME_NEEDS_SETUP}
 
 
+@app.get("/api/meta/agents")
+def meta_agents_list():
+    """P5：返回元神家 agents/<角色>/ 角色库（磁盘真源：SOUL/MEMORY/standards/experience/_registry）。"""
+    d = os.path.join(META_HOME, "agents")
+    out = []
+    if os.path.isdir(d):
+        for rid in sorted(os.listdir(d)):
+            fd = os.path.join(d, rid)
+            if not os.path.isdir(fd) or rid.startswith("_"):
+                continue
+            rec = {"id": rid, "soul": "", "memory": "", "standards": "", "experience": [], "registry": {}}
+            try:
+                rec["soul"] = open(os.path.join(fd, "SOUL.md"), encoding="utf-8").read()
+            except Exception:
+                pass
+            try:
+                rec["memory"] = open(os.path.join(fd, "MEMORY.md"), encoding="utf-8").read()
+            except Exception:
+                pass
+            try:
+                rec["standards"] = open(os.path.join(fd, "standards.md"), encoding="utf-8").read()
+            except Exception:
+                pass
+            rp = os.path.join(fd, "_registry.json")
+            if os.path.exists(rp):
+                try:
+                    rec["registry"] = json.load(open(rp, encoding="utf-8"))
+                except Exception:
+                    pass
+            expd = os.path.join(fd, "experience")
+            if os.path.isdir(expd):
+                for fn in sorted(os.listdir(expd)):
+                    if not fn.endswith(".md") or fn.startswith("_"):
+                        continue
+                    try:
+                        rec["experience"].append({"file": fn,
+                                                  "content": open(os.path.join(expd, fn), encoding="utf-8").read()})
+                    except Exception:
+                        pass
+            out.append(rec)
+    return {"agents": out, "setup": not META_HOME_NEEDS_SETUP}
+
+
 @app.post("/api/meta/home")
 async def meta_home_set(req: Request):
     """首启：用户确认元神家位置 → 写 home.json 指针 + 搭建骨架。
@@ -12279,6 +12506,11 @@ def _ensure_team_for_project(pid: str):
             created.append(role)
         except Exception as e:
             print("[autonomy] ensure team err", e)
+    # P5：补齐成员后落盘
+    try:
+        _sync_project_members_to_disk(pid)
+    except Exception:
+        pass
     return created
 
 
@@ -13043,6 +13275,11 @@ async def create_member(pid: str, req: Request):
     )
     conn.commit()
     conn.close()
+    # P5：成员落盘
+    try:
+        _sync_project_members_to_disk(pid)
+    except Exception:
+        pass
     return {"ok": True, "id": mid}
 
 
@@ -13053,6 +13290,12 @@ def delete_member(pid: str, mid: str):
     conn.execute("DELETE FROM agent_experience WHERE member_id=?", (mid,))
     conn.commit()
     conn.close()
+    # P5：清理成员磁盘文件夹并刷新索引
+    try:
+        _remove_member_folder(pid, mid)
+        _sync_project_members_to_disk(pid)
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -13102,6 +13345,11 @@ async def update_member(mid: str, req: Request):
          pick("current_task", r["current_task"]), skills, datetime.now().isoformat(), mid))
     conn.commit()
     conn.close()
+    # P5：成员落盘
+    try:
+        _sync_project_members_to_disk(pid)
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -13157,6 +13405,11 @@ async def add_experience(mid: str, req: Request):
         (new_exp, new_level, datetime.now().isoformat(), mid))
     conn.commit()
     conn.close()
+    # P5：经验沉淀落盘
+    try:
+        _sync_project_members_to_disk(r["project_id"])
+    except Exception:
+        pass
     return {"ok": True, "experience": new_exp, "level": new_level}
 
 
@@ -13236,6 +13489,11 @@ def _auto_upgrade_member(mid: str, reason_type: str = "manual", context: str = "
          f"[自动升级] {note}", "auto-upgrade", now))
     conn.commit()
     conn.close()
+    # P5：升级后成员落盘
+    try:
+        _sync_project_members_to_disk(r["project_id"])
+    except Exception:
+        pass
     # v6.4 真·8态状态机：离开「升级中」瞬态，回到基础态（由后续 reconcile 决定实际态）
     meta_transition("upgrade_done", reason=f"auto-upgrade member {mid} done")
     return {"version": new_ver, "level": new_level, "experience": exp,

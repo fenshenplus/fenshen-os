@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [v0.70.0] — 2026-09-06
+### Added
+- **P5 agent 独立存储**：元神家 `agents/<角色>/` 四件套（SOUL.md / MEMORY.md / standards.md / experience/ + `_registry.json`）成为角色库真源，首启自动导出 7 个内置角色（架构/后端/前端/测试/产品/运维/设计）。
+- 项目内 `members/` 真正启用：每个成员落盘 `members/<mid>/` 四件套 + `_registry.json` 索引；建项即把战队成员同步写盘，成员增改、升级、经验沉淀、删除均联动落盘。
+- 元神在任务执行中可持续累积成员记忆与经验（experience/ 仅追加不覆盖，历史可追溯），让 agent 真正「长记性」。
+- 新增 `GET /api/meta/agents` 读取角色库（磁盘真源）。
+
+### Changed
+- `_ensure_project_dirs` / 建项 / 组队 / 成员增改删 / 经验 / 自动升级 等路径联动写入成员磁盘文件夹；DB 仍为机器索引，磁盘为人读真源。
+
 ## [v0.69.0] — 2026-09-06
 ### Added
 - **P2 技能/规范文件优先磁盘加载**：`元神家/skills/*.md` 成为技能真源（一个 md = 一个技能，frontmatter 存元数据、正文即执行步骤），`元神家/standards/*.md` 成为工程规范真源（coding/git/testing/security/delivery + `_meta.json` 优先级与锁定）。
