@@ -6806,7 +6806,7 @@ async function syncDirect(mid){
 </div>
 
 <!-- v0.67 首启引导：未设置「元神家」时弹出位置确认覆盖层 -->
-<div id="metaHomeGate" style="position:fixed;inset:0;z-index:99999;background:rgba(245,245,247,.98);display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',Arial,sans-serif;">
+<div id="metaHomeGate" style="position:fixed;inset:0;z-index:99999;background:rgba(245,245,247,.98);display:none;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',Arial,sans-serif;">
   <div style="width:min(560px,92vw);background:#fff;border-radius:18px;padding:32px 32px 28px;box-shadow:0 20px 60px rgba(0,0,0,.18);">
     <div style="font-size:22px;font-weight:600;color:#1d1d1f;margin-bottom:6px;">🏠 设置你的「元神家」</div>
     <div style="font-size:13px;line-height:1.7;color:#6b6b70;margin-bottom:20px;">
@@ -6825,6 +6825,7 @@ async function syncDirect(mid){
   function mhShow(defaultHome){
     var gate=document.getElementById('metaHomeGate');
     if(!gate) return;
+    gate.style.display='flex';
     var input=document.getElementById('mhPath');
     var btn=document.getElementById('mhConfirm');
     var err=document.getElementById('mhErr');
@@ -6836,7 +6837,7 @@ async function syncDirect(mid){
       // 用 apiJson（自带 x-fenshen-token 头），避免 PyWebview 下裸 fetch 不带 cookie 被 local_guard 拒成 401
       apiJson('/api/meta/home',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({home:p})})
         .then(function(j){
-          if(j&&j.ok){ if(gate&&gate.parentNode) gate.parentNode.removeChild(gate); }
+          if(j&&(j.ok||j.home)){ if(gate&&gate.parentNode) gate.parentNode.removeChild(gate); else if(gate) gate.style.display='none'; }
           else { if(err) err.textContent='设置失败：'+((j&&j.error)||'未知错误'); btn.disabled=false; btn.textContent='确认并进入'; }
         })
         .catch(function(e){ if(err) err.textContent='网络错误：'+errText(e); btn.disabled=false; btn.textContent='确认并进入'; });
