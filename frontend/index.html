@@ -6805,5 +6805,52 @@ async function syncDirect(mid){
   </div>
 </div>
 
+<!-- v0.67 首启引导：未设置「元神家」时弹出位置确认覆盖层 -->
+<div id="metaHomeGate" style="position:fixed;inset:0;z-index:99999;background:rgba(245,245,247,.98);display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',Arial,sans-serif;">
+  <div style="width:min(560px,92vw);background:#fff;border-radius:18px;padding:32px 32px 28px;box-shadow:0 20px 60px rgba(0,0,0,.18);">
+    <div style="font-size:22px;font-weight:600;color:#1d1d1f;margin-bottom:6px;">🏠 设置你的「元神家」</div>
+    <div style="font-size:13px;line-height:1.7;color:#6b6b70;margin-bottom:20px;">
+      元神家是分身为你打造的<strong>本地文件夹</strong>：存放你的数字分身（人格 / 记忆 / 规范）、技能库、各项目的资料。
+      它<strong>完全属于你</strong>——可拷贝、可带走、可读懂。首次启动请选择它的位置。
+    </div>
+    <label style="font-size:12px;color:#8a8a8e;display:block;margin-bottom:6px;">元神家文件夹位置</label>
+    <input id="mhPath" type="text" style="width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #e2e2e6;border-radius:10px;font-size:14px;color:#1d1d1f;outline:none;" placeholder="如 /Users/you/Desktop/元神">
+    <div style="font-size:12px;color:#9a9aa0;margin-top:8px;">建议放在桌面或文档下，例如 <code>~/Desktop/元神</code>。可改为任意你喜欢的文件夹。</div>
+    <button id="mhConfirm" style="margin-top:22px;width:100%;padding:13px;border:none;border-radius:11px;background:linear-gradient(90deg,#5b6cff,#9a5bff);color:#fff;font-size:15px;font-weight:600;cursor:pointer;">确认并进入</button>
+    <div id="mhErr" style="color:#e0483a;font-size:12px;margin-top:12px;min-height:16px;text-align:center;"></div>
+  </div>
+</div>
+<script>
+(function(){
+  function mhShow(defaultHome){
+    var gate=document.getElementById('metaHomeGate');
+    if(!gate) return;
+    var input=document.getElementById('mhPath');
+    var btn=document.getElementById('mhConfirm');
+    var err=document.getElementById('mhErr');
+    if(input && defaultHome) input.value=defaultHome;
+    if(btn) btn.onclick=function(){
+      var p=(input&&input.value||'').trim();
+      if(!p){ if(err) err.textContent='请填写元神家文件夹路径'; return; }
+      btn.disabled=true; btn.textContent='正在创建元神家…';
+      fetch('/api/meta/home',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({home:p})})
+        .then(function(r){return r.json();})
+        .then(function(j){
+          if(j&&j.ok){ if(gate&&gate.parentNode) gate.parentNode.removeChild(gate); }
+          else { if(err) err.textContent='设置失败：'+((j&&j.error)||'未知错误'); btn.disabled=false; btn.textContent='确认并进入'; }
+        })
+        .catch(function(e){ if(err) err.textContent='网络错误：'+e; btn.disabled=false; btn.textContent='确认并进入'; });
+    };
+  }
+  function mhCheck(){
+    fetch('/api/meta/home').then(function(r){return r.json();}).then(function(j){
+      if(j&&j.setup===false){ mhShow(j.home||''); }
+    }).catch(function(){});
+  }
+  if(document.readyState==='loading'){ document.addEventListener('DOMContentLoaded',mhCheck); }
+  else { mhCheck(); }
+})();
+</script>
+
 </body>
 </html>

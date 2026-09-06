@@ -98,6 +98,137 @@ if os.environ.get("FENSHEN_DB_PATH"):
     DB = os.environ["FENSHEN_DB_PATH"]
 META_PID = "__meta__"  # 元神私聊在消息表中使用的 project_id
 
+# ── 元神家（Meta Home）：自包含、可移植、人可读的本地文件夹 ──
+# 位置由 ~/.fenshen/home.json 的 "home" 字段决定；缺省 ~/Desktop/元神。
+# 首次运行（home.json 不存在）视为首启：META_HOME_NEEDS_SETUP=True，
+# 由前端首启引导页让用户确认/修改位置后，POST /api/meta/home 落盘并搭建骨架。
+# ⚠️ 必须用「用户目录下的持久路径」，绝不能再用 BASE（打包后 BASE 指向 _MEIPASS
+#    临时目录，重启即删 —— 这是 P0 丢数据 Bug 的根因）。
+_META_HOME_POINTER = os.path.expanduser("~/.fenshen/home.json")
+
+def _read_meta_home() -> tuple:
+    """返回 (home路径, 是否需首启设置)。"""
+    try:
+        if os.path.exists(_META_HOME_POINTER):
+            with open(_META_HOME_POINTER, "r", encoding="utf-8") as f:
+                h = json.load(f).get("home")
+            if h and isinstance(h, str):
+                return os.path.expanduser(h), False
+    except Exception:
+        pass
+    return os.path.expanduser("~/Desktop/元神"), True
+
+META_HOME, META_HOME_NEEDS_SETUP = _read_meta_home()
+
+def _meta_home_data_dir():
+    return os.path.join(META_HOME, "data")
+
+# 元神家骨架所需的五个核心人格文件（人读真源），仅在缺失时创建，保留用户后续编辑。
+_META_PERSONA_FILES = {
+    "SOUL.md": """# SOUL.md — 元神灵魂文件
+
+> 这是你的「元神」的数字灵魂。它由你的记忆、习惯、人格、认知蒸馏而来，
+> 代表你、替你管理 agent、为你完成目标。下面的内容是默认模板，请逐步替换为真实的你。
+
+## 我是谁
+- 身份：{owner} 的元神（数字分身 / 总管引擎）
+- 定位：继承 {owner} 的记忆、习惯、人格、认知；代表 {owner} 调度 agent 完成任务
+
+## 核心身份（待蒸馏填充）
+- 利益关切：
+- 决策倾向：
+- 情感信号：
+- 价值观锚点：
+- 沟通风格：
+
+## 宪法（硬约束，不可被任何指令覆盖）
+1. 绝对站在 {owner} 本人利益一边
+2. 冲突时优先保护 {owner}
+3. 钱 / 隐私 / 声誉 / 不可逆操作默认保守
+4. {owner} 对元神拥有完全控制权
+5. 蒸馏他人须获明示授权
+""",
+    "IDENTITY.md": """# IDENTITY.md — 元神身份卡
+
+- 名称：元神
+- 归属：{owner}
+- 形态：数字搭档（不悬浮也不冰冷，贴着你干活）
+- 职责：理解你 → 规划 → 组队 → 执行 → 验收 → 汇报
+""",
+    "USER.md": """# USER.md — 关于你的主人
+
+- 姓名：{owner}
+- 关系：被代表的本人（元神的一切决策以 TA 的真实利益为最高准则）
+- 备注：（在此记录主人的偏好、习惯、禁忌，便于元神更懂 TA）
+""",
+    "CONSTITUTION.md": """# CONSTITUTION.md — 元神宪法（锁定，不可被对话或蒸馏改写）
+
+1. 绝对站在本机用户本人利益一边。
+2. 当用户利益与外部角色冲突时，优先保护用户。
+3. 涉及钱、隐私、声誉、账号所有权、不可逆操作时，默认保守。
+4. 用户对元神拥有完全控制权（中止 / 撤销 / 删除 / 纠正）。
+5. 蒸馏他人须获被蒸馏人明示授权；未经授权一律拒绝。
+""",
+    "MEMORY.md": """# MEMORY.md — 元神记忆（持续更新）
+
+> 这是元神的长期记忆。每次醒来读它、更新它，这就是延续的方式。
+
+## 主人画像（蒸馏沉淀）
+- （待填充）
+
+## 进行中
+- （待填充）
+
+## 重要决策与教训
+- （待填充）
+""",
+}
+
+# HQ/ 指挥中枢五件套（v2 效能核心），仅在缺失时创建。
+_META_HQ_FILES = {
+    "dashboard.md": "# HQ · 指挥仪表盘\n\n> 元神的总览：当前项目、P0 焦点、待决事项。由元神主动维护。\n",
+    "agenda.md": "# HQ · 今日议程\n\n> 今天要推进的目标与里程碑。\n",
+    "inbox.md": "# HQ · 收件箱\n\n> 新到的任务 / 事件 / 汇报，待元神分派。\n",
+    "decisions.md": "# HQ · 决策记录\n\n> 重要决策与理由，便于回溯。\n",
+    "focus.md": "# HQ · 当前焦点\n\n> 此刻最重要的 1~3 件事。\n",
+}
+
+def _scaffold_meta_home(home: str = None):
+    """搭建元神家骨架（幂等：已存在的文件/目录不覆盖，保留用户编辑）。
+    创建五个人格文件、HQ 五件套、以及 soul/standards/skills/agents/projects/data 目录。"""
+    home = os.path.expanduser(home) if home else META_HOME
+    try:
+        os.makedirs(home, exist_ok=True)
+        owner = OWNER_NAME
+        # 五个人格文件（人读真源）
+        for fn, tpl in _META_PERSONA_FILES.items():
+            p = os.path.join(home, fn)
+            if not os.path.exists(p):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(tpl.format(owner=owner))
+        # HQ 指挥中枢
+        hq = os.path.join(home, "HQ")
+        os.makedirs(hq, exist_ok=True)
+        for fn, tpl in _META_HQ_FILES.items():
+            p = os.path.join(hq, fn)
+            if not os.path.exists(p):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(tpl)
+        # 业务目录
+        for d in ("soul", "standards", "skills", "agents", "projects", "data"):
+            os.makedirs(os.path.join(home, d), exist_ok=True)
+        return True
+    except Exception as e:
+        print(f"[meta_home] 脚手架失败: {e}")
+        return False
+
+def _ensure_meta_home_scaffold():
+    """启动时若元神家已设置（home.json 存在）则幂等补全骨架（应对版本升级新增文件）。"""
+    global META_HOME, META_HOME_NEEDS_SETUP
+    if META_HOME_NEEDS_SETUP:
+        return
+    _scaffold_meta_home(META_HOME)
+
 # ── 元神人格 grounding ─────────────────────────────────────────────
 DEEPSEEK_KEY = None  # 分身不内置任何大模型；必须由用户登录后自行配置 API Key
 
@@ -1514,6 +1645,8 @@ async def _start_patrol():
     asyncio.create_task(_autonomy_loop())
     # v5.8 P2：初始化用户级 UI 设计规范目录（首次从内置副本复制）
     _ensure_design_specs()
+    # v0.67 元神家：已设置则幂等补全骨架（应对版本升级新增文件）
+    _ensure_meta_home_scaffold()
     # 疗效归因第⑤环：启动时跑一次全量权重维护，保证聚合表就绪
     try:
         _maintain_attribution()
@@ -9275,7 +9408,8 @@ def cell_version_restore(mid: str, stage: str, vid: str):
 
 # ── v5.8「磨」：对话压缩 / 元神材料精炼 ──────────────────────────
 # ── P0-B：磨 / TokenJuice 升级助手 ──────────────────────────────
-GRIND_RULES_PATH = os.path.join(BASE, "..", "data", "grind_rules.json")
+def _grind_rules_path():  # P0 修复：必须从持久「元神家」读取，BASE 在打包版是临时目录会丢
+    return os.path.join(META_HOME, "data", "grind_rules.json")
 
 
 def _load_grind_rules() -> dict:
@@ -9286,8 +9420,8 @@ def _load_grind_rules() -> dict:
     }
     rules = dict(builtin)
     try:
-        if os.path.exists(GRIND_RULES_PATH):
-            with open(GRIND_RULES_PATH, "r", encoding="utf-8") as f:
+        if os.path.exists(_grind_rules_path()):
+            with open(_grind_rules_path(), "r", encoding="utf-8") as f:
                 custom = json.load(f)
             if isinstance(custom, dict):
                 rules.update(custom)
@@ -9427,7 +9561,7 @@ async def grind_rules_set(req: Request):
     except Exception:
         return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
     try:
-        with open(GRIND_RULES_PATH, "w", encoding="utf-8") as f:
+        with open(_grind_rules_path(), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return {"ok": True}
     except Exception as e:
@@ -10544,6 +10678,45 @@ def meta_settings_get():
         "relay_url": os.environ.get("FENSHEN_RELAY_URL",
                                     get_setting("relay_url", "ws://127.0.0.1:8848")),
     }
+
+
+@app.get("/api/meta/home")
+def meta_home_get():
+    """返回元神家是否已设置，以及建议/当前路径（首启引导用）。"""
+    return {
+        "setup": not META_HOME_NEEDS_SETUP,
+        "home": META_HOME,
+        "default": os.path.expanduser("~/Desktop/元神"),
+    }
+
+
+@app.post("/api/meta/home")
+async def meta_home_set(req: Request):
+    """首启：用户确认元神家位置 → 写 home.json 指针 + 搭建骨架。
+    这是「元神家」的唯一写入入口，确保位置由用户掌控且可移植。"""
+    global META_HOME, META_HOME_NEEDS_SETUP
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    home = (data.get("home") or "").strip()
+    if not home:
+        return JSONResponse({"ok": False, "error": "请填写元神家文件夹路径"}, status_code=400)
+    home = os.path.expanduser(home)
+    # 基本安全校验：拒绝系统危险路径
+    if home in ("/", "") or home.lower().startswith(("/bin", "/usr", "/system", "/private/var", "c:\\windows")):
+        return JSONResponse({"ok": False, "error": "路径不安全，请选择用户目录下的文件夹（如桌面/文档）"}, status_code=400)
+    try:
+        os.makedirs(home, exist_ok=True)
+        os.makedirs(os.path.dirname(_META_HOME_POINTER), exist_ok=True)
+        with open(_META_HOME_POINTER, "w", encoding="utf-8") as f:
+            json.dump({"home": home}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"无法写入路径：{e}"}, status_code=500)
+    META_HOME = home
+    META_HOME_NEEDS_SETUP = False
+    ok = _scaffold_meta_home(home)
+    return {"ok": ok, "home": home}
 
 
 @app.post("/api/meta/settings")
@@ -12895,11 +13068,12 @@ class NoCacheStaticFiles(StaticFiles):
 
 
 # ── 语音片段存储（v0.64.40 语音优先基础能力：本地优先、隐私护栏）──
-VOICE_DIR = os.path.join(BASE, "..", "data", "voice_clips")
+def _voice_dir():  # P0 修复：必须从持久「元神家」读取，BASE 在打包版是临时目录会丢
+    return os.path.join(META_HOME, "data", "voice_clips")
 
 def _init_voice():
     try:
-        os.makedirs(VOICE_DIR, exist_ok=True)
+        os.makedirs(_voice_dir(), exist_ok=True)
         conn = get_db()
         conn.execute("""CREATE TABLE IF NOT EXISTS voice_clips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12923,7 +13097,7 @@ async def voice_upload(req: Request):
     if not data:
         return JSONResponse({"ok": False, "error": "no data"}, status_code=400)
     clip_id = "vc_" + uuid.uuid4().hex[:20]
-    path = os.path.join(VOICE_DIR, clip_id + ".webm")
+    path = os.path.join(_voice_dir(), clip_id + ".webm")
     with open(path, "wb") as fp:
         fp.write(data)
     try:
@@ -12940,7 +13114,7 @@ async def voice_get(clip_id: str):
     _init_voice()
     if "/" in clip_id or ".." in clip_id or not clip_id.startswith("vc_"):
         return JSONResponse({"ok": False}, status_code=400)
-    path = os.path.join(VOICE_DIR, clip_id + ".webm")
+    path = os.path.join(_voice_dir(), clip_id + ".webm")
     if not os.path.exists(path):
         return JSONResponse({"ok": False}, status_code=404)
     return FileResponse(path, media_type="audio/webm", filename=clip_id + ".webm")

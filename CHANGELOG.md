@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [v0.67.0] — 2026-09-06
+### Added
+- 元神家（Meta Home）本地文件系统骨架：首次启动询问元神家位置（默认 `~/Desktop/元神`），落 `~/.fenshen/home.json` 指针，并在该文件夹搭建自包含、可移植、人可读的骨架（五个人格文件 SOUL/IDENTITY/USER/CONSTITUTION/MEMORY + HQ 指挥中枢五件套 + soul/standards/skills/agents/projects/data 目录）。
+- 新增 `/api/meta/home` 端点（GET 报告设置状态 + POST 写入位置并搭建骨架）。
+- 前端首启引导：未设置元神家时弹出位置确认覆盖层（默认填桌面/元神，可改），确认后写入并进入主界面。
+### Fixed
+- P0 打包版丢数据 Bug：磨规则 `grind_rules.json` 与语音 `voice_clips/` 此前写在 `BASE/../data`（打包后指向 `_MEIPASS` 临时目录，重启即丢），现统一改写到持久「元神家」`data/` 下。
+
 ## [v0.66.1] — 2026-09-05
 ### Added
 - 元神深度思考过程「步骤化」呈现：前端把 <thinking> 内容按行解析为带图标的一步（理解复述/当前状态/判断依据/下一步计划，以及查看/修改/运行/搜索/任务等动作图标），并显示总步数， closer to WorkBuddy 截图体验。
