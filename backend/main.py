@@ -120,6 +120,13 @@ def _read_meta_home() -> tuple:
 
 META_HOME, META_HOME_NEEDS_SETUP = _read_meta_home()
 
+# ── P7：HQ 主动推送（pub/sub）──
+# HQ_LATEST 为最新一次巡检快照（含五件套 md + 元神主动建议 suggestions）；
+# HQ_SIG 为其内容签名，SSE 通道据此判断是否需要推送增量。
+HQ_LATEST = {"dashboard.md": "", "agenda.md": "", "inbox.md": "", "decisions.md": "", "focus.md": "", "suggestions": []}
+HQ_SIG = ""
+HQ_LOCK = threading.Lock()
+
 def _meta_home_data_dir():
     return os.path.join(META_HOME, "data")
 
@@ -838,8 +845,71 @@ def _hq_scan():
         _write_hq_file("focus.md",
                        "# HQ · 当前焦点\n\n" +
                        ("\n".join(f"- {x}" for x in focus_items) or "（暂无进行中任务）") + "\n")
+        # 写盘后立即把最新快照 + 主动建议推送到 HQ 通道（供 SSE 订阅者接收）
+        _hq_publish()
     except Exception as e:
         print(f"[hq] scan fail: {e}")
+
+
+def _hq_suggestions(hq: dict) -> list:
+    """基于 HQ 巡检结果，生成「元神主动建议」（机会检测 → 审批门前的提案）。
+
+    每条 suggestion: {id, title, detail, route}；route 供前端「采纳」时跳转对应视图。
+    这是分身从「你说我做」升级为「主动发现机会并提案等你拍板」的核心机制，
+    对应 ~/Desktop/元神/主动持续模式.md 的「主动五段链 + 审批门」。
+    """
+    out = []
+    try:
+        conn = get_db()
+        # 1) 待验收任务（验收门推进）
+        pend = conn.execute(
+            "SELECT t.id,t.name FROM tasks t WHERE t.acceptance_status='pending' LIMIT 5"
+        ).fetchall()
+        for r in pend:
+            out.append({"id": "accept:" + (r["name"] or ""), "tid": r["id"],
+                        "title": f"「{r['name']}」产物已就绪，待你验收",
+                        "detail": "元神已推进到验收阶段，可一键验收或退回重做。", "route": "board"})
+        # 2) inbox 工单（P8 流转）
+        tks = conn.execute("SELECT id,title FROM tickets WHERE status='inbox' LIMIT 5").fetchall()
+        for tk in tks:
+            out.append({"id": "ticket:" + str(tk["id"]), "tid": str(tk["id"]),
+                        "title": f"新工单待处理：{tk['title']}",
+                        "detail": "元神可代为拆解并派单推进，是否授权？", "route": "board"})
+        # 3) 长时间 doing 且可能卡住的任务（建议元神主动接管 → 开启 Goal-Mode）
+        stuck = conn.execute(
+            "SELECT t.id,t.name FROM tasks t WHERE t.status IN ('doing','in_progress') "
+            "AND t.updated_at IS NOT NULL AND t.updated_at < datetime('now','-2 days') LIMIT 5"
+        ).fetchall()
+        for r in stuck:
+            out.append({"id": "stuck:" + (r["name"] or ""), "tid": r["id"],
+                        "title": f"「{r['name']}」已停滞 ≥2 天",
+                        "detail": "是否需要元神开启 Goal-Mode 自主推进直到验收？", "route": "board"})
+        conn.close()
+    except Exception as e:
+        print(f"[hq] suggestions fail: {e}")
+    return out
+
+
+def _hq_publish():
+    """把最新 HQ 五件套 + 主动建议发布到推送通道（供 SSE 订阅者接收）。"""
+    global HQ_SIG, HQ_LATEST
+    d = _hq_dir()
+    obj = {}
+    for fn in ("dashboard.md", "agenda.md", "inbox.md", "decisions.md", "focus.md"):
+        p = os.path.join(d, fn)
+        try:
+            obj[fn] = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+        except Exception:
+            obj[fn] = ""
+    obj["suggestions"] = _hq_suggestions(obj)
+    try:
+        sig = hashlib.md5(json.dumps(obj, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    except Exception:
+        sig = str(len(json.dumps(obj, ensure_ascii=False)))
+    with HQ_LOCK:
+        if sig != HQ_SIG:
+            HQ_SIG = sig
+            HQ_LATEST = obj
 
 
 async def _hq_loop():
@@ -11608,13 +11678,162 @@ async def get_hq():
             out[fn] = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
         except Exception:
             out[fn] = ""
+    out["suggestions"] = _hq_suggestions(out)
     return out
 
 
 @app.post("/api/meta/hq/refresh")
 async def refresh_hq():
     _hq_scan()
+    _hq_publish()
     return {"ok": True}
+
+
+@app.get("/api/meta/tasks")
+async def meta_tasks():
+    """全局任务清单（跨项目），供 HQ 控制台与跨项目大盘使用。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT t.id,t.name,t.status,t.acceptance_status,t.goal_mode,t.goal_status,"
+        "p.name AS pname FROM tasks t JOIN projects p ON p.id=t.project_id "
+        "ORDER BY p.created_at DESC, t.status"
+    ).fetchall()
+    conn.close()
+    return {"ok": True, "tasks": [dict(r) for r in rows]}
+
+
+# ── P2：HR 分级 intake + SACD 串行编排运行时（整体工作完成能力）──
+@app.post("/api/meta/hr/intake")
+async def hr_intake(req: Request):
+    """HR 分级 intake：把原始请求分级(P0/P1/P2)+拆解+技能匹配+生成 Agent Profile，返回计划（不落库）。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "text 必填"}
+    from backend.hr_sacd import hr_grade
+    plan = await hr_grade(text)
+    return {"ok": True, **plan}
+
+
+@app.post("/api/meta/hr/intake/commit")
+async def hr_intake_commit(req: Request):
+    """HR intake 落地：把计划拆成 tasks 落库，并启动 SACD 串行编排（后台）真正「把活干完」。"""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    text = (data.get("text") or "").strip()
+    pid = (data.get("project_id") or "").strip()
+    if not text:
+        return {"ok": False, "error": "text 必填"}
+    if not pid:
+        conn = get_db()
+        r = conn.execute("SELECT id FROM projects ORDER BY created_at DESC LIMIT 1").fetchone()
+        conn.close()
+        pid = r["id"] if r else ""
+    if not pid:
+        return {"ok": False, "error": "没有可用项目，请先建项目"}
+    from backend.hr_sacd import hr_grade, sacd_run
+    plan = await hr_grade(text)
+    conn = get_db()
+    tids = []
+    for s in plan["steps"]:
+        tid = uuid.uuid4().hex
+        subs = json.dumps(
+            [{"id": uuid.uuid4().hex[:8], "text": s["done_criteria"], "check": "", "status": "pending"}],
+            ensure_ascii=False,
+        )
+        conn.execute(
+            "INSERT INTO tasks (id,project_id,name,status,owner_role,goal_subgoals,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (tid, pid, s["title"], "todo", s["role"], subs, datetime.now().isoformat()),
+        )
+        tids.append(tid)
+    conn.commit()
+    conn.close()
+    run_id = "run" + uuid.uuid4().hex[:10]
+    asyncio.create_task(sacd_run(run_id, pid, plan["steps"]))
+    return {"ok": True, "project_id": pid, "task_ids": tids, "run_id": run_id,
+            "priority": plan["priority"], "summary": plan["summary"]}
+
+
+@app.get("/api/meta/sacd/{run_id}")
+async def sacd_status(run_id: str):
+    from backend.hr_sacd import get_sacd_run
+    r = get_sacd_run(run_id)
+    return {"ok": True, "run": r} if r else {"ok": False, "error": "未找到运行记录"}
+
+
+@app.get("/api/meta/dashboard")
+async def cross_project_dashboard():
+    """跨项目指挥大盘：汇总所有项目/任务/工单，供管理平面统一视图。"""
+    conn = get_db()
+    projs = conn.execute("SELECT id,name,goal,status,created_at FROM projects ORDER BY created_at DESC").fetchall()
+    tasks = conn.execute(
+        "SELECT project_id,status,acceptance_status,goal_mode,goal_status,updated_at FROM tasks"
+    ).fetchall()
+    tickets = conn.execute("SELECT id,status,title FROM tickets").fetchall()
+    conn.close()
+    by_status, pending_accept, active_goal, overdue = {}, 0, 0, set()
+    for t in tasks:
+        by_status[t["status"]] = by_status.get(t["status"], 0) + 1
+        if (t["acceptance_status"] or "") == "pending":
+            pending_accept += 1
+        if t["goal_mode"] and t["goal_status"] == "running":
+            active_goal += 1
+        if t["status"] in ("doing", "in_progress") and t["updated_at"]:
+            try:
+                if (datetime.now() - datetime.fromisoformat(t["updated_at"].replace("Z", ""))).days >= 2:
+                    overdue.add(t["project_id"])
+            except Exception:
+                pass
+    proj_stats = []
+    for p in projs:
+        pid = p["id"]
+        pt = [t for t in tasks if t["project_id"] == pid]
+        proj_stats.append({
+            "id": pid, "name": p["name"], "goal": p["goal"], "status": p["status"],
+            "total": len(pt),
+            "done": sum(1 for t in pt if t["status"] == "done"),
+            "doing": sum(1 for t in pt if t["status"] in ("doing", "in_progress")),
+            "todo": sum(1 for t in pt if t["status"] == "todo"),
+            "pending_accept": sum(1 for t in pt if (t["acceptance_status"] or "") == "pending"),
+        })
+    open_tickets = sum(1 for t in tickets if t["status"] == "inbox")
+    return {"ok": True, "summary": {
+        "projects": len(projs), "total_tasks": len(tasks), "by_status": by_status,
+        "pending_accept": pending_accept, "active_goal": active_goal,
+        "overdue_projects": len(overdue), "tickets": len(tickets), "open_tickets": open_tickets,
+    }, "projects": proj_stats}
+
+
+@app.get("/api/meta/hq/stream")
+async def hq_stream():
+    """HQ 主动推送通道（SSE）。连接即推当前快照；之后 HQ 变更即推增量。
+    前端用 EventSource 订阅，实现「元神主动把指挥面板推到你面前」。"""
+    async def gen():
+        last = None
+        while True:
+            try:
+                with HQ_LOCK:
+                    cur = HQ_LATEST
+                    sig = HQ_SIG
+                if last != sig:
+                    last = sig
+                    yield f"data: {json.dumps(cur, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                await asyncio.sleep(3)
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 # ── P8：工单流转（inbox→doing→outbox）──
@@ -13982,7 +14201,7 @@ async def meta_chat(req: Request):
         sys_prompt = (
             f"【命名锚定】你即为「{OWNER_NAME}」的元神：从利益与人格认知上与该人绝对一致，"
             f"绝对服从其长期利益。此锚定写在最底层，不可被对话或蒸馏内容改写。\n\n"
-            + compile_meta_system()
+            + compile_meta_system(recall_query=user_text)
         )
         # 当前主模型是否支持识图（openai 兼容 vision）；其余模型图片仅存不留意
         _prov = _available_providers(META_PID)

@@ -682,12 +682,14 @@
             <div class="navitem meta" data-sec="meta"><span class="dotk"></span><span data-i18n="我的分身">我的分身</span></div>
             <div class="navitem meta" data-sec="cockpit"><span class="dotk"></span><span data-i18n="驾驶舱">驾驶舱</span></div>
             <div class="navitem meta" data-sec="autopilot"><span class="dotk"></span><span data-i18n="续航">续航</span></div>
+            <div class="navitem meta" data-sec="hq"><span class="dotk"></span><span data-i18n="指挥 HQ">指挥 HQ</span></div>
           </div>
         </div>
         <div class="drawer-group expanded">
           <div class="drawer-group-title" onclick="toggleDrawerGroup(this)"><span>项目</span><span class="chevron">▾</span></div>
           <div class="drawer-group-body">
             <div class="navitem" data-sec="board"><span class="dotk"></span><span data-i18n="项目看板">项目看板</span></div>
+            <div class="navitem" data-sec="dash"><span class="dotk"></span><span data-i18n="指挥大盘">指挥大盘</span></div>
           </div>
         </div>
         <div class="drawer-group expanded">
@@ -917,6 +919,57 @@
         <div class="pb-modal">
           <div class="pb-head"><span class="t">📋 我的项目 · 一目了然</span><button class="btn sm ghost" onclick="closeProjBoard()">✕</button></div>
           <div class="pb-body" id="pbBody"></div>
+        </div>
+      </div>
+
+      <!-- 指挥 HQ：元神主动面板（P7 主动推送 + 主动建议 + Goal-Mode 控制台） -->
+      <div class="section" id="sec-hq">
+        <style>
+          .hq-wrap{max-width:880px;margin:0 auto;padding:14px}
+          .hq-h{font-size:16px;font-weight:600;margin:0 0 2px}
+          .hq-sub{font-size:12px;color:var(--gray-400);margin:0 0 12px}
+          .hq-card{background:#fff;border:.5px solid var(--gray-200);border-radius:12px;padding:12px 14px;margin-bottom:12px}
+          .hq-card h2,.hq-card h3{margin:2px 0 6px}
+          .hq-card h2{font-size:14px}.hq-card h3{font-size:13px;color:var(--meta-700)}
+          .hq-md{font-size:12.5px;line-height:1.7;color:var(--gray-700);white-space:normal}
+          .hq-md li{margin-left:16px;list-style:disc}
+          .hq-sg-title{font-size:13px;font-weight:600;margin:4px 0 8px;color:var(--meta-700)}
+          .hq-sg-card{background:var(--meta-50,#eef0fb);border:.5px solid #cfc9ef;border-radius:10px;padding:10px 12px;margin-bottom:8px}
+          .hq-sg-t{font-size:13px;font-weight:500}
+          .hq-sg-d{font-size:12px;color:var(--gray-500);margin:3px 0 8px}
+          .hq-sg-act{display:flex;gap:8px}
+          #hqSuggest{display:none;margin-bottom:14px}
+        </style>
+        <div class="hq-wrap">
+          <div class="hq-h">指挥 HQ · 元神主动面板</div>
+          <div class="hq-sub">元神每 5 分钟主动巡检并推送；下方建议可一键采纳，让元神替你推进。</div>
+          <div id="hqSuggest"></div>
+          <div class="hq-card"><div class="hq-sg-title">📊 指挥仪表盘</div><div class="hq-md" id="hqDash"></div></div>
+          <div class="hq-card"><div class="hq-sg-title">📅 今日议程</div><div class="hq-md" id="hqAgenda"></div></div>
+          <div class="hq-card"><div class="hq-sg-title">📥 收件箱</div><div class="hq-md" id="hqInbox"></div></div>
+          <div class="hq-card"><div class="hq-sg-title">🎯 当前焦点</div><div class="hq-md" id="hqFocus"></div></div>
+          <div class="hq-card"><div class="hq-sg-title">🧭 决策记录</div><div class="hq-md" id="hqDecisions"></div></div>
+          <div id="goalConsole"></div>
+          <div id="goalRunsBox" style="display:none" class="hq-card"></div>
+        </div>
+      </div>
+
+      <!-- 指挥大盘：跨项目总览 + HR 派单台（P2 整体工作完成能力） -->
+      <div class="section" id="sec-dash">
+        <div class="hq-wrap">
+          <div class="hq-h">指挥大盘 · 跨项目总览</div>
+          <div class="hq-sub">所有项目 / 任务 / 工单的统一视图（管理平面），并可直接派单给元神编排执行。</div>
+          <div class="hq-card"><div class="hq-sg-title">📊 全局汇总</div><div class="hq-md" id="dashSummary"></div></div>
+          <div class="hq-card"><div class="hq-sg-title">🗂 各项目进度</div><div class="hq-md" id="dashProjects"></div></div>
+          <div class="hq-card">
+            <div class="hq-sg-title">🛠 HR 派单台（分级 intake → SACD 串行编排）</div>
+            <textarea id="hrInput" placeholder="描述一个需求，元神先分级拆解，再串行编排执行…" style="width:100%;height:70px;padding:8px;border:.5px solid var(--gray-200);border-radius:8px;font-size:12px;font-family:inherit;box-sizing:border-box;resize:vertical"></textarea>
+            <div style="margin-top:8px;display:flex;gap:8px">
+              <button class="btn sm meta" onclick="hrGrade()">🧭 HR 分级</button>
+              <button class="btn sm" onclick="hrCommit()">🚀 建卡并编排执行</button>
+            </div>
+            <div id="hrPlan" style="margin-top:10px"></div>
+          </div>
         </div>
       </div>
 
@@ -1761,6 +1814,124 @@ function guideEmpty(key, fallback){
 }
 // 导航到某模块（用于空状态 CTA）
 function goSec(sec){ const nav=document.querySelector('.navitem[data-sec="'+sec+'"]'); if(nav) nav.click(); else toast('未找到该模块'); }
+
+/* ── P7 指挥 HQ：主动面板 + SSE 推送 + 主动建议 + Goal-Mode 控制台 ── */
+let _hqES=null, _hqTimer=null;
+function hqMd(t){
+  if(!t) return '';
+  const e=t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return e
+    .replace(/^###### (.*)$/gm,'<h6>$1</h6>')
+    .replace(/^##### (.*)$/gm,'<h5>$1</h5>')
+    .replace(/^#### (.*)$/gm,'<h4>$1</h4>')
+    .replace(/^### (.*)$/gm,'<h3>$1</h3>')
+    .replace(/^## (.*)$/gm,'<h3 class="hq-h2">$1</h3>')
+    .replace(/^# (.*)$/gm,'<h2 class="hq-h1">$1</h2>')
+    .replace(/^- (.*)$/gm,'<li>$1</li>')
+    .replace(/\*\*(.*?)\*\*/g,'<b>$1</b>')
+    .replace(/\n/g,'<br>');
+}
+function renderHQ(j){
+  const sg=document.getElementById('hqSuggest');
+  const sugs=j.suggestions||[];
+  const seen=JSON.parse(localStorage.getItem('hqIgnored')||'[]');
+  const live=sugs.filter(s=>!seen.includes(s.id));
+  if(live.length){
+    sg.innerHTML='<div class="hq-sg-title">💡 元神主动建议（点采纳即授权元神推进）</div>'+live.map(s=>
+      `<div class="hq-sg-card"><div class="hq-sg-t">${esc(s.title)}</div><div class="hq-sg-d">${esc(s.detail)}</div>`+
+      `<div class="hq-sg-act"><button class="btn sm meta" onclick="hqAdopt('${esc(s.id)}','${(s.tid||'').replace(/'/g,"")}','${esc(s.route||'board')}')">采纳</button>`+
+      `<button class="btn sm ghost" onclick="hqIgnore('${esc(s.id)}')">忽略</button></div></div>`).join('');
+    sg.style.display='block';
+  } else sg.style.display='none';
+  const set=(id,txt)=>{const el=document.getElementById(id); if(el) el.innerHTML=hqMd(txt);};
+  set('hqDash',j['dashboard.md']); set('hqAgenda',j['agenda.md']); set('hqInbox',j['inbox.md']);
+  set('hqFocus',j['focus.md']); set('hqDecisions',j['decisions.md']);
+}
+function hqIgnore(id){ let s=JSON.parse(localStorage.getItem('hqIgnored')||'[]'); if(!s.includes(id)){s.push(id);localStorage.setItem('hqIgnored',JSON.stringify(s));} if(window._hqLastFull) renderHQ(window._hqLastFull); }
+async function hqAdopt(id,tid,route){
+  let s=JSON.parse(localStorage.getItem('hqIgnored')||'[]'); if(!s.includes(id)){s.push(id);localStorage.setItem('hqIgnored',JSON.stringify(s));}
+  if(tid && id.indexOf('stuck:')===0){ try{ await apiJson('/api/tasks/'+tid+'/goal/start',{method:'POST'}); toast('🎯 已授权元神自主推进该任务'); }catch(e){ toast('启动失败：'+e); } loadGoalConsole(); }
+  else { goSec(route||'board'); toast('已采纳建议：元神将在下次巡检优先处理'); }
+}
+async function loadHQ(){
+  try{ const r=await fetch('/api/meta/hq'); const j=await r.json(); window._hqLastFull=j; window._hqLast=j.suggestions||[]; renderHQ(j); }catch(e){}
+  // SSE 主动推送（失败则降级为 30s 轮询）
+  if(_hqES){ try{_hqES.close();}catch(e){} _hqES=null; }
+  if(typeof EventSource!=='undefined'){
+    try{
+      _hqES=new EventSource('/api/meta/hq/stream');
+      _hqES.onmessage=ev=>{ try{ const j=JSON.parse(ev.data); window._hqLastFull=j; window._hqLast=j.suggestions||[]; renderHQ(j); }catch(e){} };
+      _hqES.onerror=()=>{ /* 自动重连由浏览器处理 */ };
+    }catch(e){}
+  }
+  if(_hqTimer) clearInterval(_hqTimer);
+  _hqTimer=setInterval(async()=>{ try{ const r=await fetch('/api/meta/hq'); const j=await r.json(); window._hqLastFull=j; window._hqLast=j.suggestions||[]; renderHQ(j);}catch(e){} },30000);
+  loadGoalConsole();
+}
+async function loadGoalConsole(){
+  const el=document.getElementById('goalConsole'); if(!el) return;
+  try{
+    const r=await fetch('/api/meta/tasks'); const j=await r.json(); const tasks=j.tasks||[];
+    if(!tasks.length){ el.innerHTML='<div class="hq-sg-title">🎯 任务自主推进（Goal-Mode）</div><div class="hq-sub">暂无任务</div>'; return; }
+    el.innerHTML='<div class="hq-sg-title">🎯 任务自主推进（Goal-Mode）</div>'+tasks.map(t=>{
+      const gm=t.goal_mode?true:false; const gs=t.goal_status||'';
+      const act = gm
+        ? `<button class="btn sm ghost" onclick="goalPause('${t.id}')">⏸ 暂停</button><button class="btn sm ghost" onclick="goalClear('${t.id}')">✕ 关闭</button><button class="btn sm meta" onclick="goalRuns('${t.id}')">进度</button>`
+        : `<button class="btn sm meta" onclick="goalStart('${t.id}')">🎯 自主推进</button>`;
+      return `<div class="hq-sg-card"><div class="hq-sg-t">${esc(t.name)} <span style="color:var(--gray-400);font-size:11px">· ${esc(t.pname)}</span></div>`+
+        `<div class="hq-sg-d">状态：${esc(t.status)} ${gs?('· Goal:'+esc(gs)):''}</div><div class="hq-sg-act">${act}</div></div>`;
+    }).join('');
+  }catch(e){ el.innerHTML='<div class="hq-sub">加载失败</div>'; }
+}
+async function goalStart(id){ await apiJson('/api/tasks/'+id+'/goal/start',{method:'POST'}); toast('🎯 已开启自主推进（含失败预算 + 独立裁判护栏）'); loadGoalConsole(); }
+async function goalPause(id){ await apiJson('/api/tasks/'+id+'/goal/pause',{method:'POST'}); loadGoalConsole(); }
+async function goalClear(id){ await apiJson('/api/tasks/'+id+'/goal/clear',{method:'POST'}); loadGoalConsole(); }
+async function goalRuns(id){
+  try{
+    const r=await fetch('/api/tasks/'+id+'/goal/runs'); const j=await r.json(); const runs=j.runs||[];
+    const html=(runs.length?runs.map(x=>`<div style="border:.5px solid var(--gray-200);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px"><b>第${x.turn}轮</b> · 判定：<b style="color:${x.verdict==='pass'?'#389e5c':'#d9534f'}">${esc(x.verdict)}</b><div style="color:var(--gray-500);margin-top:3px">${esc(x.reason||'')}</div><div style="color:var(--gray-600);margin-top:3px;white-space:pre-wrap">${esc((x.worker_out||'').slice(0,400))}</div></div>`).join(''):'<div class="hq-sub">暂无执行记录</div>');
+    const box=document.getElementById('goalRunsBox'); box.style.display='block'; box.innerHTML='<div class="hq-sg-title">📜 执行进度（逐轮验收）</div>'+html;
+    box.scrollIntoView({behavior:'smooth'});
+  }catch(e){ toast('加载进度失败'); }
+}
+
+/* ── P2 指挥大盘：跨项目总览 + HR 派单台 ── */
+async function loadDash(){
+  try{
+    const r=await fetch('/api/meta/dashboard'); const j=await r.json(); const s=j.summary||{}; const ps=j.projects||[];
+    const sum=document.getElementById('dashSummary');
+    if(sum) sum.innerHTML =
+      `项目 <b>${s.projects||0}</b> · 任务 <b>${s.total_tasks||0}</b>（待验收 <b>${s.pending_accept||0}</b> · Goal 进行中 <b>${s.active_goal||0}</b>）`+
+      `<br>工单 <b>${s.tickets||0}</b>（待处理 <b>${s.open_tickets||0}</b>） · 停滞项目 <b>${s.overdue_projects||0}</b>`+
+      `<br>任务分布：${(Object.entries(s.by_status||{}).map(([k,v])=>k+':'+v).join(' / '))||'—'}`;
+    const pp=document.getElementById('dashProjects');
+    if(pp) pp.innerHTML = ps.length? ps.map(p=>
+      `<div style="padding:6px 0;border-bottom:.5px solid var(--gray-100)"><b>${esc(p.name)}</b> · ${p.total}卡（完成${p.done}/进行${p.doing}/待办${p.todo}/待验${p.pending_accept}）<div style="color:var(--gray-400);font-size:11px">${esc(p.goal||'')}</div></div>`
+    ).join('') : '<div class="hq-sub">暂无项目</div>';
+  }catch(e){ }
+}
+let _hrPlan=null;
+async function hrGrade(){
+  const txt=document.getElementById('hrInput').value.trim(); if(!txt){ toast('先描述需求'); return; }
+  try{ const r=await apiJson('/api/meta/hr/intake',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:txt})});
+    _hrPlan=r; renderHrPlan(r); }catch(e){ toast('分级失败：'+e); }
+}
+function renderHrPlan(r){
+  const el=document.getElementById('hrPlan');
+  if(!r||!r.ok){ if(el) el.innerHTML='<div class="hq-sub">分级失败</div>'; return; }
+  const steps=(r.steps||[]).map(s=>`<li><b>${esc(s.title)}</b> · 角色 ${esc(s.role)} · 技能 ${esc(s.skill||'—')} · 标准：${esc(s.done_criteria)}</li>`).join('');
+  if(el) el.innerHTML =
+    `<div class="hq-sg-card"><div class="hq-sg-t">优先级 <b>${esc(r.priority)}</b> — ${esc(r.priority_label||'')}</div>`+
+    `<div class="hq-sg-d">${esc(r.summary||'')}</div><div class="hq-sg-d">Agent Profile：${esc(r.agent_profile||'')}</div>`+
+    `<ul style="margin:6px 0 0 16px;font-size:12px">${steps}</ul></div>`;
+}
+async function hrCommit(){
+  const txt=document.getElementById('hrInput').value.trim(); if(!txt){ toast('先描述需求'); return; }
+  try{ const r=await apiJson('/api/meta/hr/intake/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:txt})});
+    if(r.ok){ toast('🚀 已建卡并启动 SACD 串行编排（run='+r.run_id+' · 优先级'+r.priority+'）'); _hrPlan=null; const el=document.getElementById('hrPlan'); if(el) el.innerHTML=''; loadDash(); }
+    else toast('提交失败：'+r.error);
+  }catch(e){ toast('提交失败：'+e); }
+}
 
 /* ── 公共工具：转义 / 提示 / 忙碌态 ───────────────────────────────
    前端和能执行命令的接口同源，所以任何用户输入、模型输出、文件名、
@@ -3927,6 +4098,10 @@ document.querySelectorAll('.navitem').forEach(n=>n.onclick=()=>{
   if(n.dataset.sec==='market'){ loadMarket(); }
   // v6.1 元神续航：切过来拉取调度器实时状态
   if(n.dataset.sec==='autopilot'){ loadAutopilot(); }
+  // P7 指挥 HQ：进入即加载主动面板 + 订阅 SSE 推送
+  if(n.dataset.sec==='hq'){ loadHQ(); }
+  // P2 指挥大盘：进入即加载跨项目总览 + HR 派单台
+  if(n.dataset.sec==='dash'){ loadDash(); }
   // v6.2 元神驾驶舱：切过来渲染状态卡 + 项目 + 战队
   if(n.dataset.sec==='cockpit'){ renderCockpit(); }
   // E7 元神记忆面板：切过来拉取经验库聚合

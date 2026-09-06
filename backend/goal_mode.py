@@ -201,6 +201,39 @@ async def judge(task: dict, worker_out: str, contract: dict):
     return "pass", "全部验收通过"
 
 
+# ── 元神宪法·完成前独立裁判三问（与执行者不同身份，禁止自我满意）──
+async def _independent_referee(task: dict, worker_out: str, contract: dict):
+    """在标记任务「完成」之前，强制跑独立裁判三问（证据 / 同事满意 / 漏需求）。
+    任一不过即判不通过，转人工复核。返回 (pass: bool, reason: str)。"""
+    from backend.main import call_llm
+    dc = contract.get("done_criteria") or ""
+    subs = contract.get("subgoals") or []
+    sub_text = "\n".join(f"- {s.get('text', '')}" for s in subs) or "（无子目标）"
+    system = (
+        "你是分身宪法的独立验收裁判，与执行者不是同一身份。在元神要把任务标记为「完成」之前，"
+        "你必须严格拷问三问，任一不过即判不通过：\n"
+        "1) 有可验证的客观证据吗（文件 / 测试结果 / 产出物）？\n"
+        "2) 若同事交付此产物，你会满意接收吗？\n"
+        "3) 是否遗漏了用户原始需求或完成标准中的任何一条？\n"
+        "只输出 JSON：{\"pass\": true|false, \"reason\": \"一句话说明\"}"
+    )
+    user = (
+        f"用户原始完成标准：\n{dc}\n\n子目标清单：\n{sub_text}\n\n"
+        f"当前产物摘要：\n{worker_out[:3000]}\n\n请按三问严格判定。"
+    )
+    try:
+        text = call_llm("__meta__", [{"role": "user", "content": user}], system_prompt=system)
+    except Exception as e:
+        return False, f"裁判调用失败（保守判不过，转人工复核）：{e}"
+    m = re.search(r'\{\s*"pass"\s*:\s*(true|false)', text, re.I)
+    if not m:
+        return False, "裁判输出无法解析（保守判不过，转人工复核）"
+    if m.group(1).lower() == "true":
+        return True, "三问全过"
+    rm = re.search(r'"reason"\s*:\s*"([^"]*)"', text)
+    return False, rm.group(1) if rm else "裁判判不过"
+
+
 # ── 主循环 ──
 async def run_goal_loop(task_id: str):
     from backend.main import get_db
@@ -217,19 +250,48 @@ async def run_goal_loop(task_id: str):
     max_turns = int(task.get("goal_max_turns") or 20)
     gap = ""
     turn = 0
+    fail_total = 0          # 失败预算：累计失败上限
+    last_gap = ""
+    same_gap_streak = 0     # 失败预算：同一问题反复上限
+    deadline = time.time() + 600  # 失败预算：单任务卡死 10 分钟上限
     while turn < max_turns:
         if not _is_active(task_id):
             return  # 被 pause / clear 中断
+        if time.time() > deadline:
+            _set_goal_status(task_id, "failed")
+            _log_run(task_id, turn, "", "fail", "失败预算耗尽：单任务卡死超过 10 分钟仍未达标（元神宪法护栏）")
+            return
         turn += 1
         worker_out = await run_worker_step(task, gap)
         verdict, reason = await judge(task, worker_out, contract)
         _log_run(task_id, turn, worker_out, verdict, reason)
         if verdict == "pass":
-            _set_goal_status(task_id, "done")
-            _set_task_done(task_id)
+            # 元神宪法：标记完成前强制跑「独立裁判三问」质量门
+            ok, r2 = await _independent_referee(task, worker_out, contract)
+            if ok:
+                _set_goal_status(task_id, "done")
+                _set_task_done(task_id)
+                return
+            gap = "独立裁判未通过：" + r2
+            fail_total += 1
+        else:
+            gap = reason
+            fail_total += 1
+        # 失败预算：单步同一问题反复 3 次 / 总失败 5 次 → 判失败，绝不静默自标 done
+        if gap == last_gap:
+            same_gap_streak += 1
+        else:
+            same_gap_streak = 1
+            last_gap = gap
+        if same_gap_streak >= 3:
+            _set_goal_status(task_id, "failed")
+            _log_run(task_id, turn, "", "fail", f"失败预算耗尽：同一问题反复 {same_gap_streak} 次未解（{gap}）")
             return
-        gap = reason
-    # 超预算：按元神宪法，失败并通知，绝不静默自标 done
+        if fail_total >= 5:
+            _set_goal_status(task_id, "failed")
+            _log_run(task_id, turn, "", "fail", f"失败预算耗尽：累计 {fail_total} 次未达标（元神宪法护栏）")
+            return
+    # 超 max_turns：按元神宪法，失败并通知，绝不静默自标 done
     _set_goal_status(task_id, "failed")
 
 

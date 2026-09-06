@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.71.0] — 2026-09-06
+### Added
+- 元神主动性(HQ主动推送+Goal-Mode裁判护栏)/整体工作完成(SACD串编排+HR分级+跨项目大盘)/蒸馏优化(混合抽取+质量自诊+深度合并+语义召回接入聊天)
+
 ## [v0.70.1] — 2026-09-06
 ### Fixed
 - **首启「元神家」设置弹窗「确认并进入」无响应**：该弹窗此前用裸 `fetch` 调用 `/api/meta/home`，未携带 `x-fenshen-token`，在 PyWebview 下因不自动附带 cookie 被 `local_guard` 拒成 401，前端 `.catch` 静默吞错导致弹窗关不掉。改为统一走 `apiJson()`（自带令牌头），与全应用鉴权方式一致。后端该端点本身正常（带令牌时 GET→setup:false、POST→ok:true 并完整搭建骨架），故仅前端修复。

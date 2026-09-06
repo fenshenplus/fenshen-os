@@ -73,6 +73,8 @@ def _migrate_distill_v2():
             ("quality_score", "ALTER TABLE user_model ADD COLUMN quality_score REAL DEFAULT 0"),
             # v0.64.43：人格事实溯源到素材，支撑「删除素材即删除其产生的事实」（用户主权）
             ("material_id", "ALTER TABLE user_model ADD COLUMN material_id INTEGER DEFAULT 0"),
+            # v6.5：语义召回列（预留向量；离线态留空，recall 走词面重叠召回）
+            ("embedding", "ALTER TABLE user_model ADD COLUMN embedding TEXT DEFAULT ''"),
         ]:
             if col not in cols:
                 conn.execute(sql)
@@ -519,6 +521,181 @@ def ask_llm_json(system: str, user: str):
     return None
 
 
+# ── v6.5 蒸馏优化：混合抽取（规则兜底）+ 质量自诊 + 跨会话深度合并 + 语义召回 ──
+def _normalize_facts(raw):
+    """把 LLM 返回的各类形态规整为事实列表（兼容 LLM 偶发返回 {"facts":[...]} 或单条 dict）。"""
+    if not raw:
+        return []
+    if isinstance(raw, dict):
+        if "facts" in raw and isinstance(raw["facts"], list):
+            return raw["facts"]
+        return [raw]
+    if isinstance(raw, list):
+        return raw
+    return []
+
+
+# 规则兜底关键词表：离线/LLM 失败时，用关键词→维度映射抽取弱信号，避免静默丢信号。
+_RULE_KEYWORDS = {
+    "interest": ["最在意", "利益", "赚钱", "成本", "收入", "ROI", "担心", "害怕", "怕", "在乎",
+                 "关注", "优先考虑", "肉疼", "亏钱", "省时间", "面子", "控制感", "成就感"],
+    "decision": ["我决定", "我选择", "倾向于", "习惯先", "一般", "我会", "我的策略", "我更",
+                 "宁可", "取舍", "直觉", "数据", "保守", "激进", "先动", "想透"],
+    "emotion": ["生气", "开心", "焦虑", "兴奋", "烦躁", "崩溃", "难过", "受挫", "有压力",
+                "破防", "下头", "委屈", "心累", "感动", "满意", "反感"],
+    "value": ["原则", "底线", "绝对", "必须", "不能接受", "我信", "价值观", "信仰", "公平",
+              "效率", "诚实", "尊严", "体面"],
+    "comm": ["直接说", "别绕", "简洁", "详细", "我喜欢", "我讨厌", "请直说", "少客套", "废话",
+             "铺垫", "短句", "长段落", "术语", "啰嗦"],
+    "knowledge": ["擅长", "精通", "熟悉", "做过", "经验", "领域", "行业", "专业", "手艺",
+                  "专家", "框架", "模型", "代码", "技术"],
+    "workflow": ["流程", "步骤", "先用", "然后", "我一般", "习惯", "自动化", "工具", "节奏",
+                 "清单", "复盘", "SOP"],
+    "collab": ["团队", "协作", "对接", "汇报", "对齐", "沟通", "拉通", "分工", "授权", "委派",
+               "信任", "委托", "micro", "micromanage"],
+    "risk": ["风险", "合规", "法律", "隐私", "保密", "谨慎", "别乱", "安全", "稳定", "波动",
+             "赌", "allin", "all-in", "底线思维"],
+}
+
+
+def _rule_extract(text, dim_hint=None):
+    """离线/LLM 失败时的规则兜底抽取：关键词→维度映射，产出保守置信度的事实（可能为空）。
+    每条事实带 _rule=True 标记，便于画像仪表盘区分强弱来源；维度限定在 META_DIMS，绝不注入能力维度。"""
+    if not text:
+        return []
+    dims = [dim_hint] if (dim_hint and dim_hint in META_DIMS) else META_DIMS
+    # 同时按中/英文逗号、顿号切分，避免长段落被当成「超长单句」整体丢弃
+    sentences = re.split(r"[。！？；\n.!?，,、]+", text)
+    facts, seen_pair = [], set()
+    for s in sentences:
+        s = s.strip()
+        if not (4 <= len(s) <= 80):
+            continue
+        for dim in dims:
+            if len(facts) >= 6:
+                break
+            for kw in _RULE_KEYWORDS.get(dim, []):
+                if kw.lower() in s.lower() and (dim, s) not in seen_pair:
+                    seen_pair.add((dim, s))
+                    facts.append({
+                        "dim": dim,
+                        "field": "rule_" + re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]", "", s)[:18],
+                        "value": s,
+                        "confidence": 0.5,
+                        "_rule": True,
+                    })
+                    break
+    return facts
+
+
+async def _extract_with_fallback(system: str, user: str, dim_hint=None):
+    """混合抽取：优先 LLM；LLM 不可用/返回空 → 规则兜底。
+    返回 {"facts":[...], "source":"llm"|"rule"|"none", "fallback":bool}，保证 facts 永远是 list（永不静默丢信号）。"""
+    raw = await _extract_async(system, user)
+    facts = _normalize_facts(raw)
+    if facts:
+        return {"facts": facts, "source": "llm", "fallback": False}
+    rule = _rule_extract(user, dim_hint)
+    if rule:
+        return {"facts": rule, "source": "rule", "fallback": True}
+    return {"facts": [], "source": "none", "fallback": True}
+
+
+def _vals_equal(a, b):
+    """跨会话深度合并时判断两条事实的 value 是否等价（兼容 json 字符串与原始值）。"""
+    if a == b:
+        return True
+    try:
+        da = json.loads(a) if isinstance(a, str) else a
+        db = json.loads(b) if isinstance(b, str) else b
+        return da == db
+    except Exception:
+        return False
+
+
+def _distill_self_diagnose(facts, subject_id: str = "self"):
+    """蒸馏质量自诊（独立裁判三问的离线版）：
+    1) 客观证据是否充分——事实数/平均置信；2) 是否自洽——维度覆盖；3) 是否过拟合单点——与既有事实冲突检测。
+    返回报告；冲突项仅记录、不自动覆盖，交还用户主权。"""
+    if not facts:
+        return {"verdict": "empty", "fact_count": 0, "avg_conf": 0.0,
+                "dims_covered": [], "conflicts": []}
+    conn = get_db()
+    avg = sum(float(f.get("confidence", 0.5)) for f in facts) / len(facts)
+    dims = sorted({f["dim"] for f in facts if f.get("dim") in META_DIMS})
+    conflicts = []
+    for f in facts:
+        dim, field, value = f.get("dim"), f.get("field"), f.get("value")
+        if dim not in META_DIMS or not field:
+            continue
+        ex = conn.execute(
+            "SELECT value,confidence FROM user_model WHERE subject=? AND dim=? AND field=?",
+            (subject_id, dim, field)).fetchone()
+        if ex and ex["confidence"] >= 0.6 and not _vals_equal(ex["value"], value):
+            conflicts.append({"dim": dim, "field": field,
+                              "existing": str(_decode(ex["value"])),
+                              "incoming": str(value)})
+    conn.close()
+    verdict = "ok"
+    if avg < 0.45 or len(facts) < 2:
+        verdict = "weak"
+    if conflicts:
+        verdict = "conflict"
+    return {"verdict": verdict, "fact_count": len(facts),
+            "avg_conf": round(avg, 2), "dims_covered": dims,
+            "conflict_count": len(conflicts), "conflicts": conflicts[:10]}
+
+
+def _tokenize(text: str):
+    """分词：中文按「字 + 二元组」切分（解决中文无空格导致整句成一个 token 的问题），拉丁/数字按词。"""
+    text = (text or "").lower()
+    tokens = []
+    cjk = re.findall(r"[\u4e00-\u9fff]", text)
+    for i, ch in enumerate(cjk):
+        tokens.append(ch)
+        if i + 1 < len(cjk):
+            tokens.append(cjk[i] + cjk[i + 1])
+    tokens += re.findall(r"[a-z0-9]+", text)
+    return tokens
+
+
+def recall_distilled_facts(query: str, subject_id: str = "self", top_k: int = 8):
+    """语义召回（离线版=词面重叠召回，可平滑升级为向量召回）：
+    给定当前上下文 query，从已蒸馏事实中召回最相关 top_k 条，用于把画像 grounding 进对话。"""
+    if not query:
+        return []
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT dim,field,value,confidence FROM user_model WHERE subject=? AND confidence>=0.4 "
+        "ORDER BY confidence DESC", (subject_id,)).fetchall()
+    conn.close()
+    q_tokens = set(_tokenize(query))
+    if not q_tokens:
+        return []
+    scored = []
+    seen_key = set()
+    for r in rows:
+        text = f"{r['field']} {str(_decode(r['value']))}"
+        t_tokens = set(_tokenize(text))
+        if not t_tokens:
+            continue
+        overlap = len(q_tokens & t_tokens)
+        if overlap == 0:
+            continue
+        # 防御性去重：同一 (dim,field,value) 只计一次，避免合并/重复写入导致召回重复
+        dkey = (r["dim"], r["field"], text)
+        if dkey in seen_key:
+            continue
+        seen_key.add(dkey)
+        # Jaccard * 置信度 作为相关性分
+        score = overlap / len(q_tokens | t_tokens) * (0.5 + r["confidence"] * 0.5)
+        scored.append((score, r))
+    scored.sort(key=lambda x: -x[0])
+    return [{"dim": r["dim"], "field": r["field"], "value": str(_decode(r["value"])),
+             "confidence": r["confidence"], "score": round(s, 3)}
+            for s, r in scored[:top_k]]
+
+
 def _decode(v):
     try:
         return json.loads(v)
@@ -553,15 +730,26 @@ def _store_facts(facts, source: str, qid=None, subject_id: str = "self",
         val_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
         # 同一 subject + dim + field 去重升级
         ex = conn.execute(
-            "SELECT id,confidence FROM user_model WHERE subject=? AND dim=? AND field=?",
+            "SELECT id,confidence,value FROM user_model WHERE subject=? AND dim=? AND field=?",
             (subject_id, dim, field)).fetchone()
         if ex:
-            if conf > ex["confidence"]:
+            ex_val = ex["value"]
+            ex_conf = ex["confidence"]
+            if _vals_equal(ex_val, val_str):
+                # 跨会话深度合并：同值多次出现→证据累积加权（只增不减，封顶 0.97）
+                new_conf = min(0.97, ex_conf + conf * (1 - ex_conf))
+                conn.execute(
+                    "UPDATE user_model SET confidence=?,source=?,qid=?,updated_at=?,"
+                    "target_type=?,authorization_status=?,material_type=?,quality_score=? WHERE id=?",
+                    (new_conf, source, qid, now, target_type, authorization_status,
+                     material_type, quality_score, ex["id"]))
+            elif conf > ex_conf:
                 conn.execute(
                     "UPDATE user_model SET value=?,confidence=?,source=?,qid=?,updated_at=?,"
                     "target_type=?,authorization_status=?,material_type=?,quality_score=? WHERE id=?",
                     (val_str, conf, source, qid, now, target_type, authorization_status,
                      material_type, quality_score, ex["id"]))
+            # else: 旧值置信更高且不同值→保留旧值，不覆盖（交还用户主权，由镜像校验/手动修正）
         else:
             conn.execute(
                 "INSERT INTO user_model (dim,field,value,confidence,source,qid,created_at,updated_at,"
@@ -666,10 +854,12 @@ def binding_progress(conn=None, subject_id: str = "self"):
             conn.close()
 
 
-def compile_meta_system(subject_id: str = "self") -> str:
+def compile_meta_system(subject_id: str = "self", recall_query: str = None, recall_k: int = 5) -> str:
     """把已蒸馏的「绑定画像」动态编译进元神 system prompt。
     无蒸馏数据 → 返回通用技术 PM 骨架（开箱即用）；有数据 → 叠加用户绑定五维。
-    v6.4 支持选择 subject：self=用户本人，other=被蒸馏的他人（赛博人类）。"""
+    v6.4 支持选择 subject：self=用户本人，other=被蒸馏的他人（赛博人类）。
+    v6.7 新增 recall_query：若传入当前对话文本，从长期画像中语义召回最相关信号，
+    置顶注入 system prompt，让元神在本轮优先贴合「此刻最相关的画像」，而非只依赖全量 dump。"""
     conn = get_db()
     rows = conn.execute(
         "SELECT dim,field,value,confidence FROM user_model WHERE subject=? ORDER BY dim,confidence DESC",
@@ -695,10 +885,26 @@ def compile_meta_system(subject_id: str = "self") -> str:
     auth_note = ""
     if sub and sub["target_type"] == "other":
         auth_note = f"\n注意：该克隆体基于被蒸馏人「{subject_name}」的授权素材炼制，使用时应尊重其授权范围与隐私。"
+    # ── v6.7 语义召回：把本轮最相关的画像信号置顶 ──
+    # 设计要点：召回块的作用是「优先级」——把本轮最相关信号提到 prompt 顶部，
+    # 防止长画像被截断时漏看，并显式标注"此刻最相关"。因此不与全量 dump 去重
+    # （即便同一事实已在 dump 中，置顶标注仍有强调/防截断价值），仅用相关性阈值过滤噪声。
+    recalled = ""
+    if recall_query:
+        hits = recall_distilled_facts(recall_query, subject_id, top_k=recall_k)
+        if hits:
+            rlines = []
+            for h in hits:
+                if h["score"] < 0.05:
+                    continue
+                rlines.append(f"- （相关度 {h['score']:.2f}）{h['field']}：{str(h['value'])}")
+            if rlines:
+                recalled = ("\n\n【当前对话最相关的已蒸馏信号（从你的长期画像中语义召回，优先贴合）】\n"
+                            + "\n".join(rlines))
     return (META_SYSTEM +
             f"\n\n【以下是已绑定（蒸馏炼制）出的真实画像——利益关切 / 决策倾向 / 情感信号 / 价值观锚点 / 沟通风格。"
             f"对话时务必贴合，让元神「像{subject_pronoun}本人」，这是「{subject_pronoun}」的数字克隆体，不是通用 bot】\n"
-            + persona + auth_note)
+            + recalled + persona + auth_note)
 
 
 # ── 访谈引擎 ─────────────────────────────────────────────────────
@@ -841,17 +1047,21 @@ async def interview_answer(req: Request):
     conn.close()
     # 确保 subject 记录存在
     _ensure_subject(subject_id, subject_id, target_type, authorization_status)
-    # LLM 抽取人格事实（维度提示来自该题）
+    # 混合抽取人格事实（维度提示来自该题；LLM 不可用时规则兜底，永不静默丢信号）
     q = QB_BY_ID.get(qid)
-    dim_hint = q["dim"] if q else "personality"
-    facts = await _extract_async(EXTRACT_SYSTEM + f"\n本次问题维度提示：{dim_hint}。",
-                                 f"用户回答：{answer}")
-    quality = _quality_score(len(answer), len(facts) if facts else 0,
-                            set(f["dim"] for f in facts if f.get("dim") in META_DIMS) if facts else set(),
-                            sum(float(f.get("confidence", 0.5)) for f in facts) / len(facts) if facts else 0)
+    dim_hint = q["dim"] if q else None
+    res = await _extract_with_fallback(
+        EXTRACT_SYSTEM + f"\n本次问题维度提示：{dim_hint or 'personality'}。",
+        f"用户回答：{answer}", dim_hint=dim_hint)
+    facts = res["facts"]
+    fdimset = set(f["dim"] for f in facts if f.get("dim") in META_DIMS) if facts else set()
+    favg = sum(float(f.get("confidence", 0.5)) for f in facts) / len(facts) if facts else 0
+    quality = _quality_score(len(answer), len(facts) if facts else 0, fdimset, favg)
     n = _store_facts(facts, "interview", qid, subject_id, target_type, authorization_status,
                      material_type="interview", quality_score=quality) if facts else 0
+    diagnosis = _distill_self_diagnose(facts, subject_id) if facts else None
     return {"ok": True, "stored": n, "quality_score": quality,
+            "rule_fallback": res["fallback"], "diagnosis": diagnosis,
             "next": _next_question(subject_id)}
 
 
@@ -881,15 +1091,16 @@ async def meta_ingest(req: Request):
     if target_type == "other" and authorization_status not in ("authorized", "owner"):
         return {"ok": False, "error": "蒸馏他人需先获得被蒸馏人明示授权（authorized），未经授权禁止克隆"}
     _ensure_subject(subject_id, subject_name, target_type, authorization_status, authorization_proof)
-    # 根据素材类型调整抽取提示
+    # 根据素材类型调整抽取提示；混合抽取（LLM 优先，规则兜底）
     type_hint = MATERIAL_TYPES.get(material_type, "工作文档")
-    facts = await _extract_async(
+    res = await _extract_with_fallback(
         EXTRACT_SYSTEM + f"\n这是{type_hint}类型的素材，尽量多抽取真实事实，不确定不要编。",
         f"文件名：{filename}\n内容：\n{text[:8000]}")
-    # v0.64.43：离线/未配置模型时 facts=None，必须明确告知，不能伪装成"成功但 0 条"
-    if facts is None:
+    facts = res["facts"]
+    # LLM 离线且规则兜底也无命中 → 明确告知，不能伪装成"成功但 0 条"
+    if not facts:
         return {"ok": False, "error": "llm_offline",
-                "hint": "元神模型未配置或不可用，无法从素材中蒸馏人格特征。请先为元神配置大模型 API Key。",
+                "hint": "元神模型未配置或不可用，且规则兜底也未从素材中识别到人格特征。请先为元神配置大模型 API Key。",
                 "material_type": material_type, "subject": subject_id}
     dims = set(f["dim"] for f in facts if f.get("dim") in META_DIMS) if facts else set()
     conf_avg = sum(float(f.get("confidence", 0.5)) for f in facts) / len(facts) if facts else 0
@@ -919,7 +1130,9 @@ async def meta_ingest(req: Request):
             ("distilled", f"从资料《{filename}》蒸馏出 {n} 条人格事实", source, now))
     conn.commit()
     conn.close()
+    diagnosis = _distill_self_diagnose(facts, subject_id)
     return {"ok": True, "extracted": n, "quality_score": quality,
+            "rule_fallback": res["fallback"], "diagnosis": diagnosis,
             "material_type": material_type, "subject": subject_id,
             "material_id": material_id,
             "summary": (facts[:5] if facts else [])}
@@ -1051,11 +1264,11 @@ async def _auto_distill_user(user_text: str):
     if now - _LAST_CHAT_EXTRACT_TS < _CHAT_EXTRACT_COOLDOWN:
         return
     try:
-        facts = await _extract_async(
+        res = await _extract_with_fallback(
             EXTRACT_SYSTEM + "\n这是用户和元神闲聊时说的话，只抽取明确的人格/偏好事实，不确定不要抽。",
             f"用户说：{user_text}")
-        if facts:
-            _store_facts(facts, "chat")
+        if res["facts"]:
+            _store_facts(res["facts"], "chat")
             _LAST_CHAT_EXTRACT_TS = now
     except Exception:
         pass
@@ -1142,6 +1355,18 @@ def list_materials(request: Request):
                               for r in rows]}
     finally:
         conn.close()
+
+
+# ── API：语义召回（v6.5）——给定上下文，从已蒸馏事实召回最相关 top_k 条 ──
+@app.get("/api/meta/distill/recall")
+def distill_recall(request: Request):
+    subject_id = request.query_params.get("subject") or "self"
+    q = (request.query_params.get("q") or "").strip()
+    top_k = int(request.query_params.get("top_k") or 8)
+    if not q:
+        return {"ok": False, "error": "missing q"}
+    facts = recall_distilled_facts(q, subject_id, top_k)
+    return {"ok": True, "subject": subject_id, "query": q, "count": len(facts), "facts": facts}
 
 
 # ── API：删除单条素材（v0.64.43 用户主权）——连带删除它由蒸馏产生的人格事实 ──
