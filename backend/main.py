@@ -217,6 +217,9 @@ def _scaffold_meta_home(home: str = None):
         # 业务目录
         for d in ("soul", "standards", "skills", "agents", "projects", "data"):
             os.makedirs(os.path.join(home, d), exist_ok=True)
+        # P2：导出内置技能与默认工程规范到磁盘（人读真源，幂等不覆盖）
+        _scaffold_builtin_skills_to_disk(home)
+        _scaffold_default_standards(home)
         return True
     except Exception as e:
         print(f"[meta_home] 脚手架失败: {e}")
@@ -236,6 +239,298 @@ def _ensure_meta_home_scaffold():
 # P8：工单流转（inbox→doing→outbox，DB 真源 + 项目内 tickets.md 镜像）
 # P9：验收闭环（worker≠judge / 退回 / 三层完成：执行↔验收↔用户确认）
 # ════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════
+# P2：技能 / 规范 文件优先磁盘加载
+#   skills/*.md  = 技能真源；standards/*.md = 工程规范真源（磁盘 > 代码常量）
+#   DB 仅作检索缓存；移除原 builtin 差集 DELETE，避免误删用户磁盘技能。
+# ════════════════════════════════════════════════════════════════════
+
+def _skill_filename(name: str) -> str:
+    s = (name or "skill").strip()
+    for ch in '/\\:*?"<>|':
+        s = s.replace(ch, "_")
+    s = s.strip(". ").replace(" ", "_")
+    return (s or "skill")[:60] + ".md"
+
+
+def _skill_to_md(s: dict) -> str:
+    """把技能 dict 序列化为 skills/<name>.md（frontmatter + 执行步骤正文）。"""
+    steps = s.get("steps") or []
+    if isinstance(steps, str):
+        try:
+            steps = json.loads(steps)
+        except Exception:
+            steps = []
+    enabled = s.get("enabled", 1)
+    enabled = True if enabled in (True, 1, "1", "true", "True") else False
+    fm = [
+        "---",
+        f"name: {s.get('name', '')}",
+        f"category: {s.get('category', 'builtin')}",
+        f"description: {s.get('description', '')}",
+        f"trigger_words: {s.get('trigger_words', '')}",
+        f"enabled: {'true' if enabled else 'false'}",
+        f"version: {s.get('version', 1)}",
+        "---",
+        "",
+        "## 执行步骤",
+    ]
+    for i, st in enumerate(steps, 1):
+        fm.append(f"{i}. {st}")
+    return "\n".join(fm) + "\n"
+
+
+def _md_to_skill(text: str) -> dict:
+    """解析 skills/<name>.md → 技能 dict（frontmatter + 执行步骤）。容忍格式偏差。"""
+    text = text or ""
+    fm = {}
+    body = text
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            fm_raw = text[3:end]
+            body = text[end + 4:]
+            for line in fm_raw.splitlines():
+                line = line.strip()
+                if not line or ":" not in line:
+                    continue
+                k, v = line.split(":", 1)
+                fm[k.strip()] = v.strip()
+    steps = []
+    for ln in body.splitlines():
+        st = ln.strip()
+        if not st:
+            continue
+        m = re.match(r"^\d+[\.、]\s*(.*)$", st)
+        if m:
+            steps.append(m.group(1).strip())
+            continue
+        if st.startswith("## 执行步骤") or st.startswith("# 执行步骤"):
+            continue
+        if st.startswith("- "):
+            steps.append(st[2:].strip())
+    if not steps and body.strip():
+        steps = [body.strip()]
+    tw = fm.get("trigger_words", "")
+    if tw.startswith("["):
+        try:
+            tw = ",".join(json.loads(tw))
+        except Exception:
+            tw = tw.strip("[]")
+    enabled = fm.get("enabled", "true")
+    enabled = enabled in ("true", "True", "1", "yes", "是")
+    try:
+        version = int(fm.get("version", 1))
+    except Exception:
+        version = 1
+    return {
+        "name": fm.get("name", "").strip(),
+        "category": fm.get("category", "builtin").strip(),
+        "description": fm.get("description", "").strip(),
+        "trigger_words": tw.strip(),
+        "enabled": enabled,
+        "version": version,
+        "steps": steps,
+    }
+
+
+_DEFAULT_STANDARDS = {
+    "coding.md": (
+        "# 编码规范\n\n"
+        "- 命名：变量/函数用 snake_case，类用大驼峰；见名知义，禁止 a/b/tmp 之类无意义名。\n"
+        "- 注释：只解释「为什么」而非「是什么」；复杂分支必须注释意图。\n"
+        "- 错误处理：不吞异常；外部调用（网络/文件/DB）必须 try 且给出可操作错误信息。\n"
+        "- 禁止：裸 `except: pass`、同步阻塞主线程、拼接未校验的用户输入到命令/路径、重复造轮子（优先用标准库）。\n"
+    ),
+    "git.md": (
+        "# Git 规范\n\n"
+        "- 分支：功能走 feature/<名>，修复走 fix/<名>，禁止直接推 main。\n"
+        "- 提交信息：`<类型>(<范围>): <一句话>`（类型：feat/fix/refactor/docs/test/chore），正文说明动机。\n"
+        "- 提交门槛：本地测试/构建通过再提交；发版前必须 smoke 全绿 + MD5 三处一致。\n"
+        "- tag 用 `vX.Y.Z` 语义化；推送用 `git push origin vX.Y.Z`（非 --tags）。\n"
+    ),
+    "testing.md": (
+        "# 测试规范\n\n"
+        "- 覆盖：核心逻辑必带单测；对外能力跑端到端验证（启动→关键路径→结果）。\n"
+        "- 验收写法：done_criteria 必须可验证（命令/截图/日志），禁止「应该没问题」。\n"
+        "- 冒烟门禁：release 前跑 smoke_v40，fail-closed（非全绿不得发布）。\n"
+    ),
+    "security.md": (
+        "# 安全规范（宪法级护栏，不可降级）\n\n"
+        "- 元神最高优先级是用户本人利益；冲突时护用户，钱/隐私/声誉保守处理。\n"
+        "- 危险操作（删/重置/改权限/动生产/转账/外发）必须先确认并留回滚方案。\n"
+        "- 蒸馏他人须明示授权；元神家资产（人格/记忆/蒸馏）本地存储、可加密、不默认上云。\n"
+        "- 路径/输入须校验，禁路径穿越与注入。\n"
+    ),
+    "delivery.md": (
+        "# 交付规范\n\n"
+        "- 汇报格式：先结论后细节；附验证证据（命令/截图/日志片段）。\n"
+        "- 里程碑：每个里程碑有出口标准，达成才标记完成。\n"
+        "- 完整闭环：执行完成 → 验收通过（worker≠judge）→ 用户确认，三层齐备才算交付。\n"
+    ),
+}
+
+_STANDARDS_META_DEFAULT = {
+    "coding.md": {"enabled": True, "priority": 10, "applies_to": ["后端", "前端", "测试"]},
+    "git.md": {"enabled": True, "priority": 20},
+    "testing.md": {"enabled": True, "priority": 30},
+    "security.md": {"enabled": True, "priority": 100, "locked": True},
+    "delivery.md": {"enabled": True, "priority": 40},
+}
+
+
+def _scaffold_builtin_skills_to_disk(home: str):
+    """P2：把内置技能导出为 skills/<name>.md（幂等：已存在不覆盖，保留用户编辑）。"""
+    d = os.path.join(home, "skills")
+    os.makedirs(d, exist_ok=True)
+    for s in BUILTIN_SKILLS:
+        fp = os.path.join(d, _skill_filename(s["name"]))
+        if not os.path.exists(fp):
+            try:
+                with open(fp, "w", encoding="utf-8") as f:
+                    f.write(_skill_to_md(s))
+            except Exception:
+                pass
+
+
+def _scaffold_default_standards(home: str):
+    """P2：导出默认工程规范到 standards/*.md（幂等）。"""
+    d = os.path.join(home, "standards")
+    os.makedirs(d, exist_ok=True)
+    for fn, content in _DEFAULT_STANDARDS.items():
+        p = os.path.join(d, fn)
+        if not os.path.exists(p):
+            try:
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception:
+                pass
+    mp = os.path.join(d, "_meta.json")
+    if not os.path.exists(mp):
+        try:
+            with open(mp, "w", encoding="utf-8") as f:
+                json.dump(_STANDARDS_META_DEFAULT, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+
+def _write_skill_md(s: dict):
+    """P2：把技能写穿到磁盘 skills/<name>.md（文件真源）。"""
+    if not s.get("name"):
+        return
+    skdir = os.path.join(META_HOME, "skills")
+    os.makedirs(skdir, exist_ok=True)
+    fp = os.path.join(skdir, _skill_filename(s["name"]))
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(_skill_to_md(s))
+    except Exception as e:
+        print(f"[skill-md] write fail {fp}: {e}")
+
+
+def _remove_skill_md(name: str):
+    """P2：删除技能对应的磁盘文件。"""
+    if not name:
+        return
+    skdir = os.path.join(META_HOME, "skills")
+    fp = os.path.join(skdir, _skill_filename(name))
+    try:
+        if os.path.exists(fp):
+            os.remove(fp)
+    except Exception:
+        pass
+
+
+def _sync_skills_from_disk():
+    """P2：扫描 META_HOME/skills/*.md → upsert 进 DB（磁盘真源，DB 为缓存）。
+    不在磁盘的 builtin 技能：补写回磁盘（出厂文件被删自动恢复）；custom 类保留。
+    不删除任何技能（已移除原差集 DELETE，避免误删用户磁盘技能）。"""
+    try:
+        skdir = os.path.join(META_HOME, "skills")
+        conn = get_db()
+        now = datetime.now().isoformat()
+        if os.path.isdir(skdir):
+            for fn in os.listdir(skdir):
+                if not fn.endswith(".md") or fn.startswith("_"):
+                    continue
+                try:
+                    with open(os.path.join(skdir, fn), "r", encoding="utf-8") as f:
+                        s = _md_to_skill(f.read())
+                except Exception:
+                    continue
+                if not s.get("name"):
+                    continue
+                steps = s.get("steps") or []
+                steps_json = steps if isinstance(steps, str) else json.dumps(steps, ensure_ascii=False)
+                row = conn.execute("SELECT id FROM skills WHERE name=?", (s["name"],)).fetchone()
+                if row:
+                    conn.execute(
+                        "UPDATE skills SET category=?, description=?, trigger_words=?, steps=?, version=?, enabled=?, updated_at=? WHERE id=?",
+                        (s.get("category", "builtin"), s.get("description", ""), s.get("trigger_words", ""),
+                         steps_json, s.get("version", 1), 1 if s.get("enabled", True) else 0, now, row["id"]),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO skills (name,category,description,trigger_words,steps,version,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (s["name"], s.get("category", "builtin"), s.get("description", ""), s.get("trigger_words", ""),
+                         steps_json, s.get("version", 1), 1 if s.get("enabled", True) else 0, now, now),
+                    )
+        # 出厂 builtin 若磁盘缺失，补写回磁盘（自动恢复）
+        for s in BUILTIN_SKILLS:
+            fp = os.path.join(skdir, _skill_filename(s["name"]))
+            if not os.path.exists(fp):
+                try:
+                    with open(fp, "w", encoding="utf-8") as f:
+                        f.write(_skill_to_md(s))
+                except Exception:
+                    pass
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[skills-sync] {e}")
+
+
+def _load_standards_text() -> str:
+    """P2：从 META_HOME/standards/*.md 读取工程规范（磁盘优先），拼为注入元神 prompt 的文本。
+    按 _meta.json 的 enabled/priority 过滤与排序；locked 总是包含。未设置元神家时回退出厂默认。"""
+    d = os.path.join(META_HOME, "standards")
+    if not os.path.isdir(d):
+        return _default_standards_text()
+    meta = {}
+    mp = os.path.join(d, "_meta.json")
+    if os.path.exists(mp):
+        try:
+            meta = json.load(open(mp, encoding="utf-8"))
+        except Exception:
+            meta = {}
+    items = []
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".md") or fn.startswith("_"):
+            continue
+        m = meta.get(fn, {})
+        if m.get("enabled", True) is False:
+            continue
+        try:
+            txt = open(os.path.join(d, fn), encoding="utf-8").read().strip()
+        except Exception:
+            continue
+        items.append((m.get("priority", 50), fn, txt))
+    items.sort(key=lambda x: -x[0])
+    if not items:
+        return _default_standards_text()
+    parts = ["## 工程规范（来自元神家 standards/，磁盘文件优先于代码常量，可按需编辑）"]
+    for _, fn, txt in items:
+        parts.append(f"### {fn}\n{txt}")
+    return "\n\n".join(parts)
+
+
+def _default_standards_text() -> str:
+    parts = ["## 工程规范（出厂默认；设置元神家后将改用 standards/ 磁盘文件）"]
+    for fn, txt in _DEFAULT_STANDARDS.items():
+        parts.append(f"### {fn}\n{txt}")
+    return "\n\n".join(parts)
+
 
 def _safe_folder_name(name: str) -> str:
     name = (name or "未命名项目").strip()
@@ -1872,6 +2167,17 @@ async def _start_patrol():
     _ensure_design_specs()
     # v0.67 元神家：已设置则幂等补全骨架（应对版本升级新增文件）
     _ensure_meta_home_scaffold()
+    # v0.69 P2：技能磁盘同步（磁盘真源 → DB 缓存）+ 工程规范注入元神 prompt
+    if not META_HOME_NEEDS_SETUP:
+        try:
+            _sync_skills_from_disk()
+        except Exception as e:
+            print(f"[startup] skills sync 跳过: {e}")
+    try:
+        global META_SYSTEM
+        META_SYSTEM = META_SYSTEM + "\n\n" + _load_standards_text()
+    except Exception as e:
+        print(f"[startup] standards 注入跳过: {e}")
     # v0.68 P7：指挥中枢 HQ 定时巡检（启动即扫一次 + 常驻每 5 分钟刷新五件套）
     try:
         _hq_scan()
@@ -4309,10 +4615,10 @@ BUILTIN_SKILLS = [
 
 
 def _seed_builtin_skills():
-    """v3：启动时把 19 种预设技能（全集）种入 skills 表。
-    内置技能按 name upsert（同步出厂定义升级；enabled/version 等用户状态保留），
-    并按 name 差集清理已合并/下线的内置技能（如旧「前端脚手架/后端脚手架/测试用例/代码审查/Bug修复」），
-    避免残留行继续被 _match_skill_steps 注入。非内置技能（category='general'）不受影响。"""
+    """v3+：启动时把 19 种预设技能（全集）种入 skills 表（DB 缓存）。
+    内置技能按 name upsert（同步出厂定义升级；enabled/version 等用户状态保留）。
+    P2 起：不再按 name 差集 DELETE（否则会误删用户自己在磁盘 skills/*.md 新建的技能）；
+    磁盘→DB 的权威同步由 _sync_skills_from_disk() 负责，磁盘真源、DB 缓存。"""
     try:
         conn = get_db()
         now = datetime.now().isoformat()
@@ -4330,11 +4636,6 @@ def _seed_builtin_skills():
                     "VALUES (?,?,?,?,?,1,1,?,?)",
                     (s["name"], s["category"], s["description"], s["trigger_words"], steps, now, now),
                 )
-        # v3：按 name 差集清理已合并/下线的内置技能，避免残留行继续被注入。
-        # 仅删 builtin 类，不碰用户自定义（category='general'）。
-        _names = [s["name"] for s in BUILTIN_SKILLS]
-        _ph = ",".join("?" * len(_names))
-        conn.execute(f"DELETE FROM skills WHERE category='builtin' AND name NOT IN ({_ph})", _names)
         conn.commit()
         conn.close()
     except Exception as e:
@@ -6365,29 +6666,54 @@ async def _run_file_tool(name: str, args: dict, agent_id: str) -> str:
     return out
 
 
-def _match_skill_steps(system_prompt: str, user_text: str) -> str:
-    """P3-2：按 trigger_words 命中 enabled 技能 → 返回注入文本（活配件）。
-    命中规则：技能触发词（逗号分隔）任一出现在 system_prompt 或最近用户消息中，即注入其步骤。"""
+def _iter_active_skills():
+    """P2：优先从磁盘 skills/*.md 读取启用技能（文件真源），缺磁盘时回退 DB 缓存。"""
+    skdir = os.path.join(META_HOME, "skills")
+    if os.path.isdir(skdir):
+        disk = {}
+        for fn in os.listdir(skdir):
+            if not fn.endswith(".md") or fn.startswith("_"):
+                continue
+            try:
+                s = _md_to_skill(open(os.path.join(skdir, fn), encoding="utf-8").read())
+            except Exception:
+                continue
+            if not s.get("name") or not s.get("enabled", True):
+                continue
+            disk[s["name"]] = s
+        if disk:
+            for s in disk.values():
+                yield s["name"], s.get("trigger_words", ""), s.get("steps") or []
+            return
+    # 回退 DB
     try:
         conn = get_db()
         rows = conn.execute("SELECT name,trigger_words,steps FROM skills WHERE enabled=1").fetchall()
         conn.close()
-    except Exception:
-        return ""
-    haystack = f"{system_prompt or ''}\n{user_text or ''}"
-    parts = []
-    for r in rows:
-        words = [w.strip() for w in (r["trigger_words"] or "").replace("，", ",").split(",") if w.strip()]
-        if not words:
-            continue
-        if any(w in haystack for w in words):
+        for r in rows:
             try:
                 steps = json.loads(r["steps"] or "[]")
             except Exception:
                 steps = []
+            yield r["name"], r["trigger_words"], steps
+    except Exception:
+        return
+
+
+def _match_skill_steps(system_prompt: str, user_text: str) -> str:
+    """P3-2：按 trigger_words 命中 enabled 技能 → 返回注入文本（活配件）。
+    命中规则：技能触发词（逗号分隔）任一出现在 system_prompt 或最近用户消息中，即注入其步骤。
+    P2 起优先读磁盘 skills/*.md（文件真源）。"""
+    haystack = f"{system_prompt or ''}\n{user_text or ''}"
+    parts = []
+    for name, trigger_words, steps in _iter_active_skills():
+        words = [w.strip() for w in (trigger_words or "").replace("，", ",").split(",") if w.strip()]
+        if not words:
+            continue
+        if any(w in haystack for w in words):
             if steps:
                 lines = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(steps[:6]))
-                parts.append(f"【技能：{r['name']}】请按以下步骤执行：\n{lines}")
+                parts.append(f"【技能：{name}】请按以下步骤执行：\n{lines}")
     return "\n\n".join(parts)
 
 
@@ -9855,10 +10181,40 @@ async def messages_cleanup(req: Request):
 # ── API：技能库（Phase 3 技能提炼机制）───────────────────────────
 @app.get("/api/skills")
 def list_skills():
+    """P2：返回技能列表，磁盘 skills/*.md 内容优先覆盖 DB 缓存（保留 DB id 供编辑/删除）。"""
+    skdir = os.path.join(META_HOME, "skills")
+    disk = {}
+    if os.path.isdir(skdir):
+        for fn in os.listdir(skdir):
+            if not fn.endswith(".md") or fn.startswith("_"):
+                continue
+            try:
+                s = _md_to_skill(open(os.path.join(skdir, fn), encoding="utf-8").read())
+            except Exception:
+                continue
+            if s.get("name"):
+                disk[s["name"]] = s
     conn = get_db()
     rows = conn.execute("SELECT * FROM skills ORDER BY id DESC").fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        s = disk.get(r["name"])
+        if s:
+            steps = s.get("steps") or []
+            steps_str = steps if isinstance(steps, str) else json.dumps(steps, ensure_ascii=False)
+            out.append({
+                "id": r["id"], "name": s["name"], "category": s.get("category", r["category"]),
+                "description": s.get("description", r["description"]),
+                "trigger_words": s.get("trigger_words", r["trigger_words"]),
+                "steps": steps_str,
+                "version": s.get("version", r["version"]),
+                "enabled": 1 if s.get("enabled", True) else 0,
+                "source": "disk",
+            })
+        else:
+            out.append(dict(r))
+    return out
 
 
 @app.post("/api/skills")
@@ -9886,6 +10242,10 @@ async def create_skill(req: Request):
     )
     conn.commit()
     conn.close()
+    # P2：写穿磁盘（文件真源）
+    _write_skill_md({"name": name, "category": data.get("category", "general"),
+                     "description": data.get("description", ""), "trigger_words": data.get("trigger_words", ""),
+                     "enabled": True, "version": 1, "steps": data.get("steps") or []})
     return {"ok": True}
 
 
@@ -9898,6 +10258,7 @@ async def update_skill(sid: int, req: Request):
     if not row:
         conn.close()
         return {"ok": False, "error": "技能不存在"}
+    old_name = row["name"]
     # 存档旧版本
     old_data = json.dumps(dict(row), ensure_ascii=False)
     conn.execute(
@@ -9906,20 +10267,32 @@ async def update_skill(sid: int, req: Request):
     )
     new_version = row["version"] + 1
     steps = json.dumps(data.get("steps") if "steps" in data else json.loads(row["steps"]), ensure_ascii=False)
+    new_name = data.get("name", old_name)
     conn.execute(
         "UPDATE skills SET name=?, category=?, description=?, trigger_words=?, steps=?, version=?, updated_at=? WHERE id=?",
-        (data.get("name", row["name"]), data.get("category", row["category"]),
+        (new_name, data.get("category", row["category"]),
          data.get("description", row["description"]), data.get("trigger_words", row["trigger_words"]),
          steps, new_version, datetime.now().isoformat(), sid),
     )
     conn.commit()
     conn.close()
+    # P2：写穿磁盘（文件真源）；改名时删旧文件
+    _write_skill_md({"name": new_name, "category": data.get("category", row["category"]),
+                     "description": data.get("description", row["description"]),
+                     "trigger_words": data.get("trigger_words", row["trigger_words"]),
+                     "enabled": True, "version": new_version,
+                     "steps": (data.get("steps") if "steps" in data else json.loads(row["steps"]))})
+    if new_name != old_name:
+        _remove_skill_md(old_name)
     return {"ok": True, "version": new_version}
 
 
 @app.delete("/api/skills/{sid}")
 def delete_skill(sid: int):
     conn = get_db()
+    row = conn.execute("SELECT name FROM skills WHERE id=?", (sid,)).fetchone()
+    if row:
+        _remove_skill_md(row["name"])
     conn.execute("DELETE FROM skill_versions WHERE skill_id=?", (sid,))
     conn.execute("DELETE FROM skills WHERE id=?", (sid,))
     conn.commit()
@@ -10936,6 +11309,30 @@ def meta_home_get():
         "home": META_HOME,
         "default": os.path.expanduser("~/Desktop/元神"),
     }
+
+
+@app.get("/api/meta/standards")
+def meta_standards_list():
+    """P2：返回元神家 standards/*.md 中的工程规范（磁盘真源）。"""
+    d = os.path.join(META_HOME, "standards")
+    out = []
+    meta = {}
+    if os.path.isdir(d):
+        mp = os.path.join(d, "_meta.json")
+        if os.path.exists(mp):
+            try:
+                meta = json.load(open(mp, encoding="utf-8"))
+            except Exception:
+                meta = {}
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".md") or fn.startswith("_"):
+                continue
+            try:
+                txt = open(os.path.join(d, fn), encoding="utf-8").read()
+            except Exception:
+                continue
+            out.append({"file": fn, "content": txt, "meta": meta.get(fn, {})})
+    return {"standards": out, "setup": not META_HOME_NEEDS_SETUP}
 
 
 @app.post("/api/meta/home")

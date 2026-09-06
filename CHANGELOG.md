@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [v0.69.0] — 2026-09-06
+### Added
+- **P2 技能/规范文件优先磁盘加载**：`元神家/skills/*.md` 成为技能真源（一个 md = 一个技能，frontmatter 存元数据、正文即执行步骤），`元神家/standards/*.md` 成为工程规范真源（coding/git/testing/security/delivery + `_meta.json` 优先级与锁定）。
+- 首次启动搭建元神家时，自动导出 19 个内置技能与 5 份默认工程规范到磁盘（幂等不覆盖，用户可自由编辑）。
+- 启动钩子磁盘→DB 同步（磁盘真源、DB 缓存），并把工程规范注入元神 system prompt，让元神执行任务时自带纪律。
+- 技能增改删端点写穿磁盘（UI 编辑即改文件）；新增 `GET /api/meta/standards` 查看规范。
+- 移除原 `_seed_builtin_skills` 的「按 name 差集 DELETE builtin」逻辑，避免误删用户在磁盘新建的技能。
+
+### Changed
+- `_match_skill_steps` / `list_skills` 优先读磁盘 `skills/*.md`（文件真源），缺磁盘时回退 DB 缓存。
+
 ## [v0.68.0] — 2026-09-06
 ### Added
 - **P3 项目布局**：项目文件夹按「项目名 + 创建时间」落在元神家 `projects/` 下（如 `电商小程序-20260906143000`），建项即落四件套 `_project.md / plan.md / team.md / context.md`（人读真源）；旧项目仍兼容 `~/.fenshen/projects/<pid>` 与 `~/Desktop/<名>`。
