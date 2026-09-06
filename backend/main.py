@@ -11588,6 +11588,12 @@ async def meta_home_set(req: Request):
     META_HOME = home
     META_HOME_NEEDS_SETUP = False
     ok = _scaffold_meta_home(home)
+    # 元神家位置变更后，立即把新家盘的技能真源同步进 DB（磁盘为真源、DB 为缓存），
+    # 否则用户携自定义技能迁移后需重启才生效，违背「可移植元神家」承诺（v0.70.1 修复）。
+    try:
+        _sync_skills_from_disk()
+    except Exception as e:
+        print(f"[meta-home] 迁移后技能同步失败（已忽略）：{e}")
     return {"ok": ok, "home": home}
 
 

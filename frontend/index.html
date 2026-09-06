@@ -1817,6 +1817,23 @@ function sessHeaders(extra){
   }catch(_){}
   return h;
 }
+// v0.70.1：统一为同源 /api/ 请求注入本地令牌头（兜底全应用所有 fetch）。
+// 根因：PyWebview 不会自动附带 cookie，裸 fetch 会被 local_guard 判 401；此前仅 meta 家「确认并进入」
+// 因此失效。此处一次性兜底，避免同类 401 散落各处。仅对同源 /api/ 注入，绝不把令牌泄露给第三方域名。
+(function(){
+  const _orig = window.fetch ? window.fetch.bind(window) : null;
+  if(!_orig) return;
+  window.fetch = function(input, init){
+    init = init || {};
+    const url = (typeof input === 'string') ? input : (input && input.url) || '';
+    const sameOrigin = url.charAt(0) === '/' || url.indexOf(location.origin) === 0
+                      || url.indexOf('http://127.0.0.1') === 0 || url.indexOf('http://localhost') === 0;
+    if(sameOrigin && url.indexOf('/api/') !== -1){
+      init.headers = sessHeaders(init.headers || {});
+    }
+    return _orig(input, init);
+  };
+})();
 function enterLocalMode(){
   LOCAL_MODE=true; localStorage.setItem('fs_local_mode','1');
   hideAuthModal();
