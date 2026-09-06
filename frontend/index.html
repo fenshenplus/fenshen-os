@@ -6833,17 +6833,17 @@ async function syncDirect(mid){
       var p=(input&&input.value||'').trim();
       if(!p){ if(err) err.textContent='请填写元神家文件夹路径'; return; }
       btn.disabled=true; btn.textContent='正在创建元神家…';
-      fetch('/api/meta/home',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({home:p})})
-        .then(function(r){return r.json();})
+      // 用 apiJson（自带 x-fenshen-token 头），避免 PyWebview 下裸 fetch 不带 cookie 被 local_guard 拒成 401
+      apiJson('/api/meta/home',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({home:p})})
         .then(function(j){
           if(j&&j.ok){ if(gate&&gate.parentNode) gate.parentNode.removeChild(gate); }
           else { if(err) err.textContent='设置失败：'+((j&&j.error)||'未知错误'); btn.disabled=false; btn.textContent='确认并进入'; }
         })
-        .catch(function(e){ if(err) err.textContent='网络错误：'+e; btn.disabled=false; btn.textContent='确认并进入'; });
+        .catch(function(e){ if(err) err.textContent='网络错误：'+errText(e); btn.disabled=false; btn.textContent='确认并进入'; });
     };
   }
   function mhCheck(){
-    fetch('/api/meta/home').then(function(r){return r.json();}).then(function(j){
+    apiJson('/api/meta/home').then(function(j){
       if(j&&j.setup===false){ mhShow(j.home||''); }
     }).catch(function(){});
   }

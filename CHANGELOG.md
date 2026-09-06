@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.70.1] — 2026-09-06
+### Fixed
+- **首启「元神家」设置弹窗「确认并进入」无响应**：该弹窗此前用裸 `fetch` 调用 `/api/meta/home`，未携带 `x-fenshen-token`，在 PyWebview 下因不自动附带 cookie 被 `local_guard` 拒成 401，前端 `.catch` 静默吞错导致弹窗关不掉。改为统一走 `apiJson()`（自带令牌头），与全应用鉴权方式一致。后端该端点本身正常（带令牌时 GET→setup:false、POST→ok:true 并完整搭建骨架），故仅前端修复。
+
 ## [v0.70.0] — 2026-09-06
 ### Added
 - **P5 agent 独立存储**：元神家 `agents/<角色>/` 四件套（SOUL.md / MEMORY.md / standards.md / experience/ + `_registry.json`）成为角色库真源，首启自动导出 7 个内置角色（架构/后端/前端/测试/产品/运维/设计）。
