@@ -1,0 +1,7 @@
+{
+  "semver": "0.72.0",
+  "release": "v6.4",
+  "dmg": "https://fenshen.plus/dl/fenshen-v6.4-macOS.dmg",
+  "sha256": "1cefc5454c744a6a31677406e585597461106a3c6efa8c81ef346a76c42de4b4",
+  "notes": "新增自动更新器：打开分身即自动检查新版本，顶部横幅提示，点「立即更新」一键下载并打开安装包"
+}

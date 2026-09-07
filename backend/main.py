@@ -35,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 
 # 版本单一真源：所有版本号从这里读，禁止在别处硬编码
 from backend.version import SEMVER, RELEASE, SCHEMA_VERSION, BUILD_DATE, COMMIT, as_dict
+from backend.updater import get_update_status, download_and_open, start_updater
 
 # 原生标准库（Native Stdlib）：所有产品通用的标准流程走原生代码，确定性、可单测、可离线。
 # 账号/验证码模块已提升为原生一等公民；后续基本库（看板/导入/产出…）同样登记于此。
@@ -2435,6 +2436,12 @@ async def _start_patrol():
         pass
     # 公网远程隧道（移动端经中继访问本机引擎）：relay_enabled 时拉起，设置变更时动态启停
     asyncio.create_task(_relay_tunnel_loop())
+    # 自动更新器（方案 A）：后台 daemon 线程定时自检，发现新版本仅打印日志；
+    # 真正弹横幅靠前端在 App 打开时调用 /api/meta/update/check。
+    try:
+        start_updater()
+    except Exception as e:
+        print(f"[startup] updater 启动跳过: {e}")
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -4406,6 +4413,19 @@ async def onboarding_set(req: Request):
         set_setting("meta_onboarded", "1")
         return {"ok": True, "status": "done"}
     return {"ok": False, "error": "action 必须是 done 或 skip"}
+
+
+# ── 自动更新器（方案 A：自动检查 + 横幅 + 一键下载打开 DMG）─────────────
+@app.get("/api/meta/update/check")
+def api_update_check():
+    """返回结构化更新状态：{available,current,latest,url,notes,error}。"""
+    return get_update_status()
+
+
+@app.post("/api/meta/update/download_and_open")
+async def api_update_download():
+    """下载 DMG 并 open 挂载，由用户在 Finder 拖拽覆盖。"""
+    return download_and_open()
 
 
 @app.get("/p/{pid}")

@@ -7045,5 +7045,62 @@ async function syncDirect(mid){
 })();
 </script>
 
+<!-- 自动更新横幅（方案 A：自动检查 + 横幅 + 一键下载打开 DMG） -->
+<div id="updateBanner" role="alert" style="display:none; position:fixed; top:0; left:0; right:0; z-index:99999; background:linear-gradient(90deg,#6d5efc,#9b6dff); color:#fff; font-size:13px; box-shadow:0 2px 12px rgba(60,40,160,.28);">
+  <div style="max-width:960px; margin:0 auto; padding:9px 14px; display:flex; align-items:center; gap:12px;">
+    <span style="font-size:16px; line-height:1;">🚀</span>
+    <span id="updateBannerText" style="flex:1; line-height:1.45; min-width:0;"></span>
+    <button id="updateNowBtn" style="background:#fff; color:#6d5efc; border:none; border-radius:8px; padding:6px 14px; font-weight:600; cursor:pointer; white-space:nowrap;">立即更新</button>
+    <button id="updateLaterBtn" style="background:transparent; color:#fff; border:1px solid rgba(255,255,255,.65); border-radius:8px; padding:6px 12px; cursor:pointer; white-space:nowrap;">稍后</button>
+  </div>
+</div>
+<script>
+(function(){
+  function esc(s){ s=String(s==null?'':s); return s.replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function showBanner(j){
+    var banner=document.getElementById('updateBanner');
+    var txt=document.getElementById('updateBannerText');
+    if(!banner||!txt) return;
+    banner.dataset.ver = j.latest || '';
+    var msg='发现新版本 <b>v'+esc(j.latest)+'</b>（当前 v'+esc(j.current)+'）';
+    if(j.notes) msg += ' · '+esc(j.notes);
+    msg += '，建议更新。';
+    txt.innerHTML = msg;
+    banner.style.display='block';
+  }
+  function checkUpdate(){
+    try{
+      apiJson('/api/meta/update/check').then(function(j){
+        if(j && j.available && j.latest){
+          var ignored = '';
+          try{ ignored = localStorage.getItem('fs_ignore_update')||''; }catch(e){}
+          if(ignored === String(j.latest)) return; // 用户对此版本选过“稍后”
+          showBanner(j);
+        }
+      }).catch(function(){});
+    }catch(e){}
+  }
+  function doUpdate(){
+    var btn=document.getElementById('updateNowBtn'); if(!btn) return;
+    btn.disabled=true; btn.textContent='正在打开安装包…';
+    apiJson('/api/meta/update/download_and_open',{method:'POST'}).then(function(r){
+      if(r && r.ok){ toast('已打开安装包，请在弹窗中把「分身」拖入 Applications 覆盖旧版'); }
+      else { toast('打开失败：'+(r&&r.error||'未知错误'),'err'); }
+      btn.disabled=false; btn.textContent='立即更新';
+    }).catch(function(e){ toast('更新失败：'+e,'err'); btn.disabled=false; btn.textContent='立即更新'; });
+  }
+  function laterUpdate(){
+    try{ var banner=document.getElementById('updateBanner'); var ver=(banner&&banner.dataset.ver)||''; if(ver) localStorage.setItem('fs_ignore_update', ver); }catch(e){}
+    var b=document.getElementById('updateBanner'); if(b) b.style.display='none';
+  }
+  function init(){
+    var nb=document.getElementById('updateNowBtn'); if(nb) nb.onclick=doUpdate;
+    var lb=document.getElementById('updateLaterBtn'); if(lb) lb.onclick=laterUpdate;
+    checkUpdate();
+  }
+  if(document.readyState==='loading'){ document.addEventListener('DOMContentLoaded',init); }
+  else { init(); }
+})();
+</script>
 </body>
 </html>
