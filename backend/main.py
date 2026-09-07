@@ -36,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 # 版本单一真源：所有版本号从这里读，禁止在别处硬编码
 from backend.version import SEMVER, RELEASE, SCHEMA_VERSION, BUILD_DATE, COMMIT, as_dict
 from backend.updater import get_update_status, download_and_open, start_updater
+from backend import feedback_hub
 
 # 原生标准库（Native Stdlib）：所有产品通用的标准流程走原生代码，确定性、可单测、可离线。
 # 账号/验证码模块已提升为原生一等公民；后续基本库（看板/导入/产出…）同样登记于此。
@@ -2442,6 +2443,11 @@ async def _start_patrol():
         start_updater()
     except Exception as e:
         print(f"[startup] updater 启动跳过: {e}")
+    # 反馈中枢：后台定时刷新云端未回复数（仅内存态，供顶栏角标/提醒）
+    try:
+        feedback_hub.start_watch()
+    except Exception as e:
+        print(f"[startup] feedback watch 启动跳过: {e}")
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -4426,6 +4432,55 @@ def api_update_check():
 async def api_update_download():
     """下载 DMG 并 open 挂载，由用户在 Finder 拖拽覆盖。"""
     return download_and_open()
+
+
+# ── 反馈管理（本地留档 + 云端汇聚 的统一视图与回复通道）──────────────
+@app.get("/api/meta/feedback")
+def api_feedback_list(status: str = "", capability: str = "", unreplied: int = 0,
+                      limit: int = 100):
+    """统一反馈列表（本地 + 云端去重合并）+ 统计。云端无令牌时只返回本地。"""
+    try:
+        limit = max(1, min(int(limit), 200))
+    except Exception:
+        limit = 100
+    items = feedback_hub.unified(limit=limit, status=status, capability=capability,
+                                 unreplied=bool(unreplied))
+    return {"ok": True, "items": items, "stats": feedback_hub.stats()}
+
+
+@app.get("/api/meta/feedback/unread")
+def api_feedback_unread():
+    """云端未回复数（供顶栏角标 / 主动提醒；30 分钟缓存，不打爆云端）。"""
+    n, err = feedback_hub.unreplied_count()
+    return {"ok": True, "unreplied": n, "error": err,
+            "cloud_enabled": feedback_hub.cloud_enabled()}
+
+
+@app.post("/api/meta/feedback/reply")
+async def api_feedback_reply(req: Request):
+    """回复反馈 / 改状态 / 标注修复版本 → 本地与云端同步，形成闭环。"""
+    data = await req.json()
+    ticket = (data.get("ticket") or "").strip()
+    if not ticket:
+        return {"ok": False, "error": "缺少反馈单号"}
+    status = (data.get("status") or "").strip()
+    if status and status not in ("pending", "processing", "resolved", "closed"):
+        return {"ok": False, "error": "状态不合法"}
+    return feedback_hub.reply(ticket, (data.get("reply") or "").strip()[:2000], status,
+                              (data.get("fixed_version") or "").strip()[:40])
+
+
+@app.get("/api/feedback/mine")
+def api_my_feedback(limit: int = 20):
+    """「我的反馈」：本机提交记录 + 云端处理进展（官方回复 / 状态 / 修复版本）。
+
+    维护者的回复写在云端，本机库不会自动同步，故按单号回查云端补齐。
+    """
+    try:
+        limit = max(1, min(int(limit), 50))
+    except Exception:
+        limit = 20
+    return {"ok": True, "items": feedback_hub.my_feedback(limit=limit)}
 
 
 @app.get("/p/{pid}")
