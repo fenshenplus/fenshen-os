@@ -77,16 +77,45 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Error "云签名失败"; exit 1 }
           Write-Host "✅ 云签名完成"
 
+      - name: 打包 Windows 安装包（zip，内部 分身.exe 带 UTF-8 文件名标记）
+        # GitHub Release 资产名不支持非 ASCII（中文会被剥离/误判），故对外用 ASCII 名 zip，
+        # 内部文件名为中文「分身.exe」并通过 flag_bits=0x800 标记 UTF-8，保证 Windows 资源管理器正常显示。
+        shell: pwsh
+        env:
+          REL_VER: ${{ github.ref_name }}
+        run: |
+          $exe = Get-ChildItem dist\*.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "未找到构建产物 exe"; exit 1 }
+          Write-Host "构建产物：$($exe.FullName)"
+          New-Item -ItemType Directory -Force -Path pkg | Out-Null
+          Copy-Item $exe.FullName "pkg\分身.exe"
+          @'
+          import zipfile, os
+          ver = os.environ['REL_VER']
+          src = os.path.join('pkg', '分身.exe')
+          out = 'fenshen-windows-' + ver + '.zip'
+          with open(src, 'rb') as f:
+              data = f.read()
+          zi = zipfile.ZipInfo('分身.exe')
+          zi.flag_bits |= 0x800
+          zi.compress_type = zipfile.ZIP_DEFLATED
+          zi.file_size = len(data)
+          with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zf:
+              zf.writestr(zi, data)
+          print('wrote', out, os.path.getsize(out))
+          '@ | Set-Content -Encoding utf8 make_zip.py
+          python make_zip.py
+
       - name: 上传构建产物（未签名也可下载测试）
         uses: actions/upload-artifact@v4
         with:
           name: 分身-windows
-          path: dist/分身.exe
+          path: fenshen-windows-*.zip
 
       - name: 发布到 GitHub Release（仅打 tag 时）
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/分身.exe
+          files: fenshen-windows-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
