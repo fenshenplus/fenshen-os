@@ -38,6 +38,7 @@ from backend.version import SEMVER, RELEASE, SCHEMA_VERSION, BUILD_DATE, COMMIT,
 from backend.updater import get_update_status, download_and_open, start_updater
 from backend import feedback_hub
 from backend import constitution  # 宪法层真源（五条 + 可执行护栏）
+from backend import telemetry  # P0-b 可观测性层（进程指标采样）
 from backend import mobile_pairing as mp  # 移动端跨端配对（M 维度）
 
 # 原生标准库（Native Stdlib）：所有产品通用的标准流程走原生代码，确定性、可单测、可离线。
@@ -2492,6 +2493,12 @@ async def _start_patrol():
         feedback_hub.start_watch()
     except Exception as e:
         print(f"[startup] feedback watch 启动跳过: {e}")
+    # P0-b 可观测性层：后台采样进程指标到 ~/.fenshen/telemetry.csv
+    # （受 FENSHEN_TELEMETRY_INTERVAL 控制，0=关；默认不采样，部署时按需开启）
+    try:
+        telemetry.start()
+    except Exception as e:
+        print(f"[startup] telemetry 启动跳过: {e}")
 
 
 # ── 模型配置 ─────────────────────────────────────────────────────
@@ -3704,9 +3711,15 @@ def needs_file_approval() -> bool:
 def health():
     meta_cfg = get_model_config(META_PID)
     llm = "deepseek" if (meta_cfg and meta_cfg.get("api_key")) else "offline"
-    return {"status": "ok", "version": SEMVER, "release": RELEASE, "schema_version": SCHEMA_VERSION,
+    base = {"status": "ok", "version": SEMVER, "release": RELEASE, "schema_version": SCHEMA_VERSION,
             "build_date": BUILD_DATE, "git_commit": COMMIT, "port": PORT, "llm": llm,
             "bind": "lan" if _lan_mode() else "localhost", "approval_mode": approval_mode()}
+    # P0-b 可观测性层：把进程级运行时指标并入 health 响应（供 soak 长跑观测 / 部署自检）
+    try:
+        base.update(telemetry.snapshot())
+    except Exception:
+        pass
+    return base
 
 
 @app.get("/api/version")

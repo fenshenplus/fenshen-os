@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [v0.75.0] — 2026-09-07
+### Added
+- **P0-b 可观测性层（补齐 D5→L3 硬缺口：7×24 uptime / 内存 / 句柄采集）**：新增纯标准库 `backend/telemetry.py`——采集进程启动时刻、uptime、当前/峰值常驻内存、打开文件描述符数、线程数；后台采样守护线程按 `FENSHEN_TELEMETRY_INTERVAL`（秒，0=关，默认关）追加写入 `~/.fenshen/telemetry.csv`。`/api/health` 响应并入这 6 个运行时指标，部署后可直接拉取自检。`scripts/soak_test.py` 独立长跑工具按 `--hours/--interval` 周期采样 `/api/health`，在 RSS 连续上涨时输出疑似泄漏告警，供 72h 泄漏观测。仅本机落盘、绝不外发（与宪法③一致）。新增 `tests/test_telemetry.py`（CI 必过）。
+
 ## [v0.74.0] — 2026-09-07
 ### Added
 - **M 维度 · 移动端跨端配对（移动端便利性落地层）**：新增 `backend/mobile_pairing.py` 与 `/api/mobile/pair/*` 握手端点（init/confirm/status）+ 只读数据端点（projects/messages）。移动端经局域网/中继配对一次获得**只读设备令牌**（scope=readonly），即可读取本机分身数据，零提权。`local_guard` 已按设备令牌放行只读端点、握手入口限本机/局域网。
