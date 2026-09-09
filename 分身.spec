@@ -12,7 +12,7 @@ a = Analysis(
     ['packaging/macos/run_app.py'],
     pathex=[_os.getcwd()],
     binaries=[],
-    datas=[('backend', 'backend'), ('frontend', 'frontend'), ('packaging/macos/permission_guide.html', '.'), (_SQLITE_DIR, 'sqlite3')],
+    datas=[('backend', 'backend'), ('frontend', 'frontend'), ('packaging/macos/permission_guide.html', '.'), ('packaging/macos', 'packaging/macos'), (_SQLITE_DIR, 'sqlite3')],
     hiddenimports=['uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.websockets', 'uvicorn.server', 'uvicorn.supervisors', 'multiprocessing', 'pkg_resources', 'webview', 'webview.menu', 'webview.platforms.cocoa', 'objc', 'Cocoa', 'WebKit'],
     hookspath=[],
     hooksconfig={},

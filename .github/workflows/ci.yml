@@ -17,10 +17,14 @@ jobs:
           python-version: '3.12'
 
       - name: Install deps
-        run: pip install fastapi "uvicorn[standard]" requests
+        run: pip install fastapi "uvicorn[standard]" requests pytest httpx
 
       - name: Backend compile gate
         run: python -m py_compile backend/*.py
+
+      - name: Unit tests (宪法对抗 + 移动端配对 + 原生账号)
+        run: |
+          python -m pytest tests/constitution_tests.py tests/test_mobile_pairing.py tests/test_native_auth.py -q
 
       - name: Start engine (port 8002)
         run: |

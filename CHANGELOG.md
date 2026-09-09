@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [v0.74.0] — 2026-09-07
+### Added
+- **M 维度 · 移动端跨端配对（移动端便利性落地层）**：新增 `backend/mobile_pairing.py` 与 `/api/mobile/pair/*` 握手端点（init/confirm/status）+ 只读数据端点（projects/messages）。移动端经局域网/中继配对一次获得**只读设备令牌**（scope=readonly），即可读取本机分身数据，零提权。`local_guard` 已按设备令牌放行只读端点、握手入口限本机/局域网。
+- **宪法层源码化（消除落差 C）**：新增 `backend/constitution.py` 作为五条宪法 + 可执行护栏（分类正则 + `evaluate`/`guard`）的唯一真源，`CONSTITUTION.md` 同步为人工可读镜像；`main.py` 的 `_constitutional_guard` 收口到该模块，并新增 `tests/constitution_tests.py`（25 命中 + 21 不命中对抗用例，CI 必过）。
+
+### Changed
+- **守护进程源码化（消除落差 A）**：`com.fenshen.app.plist` 纳入仓库 `packaging/macos/`，新增 `install_launchagent.sh`（安装/卸载、兼容 macOS 版本差异）；`分身.spec` datas 纳入 `packaging/macos`；`run_app.py` 首启自部署 launchd 守护（崩溃自动重启、开机自启），守护从此可版本化/可部署/可审计。
+
 ## [v0.73.0] — 2026-09-08
 ### Added
 - 反馈管理闭环：用户端反馈→云端汇聚→维护者查看回复→标注修复版本→用户看到回复并一键升级

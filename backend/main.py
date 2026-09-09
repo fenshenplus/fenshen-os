@@ -37,6 +37,8 @@ from fastapi.staticfiles import StaticFiles
 from backend.version import SEMVER, RELEASE, SCHEMA_VERSION, BUILD_DATE, COMMIT, as_dict
 from backend.updater import get_update_status, download_and_open, start_updater
 from backend import feedback_hub
+from backend import constitution  # 宪法层真源（五条 + 可执行护栏）
+from backend import mobile_pairing as mp  # 移动端跨端配对（M 维度）
 
 # 原生标准库（Native Stdlib）：所有产品通用的标准流程走原生代码，确定性、可单测、可离线。
 # 账号/验证码模块已提升为原生一等公民；后续基本库（看板/导入/产出…）同样登记于此。
@@ -1182,6 +1184,15 @@ COOKIE_NAME = "fenshen_token"
 # 故保持公开；其滥用风险通过「限流 + 输入校验」（_rate_ok）收敛，而非强制本地令牌。
 PUBLIC_API = {"/api/health", "/api/market/feedback", "/api/market/visit"}
 
+# 移动端配对握手入口（M 维度）：由端点内部按「本机或局域网」二次校验，local_guard 仅放行这些路径。
+# 配对后只读数据端点（/api/mobile/projects 等）需在下方按设备令牌单独放行。
+MOBILE_HANDSHAKE = {
+    "/api/mobile/pair/init", "/api/mobile/pair/confirm",
+    "/api/mobile/pair/status", "/api/mobile/devices", "/api/mobile/devices/revoke",
+}
+# 移动端设备令牌请求头 / 查询参数名
+DEVICE_TOKEN_HEADER = "x-fenshen-device-token"
+
 
 def _load_or_create_token() -> str:
     """读取本地令牌，不存在则生成。文件权限 600，仅本机用户可读。"""
@@ -1261,6 +1272,22 @@ async def local_guard(request: Request, call_next):
             and path.endswith(("/status", "/usage", "/route", "/budget"))
             and _is_local_request(request)):
         return await call_next(request)
+    # ── 移动端跨端配对（M 维度）──
+    # 握手入口：仅在本机或局域网模式下放行，端点内部再做本机/局域网二次校验。
+    if path in MOBILE_HANDSHAKE:
+        if _lan_mode() or _is_local_request(request):
+            return await call_next(request)
+        return JSONResponse({"ok": False, "error": "移动端配对需在本机或局域网内进行"}, status_code=403)
+    # 配对后只读数据端点：需携带有效设备令牌（x-fenshen-device-token）。
+    if path.startswith("/api/mobile/"):
+        dtok = (request.headers.get(DEVICE_TOKEN_HEADER)
+                or request.query_params.get("device_token") or "")
+        conn = get_db()
+        ok = mp.valid_device_token(conn, dtok)
+        conn.close()
+        if ok:
+            return await call_next(request)
+        return JSONResponse({"ok": False, "error": "设备未配对或令牌无效"}, status_code=401)
     token = (request.headers.get("x-fenshen-token")
              or request.cookies.get(COOKIE_NAME)
              or request.query_params.get("token") or "")
@@ -1938,6 +1965,23 @@ def init_db():
             ts TEXT,
             material INTEGER DEFAULT 0,
             note TEXT DEFAULT ''
+        );
+        -- M 维度：移动端跨端配对（配对请求 + 已登记设备，只读设备令牌）
+        CREATE TABLE IF NOT EXISTS mobile_pair_requests (
+            code TEXT PRIMARY KEY,
+            pending_token TEXT,
+            created_at TEXT,
+            expires_at TEXT,
+            consumed INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS mobile_devices (
+            id TEXT PRIMARY KEY,
+            name TEXT DEFAULT '',
+            token_hash TEXT,
+            device_info TEXT DEFAULT '{}',
+            paired_at TEXT,
+            last_seen TEXT,
+            scope TEXT DEFAULT 'readonly'
         );
         """
     )
@@ -3551,35 +3595,21 @@ SENSITIVE_PATH_RE = re.compile(
 
 
 # ── 宪法级利益护栏（高于配置，不可降级）───────────────────────
-# 与 DANGER_RE 互补：DANGER_RE 管「危险命令要不要醒目警告」；本正则管「涉用户重大利益的动作」。
+# 与 DANGER_RE 互补：DANGER_RE 管「危险命令要不要醒目警告」；本护栏管「涉用户重大利益的动作」。
 # 命中即强制真人确认，即使 approval_mode=off 也不能绕过（宪法不可被任何配置降级）。
-CONSTITUTIONAL_RE = re.compile(
-    r"(drop\s+table|truncate\s+table|"                                  # 不可逆数据销毁
-    r"git\s+push\s+--force|"                                            # 强制推送（破坏性）
-    r"\b(scp|rsync)\b[^|;&]*\s+[\w.@]+:|"                               # 向外传文件（声誉/所有权）
-    r"\b(npm\s+publish|pypi|twine\s+upload|pod\s+trunk\s+push|git\s+push\s+origin\s+(main|master|--tags))\b|"  # 对外发布
-    r"(curl|wget|http)\b[^|;&]*(pay|payment|charge|alipay|wechatpay|transfer|subscribe|账单|付款|转账)|"  # 钱
-    r"(change|reset|update|set)\b[^|;&]*(password|passwd|secret|token)|"  # 账号/密钥
-    r"(delete|drop|revoke|disable|transfer)\b[^|;&]*(account|domain|cert|ownership|key\b|app\b)|"  # 所有权
-    r"\b(publish|deploy\s+--prod|release\s+--public)\b)",              # 以用户名义对外发布
-    re.IGNORECASE,
-)
+# 真源已收口到 backend/constitution.py（CONSTITUTION + _PATTERNS + CONSTITUTIONAL_RE），
+# 这里保留 CONSTITUTIONAL_RE 别名以便旧引用兼容，实际逻辑走 constitution.guard。
+CONSTITUTIONAL_RE = constitution.CONSTITUTIONAL_RE
 
 
 def _constitutional_guard(command: str):
     """宪法级利益闸门：命中涉钱 / 对外发布 / 账号所有权 / 不可逆动作，返回 (需强制确认, 原因)。
 
     受 constitutional_guard_enabled 开关控制（默认开）。即使 approval_mode=off 也不可绕过——
-    这是宪法层硬约束，高于任何用户配置。"""
+    这是宪法层硬约束，高于任何用户配置。实现收口到 backend.constitution.guard。"""
     if get_setting("constitutional_guard_enabled", "1") != "1":
         return (False, "")
-    if not command:
-        return (False, "")
-    m = CONSTITUTIONAL_RE.search(command)
-    if m:
-        return (True, f"触及宪法级利益关切（{m.group(0).strip()}）：涉钱/对外发布/账号所有权/不可逆，"
-                      f"必须真人确认，且不可被任何配置降级。")
-    return (False, "")
+    return constitution.guard(command, get_setting)
 
 
 def _human_approve_sync(title: str, detail: str, timeout: int = 90):
@@ -5797,6 +5827,103 @@ def browser_log():
     rows = conn.execute("SELECT id,ts,agent_id,action,url,status,detail FROM browser_log ORDER BY id DESC LIMIT 50").fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── API：移动端跨端配对（M 维度）────────────────────────────────
+# 配对握手：桌面端 init 生成配对码 → 移动端 confirm 完成配对拿到只读令牌 → 用令牌访问只读端点。
+# 端点内部对「本机/局域网」做二次校验；local_guard 已按 MOBILE_HANDSHAKE 放行入口。
+@app.post("/api/mobile/pair/init")
+async def mobile_pair_init(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    conn = get_db()
+    r = mp.create_pair_request(conn)
+    conn.close()
+    return {"ok": True, "code": r["code"], "expires_at": r["expires_at"]}
+
+
+@app.post("/api/mobile/pair/confirm")
+async def mobile_pair_confirm(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    code = (data.get("code") or "").strip()
+    name = (data.get("device_name") or "未命名设备").strip()
+    info = data.get("device_info") or {}
+    if not code:
+        return JSONResponse({"ok": False, "error": "缺少配对码", "status": 400}, status_code=400)
+    conn = get_db()
+    res = mp.confirm_pair(conn, code, name, info)
+    conn.close()
+    return JSONResponse(res, status_code=res.get("status", 200))
+
+
+@app.get("/api/mobile/pair/status")
+def mobile_pair_status(request: Request):
+    tok = (request.headers.get(DEVICE_TOKEN_HEADER)
+           or request.query_params.get("device_token") or "")
+    conn = get_db()
+    s = mp.status(conn, tok or None)
+    conn.close()
+    return s
+
+
+@app.get("/api/mobile/devices")
+def mobile_devices_list(request: Request):
+    # 仅本机可枚举已配对设备，避免局域网越权枚举
+    if not _is_local_request(request):
+        return JSONResponse({"ok": False, "error": "仅本机可查看设备列表"}, status_code=403)
+    conn = get_db()
+    devs = mp.list_devices(conn)
+    conn.close()
+    return {"ok": True, "devices": devs}
+
+
+@app.post("/api/mobile/devices/revoke")
+async def mobile_device_revoke(req: Request):
+    if not _is_local_request(req):
+        return JSONResponse({"ok": False, "error": "仅本机可撤销设备"}, status_code=403)
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    dev_id = (data.get("device_id") or "").strip()
+    conn = get_db()
+    res = mp.revoke_device(conn, dev_id)
+    conn.close()
+    return JSONResponse(res, status_code=res.get("status", 200))
+
+
+# 配对设备只读数据端点（需设备令牌，由 local_guard 校验）
+@app.get("/api/mobile/projects")
+def mobile_projects(request: Request):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id,name,goal,status,created_at FROM projects ORDER BY created_at DESC LIMIT 50"
+    ).fetchall()
+    conn.close()
+    return {"ok": True, "projects": [dict(r) for r in rows]}
+
+
+@app.get("/api/mobile/messages")
+def mobile_messages(request: Request):
+    pid = (request.query_params.get("project_id") or "").strip()
+    conn = get_db()
+    if pid:
+        rows = conn.execute(
+            "SELECT id,project_id,sender,kind,text,ts,task_id FROM messages "
+            "WHERE project_id=? ORDER BY id DESC LIMIT 60", (pid,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id,project_id,sender,kind,text,ts,task_id FROM messages "
+            "ORDER BY id DESC LIMIT 60"
+        ).fetchall()
+    conn.close()
+    return {"ok": True, "messages": [dict(r) for r in rows]}
 
 
 @app.get("/api/file/log")

@@ -205,10 +205,79 @@ def _start_server() -> threading.Thread:
     return t
 
 
+# ── 守护自部署（首次启动把 launchd 守护落盘，崩溃/异常退出后自动拉起）──
+# 与「关闭=最小化到后台」一致：正常退出（exit 0）不触发重启，仅崩溃/非零退出才重启。
+_LAUNCHD_PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fenshen.app</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{wd}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/fenshen_launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/fenshen_launchd.err.log</string>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>
+"""
+
+
+def _ensure_launch_agent():
+    """首次启动自部署 launchd 守护：保证分身崩溃后自动重启、开机自启。
+
+    - 仅 macOS 生效；
+    - 已为本路径部署过则跳过（避免重复 load）；
+    - 用当前二进制真实路径生成 plist，保证与安装位置一致（升级后自动指向新二进制）；
+    - 加载失败不影响本次运行（降级为不常驻，仅打印提示）。
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        exe = os.path.abspath(sys.executable)  # 打包后 = /Applications/分身.app/Contents/MacOS/分身
+        wd = os.path.dirname(exe)
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.fenshen.app.plist")
+        # 已为本路径部署过则跳过
+        if os.path.exists(plist_path):
+            try:
+                with open(plist_path) as f:
+                    if exe in f.read():
+                        return
+            except Exception:
+                pass
+        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        with open(plist_path, "w") as f:
+            f.write(_LAUNCHD_PLIST_TEMPLATE.format(exe=exe, wd=wd))
+        # 卸载旧实例后加载（兼容 macOS 版本差异）
+        subprocess.run(["launchctl", "unload", plist_path], capture_output=True, timeout=10)
+        r = subprocess.run(["launchctl", "load", plist_path], capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            # Ventura+ 回退 bootstrap
+            subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", plist_path],
+                           capture_output=True, timeout=10)
+    except Exception as e:  # 自部署失败绝不影响主流程
+        print(f"[launchd] 自部署失败（已忽略，不影响本次运行）：{e}")
+
+
 def main():
     import webview  # 延迟导入：源码模式（python run_app.py）无 GUI 时仍可跑服务
     from webview.menu import MenuAction  # 菜单项构造器位于 webview.menu 子模块
 
+    _ensure_launch_agent()  # 保证守护常驻（崩溃自拉起）
     _start_server()
     api = _Api()
     perms = _permissions()
