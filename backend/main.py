@@ -6089,7 +6089,9 @@ def _charge_request(tokens: int = 0) -> bool:
         b["tokens"] += max(0, int(tokens or 0))
     except Exception:
         pass
-    if b["calls"] > b["max_calls"] or b["tokens"] > b["max_tokens"]:
+    if b["calls"] >= b["max_calls"] or b["tokens"] >= b["max_tokens"]:
+        # 用 >= 让 max_calls 成为**真正的硬上限**：达到即置 exceeded，
+        # 下一次调用在入口就被拦；否则会实际多打一次（max+1）。
         b["exceeded"] = True
     return b["exceeded"]
 
@@ -8970,7 +8972,12 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         conn.close()
 
         # 批次A D3：确定性质量门优先于 LLM 判定——代码任务质量门失败直接判 review（附报错）
-        if verify_enabled and not verify["ok"]:
+        # v0.75.1 铁律：单次请求预算被截断时，产出必然不完整 —— 绝不能判 done。
+        # （曾出现「⛔ 已达上限」与「✅ 验收通过、项目已交付」同时出现的自相矛盾。）
+        if _request_exceeded():
+            final = "review"
+            judge_reason = "单次请求已达调用上限，产出可能不完整 —— 转人工复核，不判达标"
+        elif verify_enabled and not verify["ok"]:
             final = "review"
             judge_reason = "确定性质量门未通过：" + verify["summary"][:200]
         else:
@@ -11871,6 +11878,11 @@ def meta_settings_get():
         "relay_tunnel_token": get_setting("relay_tunnel_token", ""),
         "relay_url": os.environ.get("FENSHEN_RELAY_URL",
                                     get_setting("relay_url", "ws://127.0.0.1:8848")),
+        # v0.75.1 单次请求调用 / token 上限（触限提示会引导用户来调这里）
+        "request_max_calls": int(get_setting("request_max_calls", str(REQ_MAX_CALLS_DEFAULT))
+                                 or REQ_MAX_CALLS_DEFAULT),
+        "request_max_tokens": int(get_setting("request_max_tokens", str(REQ_MAX_TOKENS_DEFAULT))
+                                  or REQ_MAX_TOKENS_DEFAULT),
     }
 
 
@@ -12337,6 +12349,17 @@ async def meta_settings_set(req: Request):
         if not 1 <= tv <= 300:
             return {"ok": False, "error": "approval_timeout 需在 1~300 秒之间（≤3 秒按直接拒绝处理，不弹窗）"}
         set_setting("approval_timeout", str(tv))
+    # v0.75.1 单次请求调用 / token 上限（正整数，带范围校验）。
+    # ⚠️ 触限提示会引导用户来这里调高，若接口不收这几个键，提示就是死路——必须显式放行。
+    for _k, _lo, _hi in (("request_max_calls", 1, 500), ("request_max_tokens", 1000, 5_000_000)):
+        if _k in data:
+            try:
+                _v = int(data[_k])
+            except (TypeError, ValueError):
+                return {"ok": False, "error": f"{_k} 必须是整数"}
+            if not _lo <= _v <= _hi:
+                return {"ok": False, "error": f"{_k} 需在 {_lo}~{_hi} 之间"}
+            set_setting(_k, str(_v))
     # 批次B/C：代码能力强化开关（meta_settings 持久化，默认全关，用户可经设置页开启）。
     # 仅允许已知 code_* 键，避免任意键写入；值归一化为 "0"/"1"。
     _CODE_SETTING_KEYS = {

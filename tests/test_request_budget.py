@@ -38,10 +38,20 @@ def test_budget_trips_on_call_count():
     b = M._begin_request_budget()
     b["max_calls"] = 3
     b["max_tokens"] = 10 ** 9
-    assert [M._charge_request(1) for _ in range(3)] == [False, False, False]
-    assert M._charge_request(1) is True, "超过 max_calls 必须置 exceeded"
+    assert [M._charge_request(1) for _ in range(3)] == [False, False, True], \
+        "第 3 次调用即达上限，必须立刻置 exceeded（旧实现用 > 会导致实际打 4 次）"
     assert M._request_exceeded() is True
     assert "已达上限" in M._request_budget_note(), "必须给出用户可见的说明文案"
+
+
+def test_truncated_run_is_never_marked_done():
+    """铁律：预算被截断时产出必然不完整，必须判 review，绝不能判 done。
+
+    曾出现「⛔ 已达上限」与「✅ 最终验收通过、项目已交付」同时出现在同一条会话里。
+    """
+    src = inspect.getsource(M._execute_project_chat)
+    assert "_request_exceeded()" in src, "执行链必须检查预算状态"
+    assert "转人工复核，不判达标" in src, "被截断的任务必须落 review 并说明原因"
 
 
 def test_budget_trips_on_tokens():
