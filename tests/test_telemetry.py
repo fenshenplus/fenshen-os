@@ -4,7 +4,8 @@
   - snapshot() 返回 6 个约定字段且类型合理、峰值 >= 当前；
   - start(interval=0) 不启动（is_enabled False）；
   - start(interval>0) 真正起守护线程并按间隔写 CSV（表头 + 数据行）；
-  - max_rss 单调递增跟踪峰值。
+  - max_rss 单调递增跟踪峰值；
+  - 「当前 RSS」必须来自真实当前值数据源，不得回落到峰值（0.75.0 踩坑回归门禁）。
 运行：python -m pytest tests/test_telemetry.py -q
       （或 python tests/test_telemetry.py）
 """
@@ -61,3 +62,32 @@ def test_max_rss_tracks_peak():
     s2 = telemetry.snapshot()
     del buf
     assert s2["max_rss_mb"] >= s1["max_rss_mb"] - 0.1
+
+
+def test_current_rss_has_real_source():
+    """回归门禁（0.75.0 踩坑）：确保「当前 RSS」有真实的当前值数据源。
+
+    曾因 macOS 打包环境缺 psutil，_current_rss_bytes 静默回落到 resource.ru_maxrss
+    ——那是「峰值」不是「当前值」，导致 rss_mb 恒等于 max_rss_mb，指标失真却看似正常。
+    本用例锁定：Linux 必须有 /proc；macOS 必须能靠 ps 取到正值。
+    """
+    if sys.platform.startswith("linux"):
+        assert os.path.exists("/proc/self/status"), "Linux 应有 /proc/self/status 提供当前 RSS"
+    elif sys.platform == "darwin":
+        telemetry._rss_cache["ts"] = 0.0  # 绕过 5s TTL，强制实读
+        assert telemetry._rss_via_ps() > 0, "macOS 上 ps 取当前 RSS 失败 → 会回落到峰值"
+    # Windows：无 /proc 也无 ps，允许降级为峰值（已有注释说明）
+
+
+def test_current_rss_responds_to_allocation():
+    """当前 RSS 应随真实内存分配上升，且始终不超过峰值。"""
+    telemetry._rss_cache["ts"] = 0.0
+    before = telemetry.snapshot()["rss_mb"]
+    buf = bytearray(60 * 1024 * 1024)
+    for i in range(0, len(buf), 4096):  # 真实触页，避免惰性分配虚高/虚低
+        buf[i] = 1
+    telemetry._rss_cache["ts"] = 0.0
+    after = telemetry.snapshot()
+    del buf
+    assert after["rss_mb"] > before, f"当前 RSS 未随分配上升（{before} → {after['rss_mb']}）"
+    assert after["max_rss_mb"] >= after["rss_mb"] - 0.1

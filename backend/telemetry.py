@@ -15,6 +15,7 @@
 """
 import csv
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -29,10 +30,44 @@ _interval = 0
 _thread = None
 _running = False
 
+# ps 方式的 TTL 缓存：/api/health 可能被高频调用，不能每次都起子进程
+_rss_cache = {"ts": 0.0, "value": 0}
+_RSS_TTL = 5.0  # 秒
+
+
+def _rss_via_ps() -> int:
+    """macOS / BSD 没有 /proc：用 ps 读本进程当前 RSS（KB → 字节）。"""
+    now = time.monotonic()
+    if _rss_cache["value"] and now - _rss_cache["ts"] < _RSS_TTL:
+        return _rss_cache["value"]
+    try:
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())],
+                             capture_output=True, text=True, timeout=3)
+        val = int(out.stdout.strip().splitlines()[0].strip()) * 1024
+        _rss_cache["ts"], _rss_cache["value"] = now, val
+        return val
+    except Exception:
+        return _rss_cache["value"]
+
+
+def _peak_rss_bytes() -> int:
+    """进程生命周期内的真实峰值 RSS（ru_maxrss；Linux=KB，macOS=Bytes）。"""
+    try:
+        import resource
+        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return r * 1024 if sys.platform.startswith("linux") else r
+    except Exception:
+        return 0
+
 
 def _current_rss_bytes() -> int:
-    """尽力而为的当前常驻内存（字节）。跨平台、纯 stdlib。"""
-    # Linux: /proc/self/status 的 VmRSS
+    """当前常驻内存（字节）。跨平台、纯 stdlib，逐级降级。
+
+    ⚠️ 降级顺序有意为之：ru_maxrss 是「峰值」而非「当前值」，只能作最后兜底。
+       否则在 macOS 且 psutil 未打进包时，rss_mb 会静默退化成 max_rss_mb
+       （两列永远相等，看似正常实则指标失真 —— 0.75.0 实测踩到）。
+    """
+    # ① Linux：/proc/self/status 的 VmRSS（真正的当前值，零成本）
     try:
         with open("/proc/self/status", "r", encoding="utf-8") as f:
             for line in f:
@@ -42,21 +77,18 @@ def _current_rss_bytes() -> int:
                         return int(parts[1]) * 1024  # 内核给的是 KB
     except Exception:
         pass
-    # macOS / 其他：psutil 可用则用之（仅读本进程 RSS）
+    # ② psutil（打包时若可用）
     try:
         import psutil
         return psutil.Process().memory_info().rss
     except Exception:
         pass
-    # 最后兜底：ru_maxrss（峰值，单位平台相关）
-    try:
-        import resource
-        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform.startswith("linux"):
-            return r * 1024
-        return r
-    except Exception:
-        return 0
+    # ③ macOS / BSD：ps（当前值，带 TTL 缓存）
+    v = _rss_via_ps()
+    if v:
+        return v
+    # ④ 兜底：只能用峰值（语义不精确，但强于无数据）
+    return _peak_rss_bytes()
 
 
 def _open_fds() -> int:
@@ -73,9 +105,10 @@ def snapshot() -> dict:
     """返回当前指标快照（dict）。"""
     global _max_rss_bytes
     rss = _current_rss_bytes()
+    peak = _peak_rss_bytes()  # 真实峰值：采样间隔之间的尖峰也不会漏
     with _lock:
-        if rss > _max_rss_bytes:
-            _max_rss_bytes = rss
+        if max(rss, peak) > _max_rss_bytes:
+            _max_rss_bytes = max(rss, peak)
         max_rss = _max_rss_bytes
     return {
         "started_at": _START_WALL,
