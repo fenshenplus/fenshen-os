@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [v0.75.1] — 2026-09-10
+### Fixed
+- **单次请求调用量失控（用户实测：一次「做个计划」烧掉 66 次调用 / 339.4k token）**：此前只有「按天」token 预算，且 `_check_budget` 全仓只在 `call_llm` 里查，而派单/角色执行主通道 `_chat_with_tools` 完全绕过预算；规划 1 次 × 角色 3~6 个 × 各自最多 6 轮工具往返 × 补做 `MAX_ROUNDS`(默认 3)，放大后无任何闸门。现新增**单次用户请求硬上限**（默认 ≤20 次调用 / ≤120k token，可用设置项 `request_max_calls` / `request_max_tokens` 调整）：`_chat_with_tools` 与 `call_llm` 均纳入记账，触限即停止继续调用模型，并在群聊明确说明「已达上限 + 如何继续」。
+- **遇阻静默停止（与「元神主动性」设定不符）**：`backend/goal_mode.py` 的四个失败出口（卡死超时 / 同一问题反复 3 次 / 累计失败 5 次 / 超最大轮次）此前只 `_set_goal_status('failed')` + 写日志 + `return`，**用户端看不到任何交代**，与模块自身「一律标记 failed 并通知」的承诺不符。现统一走新增的 `_fail_and_notify()`（置状态 + 落日志 + 落群聊通知三件事绑定），通知含「停下的原因 + 需要你做什么 + 下一步建议」。同时 `_execute_project_chat` 在「有任务未达标 / 触达上限」时也会落一条可见收尾说明，并把该说明并入返回的 `reply`，不再只回规划阶段原文。
+- **`rss_mb` 指标失真**：macOS 打包环境无 psutil，`_current_rss_bytes` 逐级降级最终落到 `resource.ru_maxrss`（峰值而非当前值），导致 `rss_mb` 恒等于 `max_rss_mb`。现 macOS/BSD 改用 `ps -o rss=` 读当前值（带 5s TTL 缓存），峰值由 `_peak_rss_bytes()` 单独提供，`snapshot()` 取两者较大值。新增回归测试锁死「当前 RSS 必须有真实数据源」。
+### Added
+- `tests/test_request_budget.py`：锁死单次请求预算闸门与「Goal-Mode 绝不静默失败」两条不变量（CI 必过）。
+
 ## [v0.75.0] — 2026-09-07
 ### Added
 - **P0-b 可观测性层（补齐 D5→L3 硬缺口：7×24 uptime / 内存 / 句柄采集）**：新增纯标准库 `backend/telemetry.py`——采集进程启动时刻、uptime、当前/峰值常驻内存、打开文件描述符数、线程数；后台采样守护线程按 `FENSHEN_TELEMETRY_INTERVAL`（秒，0=关，默认关）追加写入 `~/.fenshen/telemetry.csv`。`/api/health` 响应并入这 6 个运行时指标，部署后可直接拉取自检。`scripts/soak_test.py` 独立长跑工具按 `--hours/--interval` 周期采样 `/api/health`，在 RSS 连续上涨时输出疑似泄漏告警，供 72h 泄漏观测。仅本机落盘、绝不外发（与宪法③一致）。新增 `tests/test_telemetry.py`（CI 必过）。

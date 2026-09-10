@@ -22,9 +22,9 @@ jobs:
       - name: Backend compile gate
         run: python -m py_compile backend/*.py
 
-      - name: Unit tests (宪法对抗 + 移动端配对 + 原生账号)
+      - name: Unit tests (宪法对抗 + 移动端配对 + 原生账号 + 可观测 + 请求预算)
         run: |
-          python -m pytest tests/constitution_tests.py tests/test_mobile_pairing.py tests/test_native_auth.py tests/test_telemetry.py -q
+          python -m pytest tests/constitution_tests.py tests/test_mobile_pairing.py tests/test_native_auth.py tests/test_telemetry.py tests/test_request_budget.py -q
 
       - name: Start engine (port 8002)
         run: |

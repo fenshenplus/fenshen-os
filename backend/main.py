@@ -3212,6 +3212,9 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None,
         _log_usage(agent_id, "none", "", 0, "blocked", input_tokens=est_input,
                    phase=phase, scope_modules=scope_modules, project_id=project_id)
         return budget_block
+    # v0.75.1 单次请求硬上限：已达即不再发起调用（上层负责给用户收尾说明）
+    if _request_exceeded():
+        return _request_budget_note()
     # D0.2 上下文窗口截断
     history = _context_window(history, system_prompt)
     cands = _available_providers(agent_id, member_override)
@@ -3224,6 +3227,7 @@ def call_llm(agent_id: str, history: list, system_prompt: str = None,
         try:
             text, usage = _call_single_provider(provider, base, key, model, history, system_prompt)
             latency = int((datetime.now() - t0).total_seconds() * 1000)
+            _charge_request(usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
             _log_usage(agent_id, provider, model, latency, "success",
                        usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
                        phase=phase, scope_modules=scope_modules, project_id=project_id)
@@ -6040,6 +6044,80 @@ _TOOL_TASK: contextvars.ContextVar = contextvars.ContextVar("tool_task", default
 # v5.9：当前 trajectory run（仅在项目角色执行期被设置，用于工具级事件回放）
 _TRAJ_RUN: contextvars.ContextVar = contextvars.ContextVar("traj_run", default=None)
 
+# ── v0.75.1：单次用户请求的调用 / token 硬上限 ──────────────────────
+# 治「一次请求烧掉 60+ 次调用、30 万 token」：此前只有「按天」预算，且只在 call_llm 里查，
+# 而派单/角色主通道走 _chat_with_tools，完全绕过预算；规划 1 次 × 角色 3~6 个 × 各 6 轮工具往返
+# × 补做 3 轮，放大后毫无闸门。这里给「单次请求」一道硬闸。
+# 用 contextvar 持有**可变 dict**：asyncio.gather 的子任务复制上下文但共享同一 dict 引用，
+# 子任务里的计数能回流到父任务（若用普通标量则子任务写入对父任务不可见）。
+_REQ_BUDGET: contextvars.ContextVar = contextvars.ContextVar("req_budget", default=None)
+REQ_MAX_CALLS_DEFAULT = 20        # 单次请求最多 LLM 调用次数
+REQ_MAX_TOKENS_DEFAULT = 120_000  # 单次请求累计 token 上限
+
+
+def _begin_request_budget() -> dict:
+    """为一次用户请求开启全新预算记账（每次都重置，避免长驻循环复用上一次的旧额度）。"""
+    try:
+        mc = int(get_setting("request_max_calls", str(REQ_MAX_CALLS_DEFAULT)) or REQ_MAX_CALLS_DEFAULT)
+    except Exception:
+        mc = REQ_MAX_CALLS_DEFAULT
+    try:
+        mt = int(get_setting("request_max_tokens", str(REQ_MAX_TOKENS_DEFAULT)) or REQ_MAX_TOKENS_DEFAULT)
+    except Exception:
+        mt = REQ_MAX_TOKENS_DEFAULT
+    b = {"calls": 0, "tokens": 0, "max_calls": max(1, mc), "max_tokens": max(1000, mt), "exceeded": False}
+    _REQ_BUDGET.set(b)
+    return b
+
+
+def _request_budget() -> dict:
+    return _REQ_BUDGET.get()
+
+
+def _request_exceeded() -> bool:
+    b = _REQ_BUDGET.get()
+    return bool(b and b.get("exceeded"))
+
+
+def _charge_request(tokens: int = 0) -> bool:
+    """记一次 LLM 调用与 token。超限置 exceeded 并返回 True（不抛异常，由上层优雅收尾）。"""
+    b = _REQ_BUDGET.get()
+    if not b:
+        return False
+    b["calls"] += 1
+    try:
+        b["tokens"] += max(0, int(tokens or 0))
+    except Exception:
+        pass
+    if b["calls"] > b["max_calls"] or b["tokens"] > b["max_tokens"]:
+        b["exceeded"] = True
+    return b["exceeded"]
+
+
+def _request_budget_note() -> str:
+    """触达单次请求上限时给用户看的一句话（必须可见，绝不静默停下）。"""
+    b = _REQ_BUDGET.get() or {}
+    return (f"⛔ 单次请求已达上限（调用 {b.get('calls', 0)}/{b.get('max_calls', '?')} 次，"
+            f"累计 {b.get('tokens', 0):,} token）。已停止继续调用模型，避免费用失控。\n"
+            f"如需继续：① 把任务拆小后重发；② 或在「设置 → 模型」里调高单次请求上限"
+            f"（request_max_calls / request_max_tokens）。")
+
+
+def _insert_chat_note(pid: str, text: str, sender: str = "分身 · 元神",
+                      kind: str = "meta", tag: str = "notice") -> bool:
+    """向项目群聊落一条用户可见的说明（失败 / 被拦 / 触限时用，保证「绝不静默停下」）。"""
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+            (pid, sender, kind, text, tag, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
 
 def _tool_workdir() -> str:
     return _TOOL_WORKDIR.get() or ""
@@ -7220,6 +7298,10 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
     all_thinking: list[str] = []
     process_log: list[str] = []  # 工具调用与状态日志
     for _round in range(6):
+        # v0.75.1：单次请求调用上限——触限即停止继续调用模型（由上层负责给用户收尾说明）
+        if _request_exceeded():
+            last_err = _request_budget_note()
+            break
         for provider, base, key, model in cands:
             try:
                 t0 = datetime.now()
@@ -7238,6 +7320,7 @@ async def _chat_with_tools(agent_id: str, history: list, system_prompt: str, too
                 _log_usage(agent_id, provider, model, latency, "success",
                            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
                            phase=phase, scope_modules=scope_modules, project_id=project_id)
+                _charge_request(usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
                 process_log.append(f"调用 {provider}/{model} 成功（耗时 {latency}ms）")
                 raw_content = msg.get("content") or ""
                 body, thinking_parts = _extract_thinking(raw_content)
@@ -8418,6 +8501,7 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
     # v5.9：Trajectory run_id（本次派单/对话的唯一回放标识）
     run_id = f"{pid}-{int(time.time()*1000)}"
     _TRAJ_RUN.set((run_id, pid))
+    _begin_request_budget()  # v0.75.1：本次请求的调用/token 硬上限，防放大成几十次调用
     _trajectory_event(run_id, pid, "run_start", "元神", f"收到指令：{user_text[:200]}", {"trigger": "project_chat"})
     try:
         conn = get_db()
@@ -8995,6 +9079,26 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         conn.close()
     except Exception:
         pass
+    # ── v0.75.1 主动性收尾：触达上限 / 有任务未达标时，必须给用户一句可见的交代 ──
+    # 此前这里直接 return，reply 仍是规划阶段原文，执行被权限/预算挡住时用户端「没有任何回复」。
+    _closing = ""
+    try:
+        if _request_exceeded():
+            _closing = _request_budget_note()
+            _insert_chat_note(pid, _closing)
+        elif role_results and not all_done:
+            _unmet = "；".join(
+                f"「{r.get('task_name', '任务')}」（{r.get('role', '')}）：{(r.get('reason') or '')[:120]}"
+                for r in role_results if r.get("status") != "done"
+            )
+            _closing = ("⛔ 本轮有任务未达标，我已停下等你决定：\n" + (_unmet or "（未给出具体原因）")
+                        + "\n下一步建议：① 补全缺失信息后回复我继续；② 或点开对应看板卡查看产出并手动调整；"
+                        + "③ 若想让我继续自动补做，回复「继续补做」。")
+            _insert_chat_note(pid, _closing)
+    except Exception:
+        pass
+    if _closing:
+        meta_reply = f"{meta_reply}\n\n{_closing}" if meta_reply else _closing
     return {"reply": meta_reply, "actions": role_results, "ok": True, "rounds": round_no, "all_done": all_done,
             "blast_radius": sorted(_blast) if _blast else [], "blast_scope": _blast_scope, "run_id": run_id,
             "model_strategy": _strat, "team_mode": team_mode or ""}

@@ -78,6 +78,40 @@ def _log_run(task_id: str, turn: int, worker_out: str, verdict: str, reason: str
     conn.close()
 
 
+def _notify(task_id: str, text: str):
+    """把「已停下 + 原因 + 需要用户做什么」落进项目群聊。
+
+    主动性铁律：Goal-Mode 绝不静默停下。此前所有失败出口只写 goal_status 与 goal_runs 日志，
+    用户在对话里看不到任何交代 —— 与本模块「超预算一律标记 failed 并通知」的设计承诺不符。
+    """
+    from backend.main import get_db
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT project_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if row and row["project_id"]:
+            conn.execute(
+                "INSERT INTO messages (project_id,sender,kind,text,tag,ts) VALUES (?,?,?,?,?,?)",
+                (row["project_id"], "分身 · 元神", "meta", text, "notice", datetime.now().isoformat()),
+            )
+            conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _fail_and_notify(task_id: str, task: dict, turn: int, why: str, hint: str = ""):
+    """失败出口的唯一通道：置 failed + 落日志 + 通知用户（三件事绑在一起，杜绝漏通知）。"""
+    _set_goal_status(task_id, "failed")
+    _log_run(task_id, turn, "", "fail", why)
+    name = task.get("name") or "任务"
+    _notify(
+        task_id,
+        f"⛔ Goal-Mode 已停下：任务「{name}」{why}。\n"
+        + (hint or "下一步建议：① 把任务拆小 / 补全完成标准后重开 Goal-Mode；"
+                   "② 或直接回复我，说明可接受的简化标准与需要人工介入的点。"),
+    )
+
+
 # ── worker：派发一步到该卡 owner_role，返回产物摘要 ──
 async def run_worker_step(task: dict, gap: str) -> str:
     from backend.main import get_db, _run_dispatch_job
@@ -258,8 +292,12 @@ async def run_goal_loop(task_id: str):
         if not _is_active(task_id):
             return  # 被 pause / clear 中断
         if time.time() > deadline:
-            _set_goal_status(task_id, "failed")
-            _log_run(task_id, turn, "", "fail", "失败预算耗尽：单任务卡死超过 10 分钟仍未达标（元神宪法护栏）")
+            _fail_and_notify(
+                task_id, task, turn,
+                "卡死超过 10 分钟仍未达标（失败预算耗尽）",
+                "下一步建议：① 把该卡拆成更小的任务再开 Goal-Mode；"
+                "② 或回复我，说明可接受的简化完成标准、以及需要你人工介入的点。",
+            )
             return
         turn += 1
         worker_out = await run_worker_step(task, gap)
@@ -284,15 +322,28 @@ async def run_goal_loop(task_id: str):
             same_gap_streak = 1
             last_gap = gap
         if same_gap_streak >= 3:
-            _set_goal_status(task_id, "failed")
-            _log_run(task_id, turn, "", "fail", f"失败预算耗尽：同一问题反复 {same_gap_streak} 次未解（{gap}）")
+            _fail_and_notify(
+                task_id, task, turn,
+                f"同一问题反复 {same_gap_streak} 次仍未解决（{gap[:200]}）",
+                "下一步建议：① 这通常意味着缺信息或缺权限 —— 请补充必要信息/授权后回复我；"
+                "② 或把该卡拆小、放宽完成标准后重开 Goal-Mode。",
+            )
             return
         if fail_total >= 5:
-            _set_goal_status(task_id, "failed")
-            _log_run(task_id, turn, "", "fail", f"失败预算耗尽：累计 {fail_total} 次未达标（元神宪法护栏）")
+            _fail_and_notify(
+                task_id, task, turn,
+                f"累计 {fail_total} 次未达标（失败预算耗尽）",
+                "下一步建议：① 回复我说明哪一步卡住，我会据此调整执行方式；"
+                "② 或点开该看板卡查看已有产出，手动补完剩余部分。",
+            )
             return
     # 超 max_turns：按元神宪法，失败并通知，绝不静默自标 done
-    _set_goal_status(task_id, "failed")
+    _fail_and_notify(
+        task_id, task, turn,
+        f"达到最大轮次上限（{max_turns} 轮）仍未达标",
+        "下一步建议：① 把任务拆成更小粒度后重开 Goal-Mode；"
+        "② 或在设置里调高该卡的最大轮次预算；③ 或回复我说明可接受的验收口径。",
+    )
 
 
 def start_goal(task_id: str):
