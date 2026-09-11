@@ -3651,6 +3651,10 @@ def _human_approve_sync(title: str, detail: str, timeout: int = 90):
         except Exception as e:
             return False, f"授权对话框调用失败（{e}），已按最安全策略拒绝。"
     if sys.platform != "darwin":
+        # v0.75.3：这里此前只把一句话返给角色，用户在界面上看不到任何交代。
+        _notify_blocked("系统确认框不可用", (detail or "")[:160],
+                        "当前系统不支持系统级确认弹窗，已按最安全策略拒绝执行",
+                        "在设置里把审批模式调为「off」以放行，或先手动执行该动作")
         return False, "当前系统不支持系统级确认框，已按最安全策略拒绝执行。"
     script = (
         f'display dialog "{text}" with title "{ttl}" '
@@ -3662,6 +3666,9 @@ def _human_approve_sync(title: str, detail: str, timeout: int = 90):
                               capture_output=True, text=True, timeout=timeout + 15)
         out = (proc.stdout or "").replace(" ", "")
         if "gaveup:true" in out:
+            _notify_blocked("确认超时", (detail or "")[:160],
+                            f"授权对话框 {timeout}s 内无人响应，已拒绝执行",
+                            "下次弹窗出现时及时点击；或在设置里调整审批模式")
             return False, "授权对话框超时未响应，已拒绝执行。"
         if "允许执行" in out:
             return True, "用户已在系统对话框中授权。"
@@ -6125,6 +6132,71 @@ def _tool_workdir() -> str:
     return _TOOL_WORKDIR.get() or ""
 
 
+# ── v0.75.3：执行被拦 → 用户可见 + 一次性授权 ──────────────────────
+# 此前「写文件越界 / 宪法代码护栏 / 系统确认框不可用」只把一句话返给角色，用户端完全看不到，
+# 表现就是「被拦住了就没声了」。现在：落一条**用户可见**的 blocked 消息（带 block id），
+# 用户点「允许一次」后可重跑；授权按 (kind,target) 精确匹配、10 分钟有效、用完即废。
+_BLOCKS: dict = {}       # bid -> {kind,target,reason,project_id,task_id,created}
+_BLOCK_ALLOW: dict = {}  # (kind,target) -> expire_ts
+_BLOCK_TTL = 1800        # 待处理阻塞 30 分钟后失效
+_BLOCK_ALLOW_TTL = 600   # 授权后 10 分钟内有效
+
+
+def _block_new_id() -> str:
+    return "b" + uuid.uuid4().hex[:10]
+
+
+def _notify_blocked(kind: str, target: str, reason: str, suggestion: str = "",
+                    label: str = "") -> str:
+    """记录一次「执行被拦」并向项目群聊落一条可见消息。返回 block id。
+
+    ⚠️ kind 是**机器键**（必须与放行检查 `_block_allowed(<kind>, target)` 完全一致，
+       否则会出现「授权了但重试仍被拦」）；label 只是给用户看的中文名。
+    """
+    bid = _block_new_id()
+    pid = _TOOL_PROJECT.get() or ""
+    _BLOCKS[bid] = {
+        "kind": kind, "label": label or kind, "target": target, "reason": reason,
+        "project_id": pid, "task_id": _TOOL_TASK.get() or "",
+        "created": time.time(),
+    }
+    if pid:
+        _insert_chat_note(
+            pid,
+            f"⛔ 执行被拦下（{label or kind}）：{reason}\n目标：{target}\n"
+            + (f"建议：{suggestion}\n" if suggestion else "")
+            + "如需放行：回复「允许一次」后我会重试；该授权仅对这一个目标有效、10 分钟后自动作废。\n"
+            + f"[block:{bid}]",
+            tag="blocked",
+        )
+    return bid
+
+
+def _block_allowed(kind: str, target: str) -> bool:
+    """是否已被「一次性授权」放行。命中即消耗，过期即失效。"""
+    key = (kind, target)
+    exp = _BLOCK_ALLOW.get(key)
+    if not exp:
+        return False
+    if exp < time.time():
+        _BLOCK_ALLOW.pop(key, None)
+        return False
+    _BLOCK_ALLOW.pop(key, None)  # 一次性：消耗掉
+    return True
+
+
+def _grant_block(bid: str) -> bool:
+    """放行一个阻塞：把 (kind,target) 加入一次性授权表。"""
+    b = _BLOCKS.get(bid)
+    if not b:
+        return False
+    if time.time() - b["created"] > _BLOCK_TTL:
+        _BLOCKS.pop(bid, None)
+        return False
+    _BLOCK_ALLOW[(b["kind"], b["target"])] = time.time() + _BLOCK_ALLOW_TTL
+    return True
+
+
 def _project_storage_root(proj) -> str:
     """双维度存储根目录（v5.8 P1 + v0.68 P3）：
     优先 projects.storage_root（元神家 projects/<项目名-时间>）；
@@ -7083,6 +7155,10 @@ def _safe_file_path(path: str):
 def _list_files_tool(path: str):
     real = _safe_file_path(path)
     if not real:
+        _notify_blocked("unsafe_path", str(path)[:200],
+                        "目标不在用户主目录内，或触碰 .ssh/.git/系统等敏感目录",
+                        "改写到项目工作区内",
+                        label="路径不安全")
         return "⛔ 路径不安全或被禁止（仅限用户主目录下，避开 .ssh/.git/系统目录等）"
     if not os.path.isdir(real):
         return f"⛔ 目录不存在: {path}"
@@ -7102,6 +7178,10 @@ def _list_files_tool(path: str):
 def _read_file_tool(path: str):
     real = _safe_file_path(path)
     if not real:
+        _notify_blocked("unsafe_path", str(path)[:200],
+                        "目标不在用户主目录内，或触碰 .ssh/.git/系统等敏感目录",
+                        "改写到项目工作区内",
+                        label="路径不安全")
         return "⛔ 路径不安全或被禁止（仅限用户主目录下，避开 .ssh/.git/系统目录等）"
     if not os.path.isfile(real):
         return f"⛔ 文件不存在: {path}"
@@ -7116,18 +7196,30 @@ def _read_file_tool(path: str):
 def _write_file_tool(path: str, content: str):
     real = _safe_file_path(path)
     if not real:
+        _notify_blocked("unsafe_path", str(path)[:200],
+                        "目标不在用户主目录内，或触碰 .ssh/.git/系统等敏感目录",
+                        "改写到项目工作区内",
+                        label="路径不安全")
         return "⛔ 路径不安全或被禁止（仅限用户主目录下，避开 .ssh/.git/系统目录等）"
     # v5.6 借鉴 Harness「工作区限定」：角色执行时写文件默认限定在项目工作区内（越界拒绝，除非审批关闭）
     wd = _tool_workdir()
     if wd and not (real == wd or real.startswith(wd.rstrip(os.sep) + os.sep)):
-        if approval_mode() != "off":
+        if approval_mode() != "off" and not _block_allowed("write_outside_workspace", real):
+            _notify_blocked("write_outside_workspace", real,
+                            "目标不在项目工作区内（这是分身的安全边界）",
+                            f"把产出写入工作区目录（{wd}），或确认该路径确实需要写",
+                            label="写文件越界")
             return (f"⛔ 写文件越界：目标不在项目工作区内。\n工作区：{wd}\n请求路径：{path}\n"
                     f"请把产出写入工作区目录（这是分身的安全边界）。")
     if len(content) > FILE_MAX_WRITE:
         return f"⛔ 内容超过 {FILE_MAX_WRITE // 1024}KB 上限"
     # 批次C D10：元神宪法代码护栏——代码文件静态扫描门（开关关闭则跳过，非代码文件跳过）
     _scan = _code_static_scan(path, content)
-    if _scan["blocked"]:
+    if _scan["blocked"] and not _block_allowed("code_guard", path):
+        _notify_blocked("code_guard", path,
+                        "；".join(_scan["reasons"]),
+                        "改用环境变量/配置注入凭证；确需放行可先「允许一次」",
+                        label="宪法代码护栏")
         return ("⛔ 宪法代码护栏拦截：\n" + "\n".join(_scan["reasons"])
                 + "\n（生成代码不得硬编码密钥、不得对主目录/根执行破坏性删除。"
                 + "请改用环境变量/配置注入凭证；破坏性操作需用户显式确认。）")
@@ -8544,6 +8636,10 @@ async def _execute_project_chat(pid: str, user_text: str, reuse_task_id: str = N
         (pid, "你", "self", user_text, None, datetime.now().isoformat(), imgs_json),
     )
     conn.commit()
+    # ── v0.75.3：群聊里的「允许一次 / 放行」意图 → 授权最近一次阻塞并让元神重试 ──
+    _allow_hint = _maybe_grant_from_chat(pid, user_text)
+    if _allow_hint:
+        user_text = user_text + _allow_hint
     # ── P0-A：群聊自动蒸馏（记忆树原料）── 节流：每 6 条项目消息触发一次经验蒸馏
     _CHAT_DISTILL_CNT[pid] = _CHAT_DISTILL_CNT.get(pid, 0) + 1
     if _CHAT_DISTILL_CNT[pid] >= 6:
@@ -12383,6 +12479,57 @@ async def meta_settings_set(req: Request):
         if _k in _CODE_SETTING_KEYS:
             set_setting(_k, "1" if _v in (True, "1", 1) else "0")
     return {"ok": True, "settings": meta_settings_get()}
+
+
+# ── v0.75.3：执行阻塞（越界 / 宪法护栏 / 确认不可用）→ 可见 + 一次性授权 ──
+@app.get("/api/meta/blocks")
+def meta_blocks():
+    """列出待处理的执行阻塞（供前端渲染「允许一次」按钮 / 人工查看）。"""
+    now = time.time()
+    items = []
+    for bid, b in list(_BLOCKS.items()):
+        if now - b["created"] > _BLOCK_TTL:
+            _BLOCKS.pop(bid, None)
+            continue
+        items.append({"bid": bid, "kind": b["kind"], "target": b["target"],
+                      "reason": b["reason"], "project_id": b["project_id"],
+                      "task_id": b["task_id"], "age_seconds": round(now - b["created"])})
+    items.sort(key=lambda x: x["age_seconds"])
+    return {"blocks": items}
+
+
+@app.post("/api/meta/block/{bid}/allow")
+async def meta_block_allow(bid: str):
+    """放行一个阻塞：写入一次性授权（(kind,target) 精确匹配，10 分钟有效，用完即废）。"""
+    if not _grant_block(bid):
+        return {"ok": False, "error": "该阻塞不存在或已过期（阻塞 30 分钟后自动失效）"}
+    b = _BLOCKS.pop(bid, None) or {}
+    return {"ok": True, "kind": b.get("kind", ""), "target": b.get("target", ""),
+            "expires_in": _BLOCK_ALLOW_TTL}
+
+
+# v0.75.3：群聊里的放行意图 —— 不依赖前端也能用（前端按钮走上面的端点）
+_ALLOW_WORDS = ("允许一次", "允许执行", "允许", "放行", "同意执行", "授权执行")
+
+
+def _maybe_grant_from_chat(pid: str, text: str) -> str:
+    """群聊出现放行意图 → 授权该项目最近一次阻塞。返回给元神的重试提示，未命中返回 ''。"""
+    t = (text or "").strip()
+    if not any(w in t for w in _ALLOW_WORDS):
+        return ""
+    now = time.time()
+    pend = [(bid, b) for bid, b in _BLOCKS.items()
+            if b["project_id"] == pid and now - b["created"] <= _BLOCK_TTL]
+    if not pend:
+        return ""
+    bid, b = max(pend, key=lambda kv: kv[1]["created"])
+    if not _grant_block(bid):
+        return ""
+    _BLOCKS.pop(bid, None)
+    _insert_chat_note(pid, f"✅ 已放行一次：{b.get('label') or b['kind']} → {b['target']}"
+                           f"（仅本次有效，10 分钟后自动作废）", tag="notice")
+    return (f"\n【用户已授权】刚才被拦下的「{b.get('label') or b['kind']}」（目标：{b['target']}）"
+            f"用户已允许执行一次，请立即重试该动作并完成剩余工作。")
 
 
 @app.post("/api/meta/relay/enable")
