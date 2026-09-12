@@ -24,7 +24,7 @@ RELEASE = "v6.4"
 SCHEMA_VERSION = 1
 
 # ── 构建日期（发版时更新；scripts/bump_version.py 会自动维护）──
-BUILD_DATE = "2026-09-10"
+BUILD_DATE = "2026-09-12"
 
 
 def _git_commit() -> str:
