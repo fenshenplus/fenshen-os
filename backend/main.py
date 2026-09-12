@@ -121,7 +121,27 @@ def _read_meta_home() -> tuple:
                 return os.path.expanduser(h), False
     except Exception:
         pass
-    return os.path.expanduser("~/Desktop/元神"), True
+    # ⚠️ 不能默认 ~/Desktop：macOS TCC 把「桌面/文稿/下载」列为受保护目录，
+    #    而分身常驻是 launchd LaunchAgent 后台拉起的，**拿不到桌面权限时会直接卡死不启动**
+    #    （2026-09-12 实测：home=~/Desktop/元神 时 launchd 启动后永不监听 8002，
+    #     但前台手动跑却正常；改到 ~/元神 后 10 秒就绪）。故默认落在用户主目录根部。
+    return os.path.expanduser("~/元神"), True
+
+
+# macOS TCC 受保护目录（后台守护无授权时访问会失败/挂起）
+_TCC_PROTECTED = ("Desktop", "Documents", "Downloads", "Movies", "Pictures", "Public")
+
+
+def _home_under_tcc_protected(home: str) -> bool:
+    """判断元神家是否落在 macOS 受保护目录下（常驻守护可能因此起不来）。"""
+    try:
+        h = os.path.abspath(os.path.expanduser(home or ""))
+        home_root = os.path.abspath(os.path.expanduser("~"))
+        rel = os.path.relpath(h, home_root)
+        top = rel.split(os.sep)[0]
+        return top in _TCC_PROTECTED
+    except Exception:
+        return False
 
 META_HOME, META_HOME_NEEDS_SETUP = _read_meta_home()
 
@@ -11984,11 +12004,16 @@ def meta_settings_get():
 
 @app.get("/api/meta/home")
 def meta_home_get():
-    """返回元神家是否已设置，以及建议/当前路径（首启引导用）。"""
+    """返回元神家是否已设置，以及建议/当前路径（首启引导用）。
+
+    另返回 tcc_risk：当前家若落在 macOS TCC 受保护目录（桌面/文稿/下载），
+    常驻守护（launchd）拿不到权限会**卡死不启动**，前端应提示改到非受保护路径。
+    """
     return {
         "setup": not META_HOME_NEEDS_SETUP,
         "home": META_HOME,
-        "default": os.path.expanduser("~/Desktop/元神"),
+        "default": os.path.expanduser("~/元神"),
+        "tcc_risk": _home_under_tcc_protected(META_HOME),
     }
 
 

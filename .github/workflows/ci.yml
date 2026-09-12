@@ -24,7 +24,7 @@ jobs:
 
       - name: Unit tests (宪法对抗 + 移动端配对 + 原生账号 + 可观测 + 请求预算 + 阻塞授权)
         run: |
-          python -m pytest tests/constitution_tests.py tests/test_mobile_pairing.py tests/test_native_auth.py tests/test_telemetry.py tests/test_request_budget.py tests/test_block_authorize.py -q
+          python -m pytest tests/constitution_tests.py tests/test_mobile_pairing.py tests/test_native_auth.py tests/test_telemetry.py tests/test_request_budget.py tests/test_block_authorize.py tests/test_meta_home_tcc.py -q
 
       - name: Start engine (port 8002)
         run: |
